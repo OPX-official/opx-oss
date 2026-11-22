@@ -112,6 +112,12 @@ public class TerminalActivity extends AppCompatActivity
                 Arrays.copyOfRange(argv, 1, argv.length), OpxRuntime.environment(this), 2000, this);
         terminalView.attachSession(session);
         terminalView.requestFocus();
+        terminalView.post(this::showKeyboard);
+    }
+
+    private void showKeyboard() {
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.showSoftInput(terminalView, InputMethodManager.SHOW_IMPLICIT);
     }
 
     @Override
@@ -213,8 +219,8 @@ public class TerminalActivity extends AppCompatActivity
 
     @Override
     public void onSingleTapUp(MotionEvent e) {
-        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-        if (imm != null) imm.showSoftInput(terminalView, InputMethodManager.SHOW_IMPLICIT);
+        terminalView.requestFocus();
+        showKeyboard();
     }
 
     @Override

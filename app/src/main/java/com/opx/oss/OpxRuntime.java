@@ -37,7 +37,7 @@ public final class OpxRuntime {
     public static final String GUEST_HOME = "/data/data/com.termux/files/home";
 
     private static final String[] SHARED_BINDS = {
-            "/dev", "/proc", "/sys",
+            "/dev", "/proc", "/sys", "/linkerconfig",
             "/system", "/system_ext", "/vendor", "/odm", "/product", "/apex",
             "/sdcard", "/storage"
     };
@@ -149,7 +149,9 @@ public final class OpxRuntime {
         List<String> argv = new ArrayList<>();
         argv.add(new File(prootDir(context), "proot").getAbsolutePath());
         argv.add("--link2symlink");
-        argv.add("-0");
+        // Deliberately no "-0": faking uid 0 makes the bootstrap second stage abort with
+        // "The uid '0' returned by 'id -u' command is not valid", and packages are meant to be
+        // configured as the real app uid, exactly like upstream Termux.
         argv.add("--kill-on-exit");
         argv.add("-r");
         argv.add(rootfsDir(context).getAbsolutePath());
@@ -186,6 +188,13 @@ public final class OpxRuntime {
                 "LANG=en_US.UTF-8",
                 "ANDROID_DATA=/data",
                 "ANDROID_ROOT=/system",
+                // What the Termux app exports for its own shell; the bootstrap maintenance
+                // scripts check these.
+                "TERMUX__UID=" + android.os.Process.myUid(),
+                "TERMUX__USER_ID=" + android.os.Process.myUid(),
+                "TERMUX_PREFIX=" + GUEST_PREFIX,
+                "TERMUX_PACKAGE_MANAGER=apt",
+                "TERMUX_PACKAGE_ARCH=" + termuxArch(),
                 // proot itself is a host process and resolves its libraries from the real prefix;
                 // the guest entries are what the mounted prefix binaries look for.
                 "LD_LIBRARY_PATH=" + libDir.getAbsolutePath() + ":" + GUEST_PREFIX + "/lib",
