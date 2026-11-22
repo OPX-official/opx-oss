@@ -24,8 +24,12 @@ import java.util.zip.ZipInputStream;
  * The Termux bootstrap binaries are compiled with a hardcoded {@code $PREFIX} of
  * {@code /data/data/com.termux/files/usr}. OPX OSS lives in {@code com.opx.oss}, so the
  * real prefix ({@code <files>/usr}) is bind-mounted onto that expected guest path by the
- * bundled statically-linked-in-place proot. Everything the app needs is extracted from
- * the APK on first launch, so installing never touches the network.
+ * bundled proot. Everything the app needs is extracted from the APK on first launch, so
+ * installing never touches the network.
+ * <p>
+ * The app targets SDK 28 on purpose: Android 10+ denies {@code execve()} on files in the app
+ * home directory for apps targeting 29+, which is where the bundled proot and the Termux
+ * binaries live (upstream Termux keeps the same target SDK for the same reason).
  */
 public final class OpxRuntime {
 

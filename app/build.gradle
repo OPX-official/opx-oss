@@ -9,9 +9,11 @@ android {
     defaultConfig {
         applicationId "com.opx.oss"
         minSdk 24
-        targetSdk 34
-        versionCode 3
-        versionName "0.1.0-alpha.2"
+        // Must stay at 28: Android 10+ refuses to execve() files inside the app home directory for
+        // apps targeting 29+, and both proot and the whole Termux userland run from <files>.
+        targetSdk 28
+        versionCode 4
+        versionName "0.1.0-alpha.3"
         vectorDrawables.useSupportLibrary = true
     }
 
