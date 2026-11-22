@@ -73,3 +73,4 @@ jobs:
           files: out/*.apk
           generate_release_notes: true
           name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
