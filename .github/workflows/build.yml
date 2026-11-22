@@ -23,11 +23,11 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install NDK
-        run: sdkmanager --install "ndk;27.0.12077973"
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | tail -1)"
+          yes | "$SDKMANAGER" --install "ndk;27.0.12077973" > /dev/null
 
       - name: Cache runtime assets
         uses: actions/cache@v4
