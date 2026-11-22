@@ -361,4 +361,32 @@ public class TerminalActivity extends AppCompatActivity
     @Override
     public void onEmulatorSet() {
     }
+
+    @Override
+    public void logError(String tag, String message) {
+    }
+
+    @Override
+    public void logWarn(String tag, String message) {
+    }
+
+    @Override
+    public void logInfo(String tag, String message) {
+    }
+
+    @Override
+    public void logDebug(String tag, String message) {
+    }
+
+    @Override
+    public void logVerbose(String tag, String message) {
+    }
+
+    @Override
+    public void logStackTraceWithMessage(String tag, String message, Exception e) {
+    }
+
+    @Override
+    public void logStackTrace(String tag, Exception e) {
+    }
 }
