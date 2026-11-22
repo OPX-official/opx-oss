@@ -78,6 +78,11 @@ public class TerminalActivity extends AppCompatActivity
      */
     private void verifyThenStart() {
         new Thread(() -> {
+            try {
+                OpxRuntime.repair(getApplicationContext());
+            } catch (Exception ignored) {
+                // The probe below reports anything that actually blocks the shell.
+            }
             final String failure = OpxRuntime.probe(getApplicationContext());
             runOnUiThread(() -> {
                 if (failure == null) {

@@ -37,7 +37,7 @@ public final class OpxRuntime {
     public static final String GUEST_HOME = "/data/data/com.termux/files/home";
 
     private static final String[] SHARED_BINDS = {
-            "/dev", "/proc", "/sys", "/linkerconfig",
+            "/dev", "/proc", "/sys",
             "/system", "/system_ext", "/vendor", "/odm", "/product", "/apex",
             "/sdcard", "/storage"
     };
@@ -124,6 +124,7 @@ public final class OpxRuntime {
         }
 
         createGuestRootfs(context);
+        patchSecondStageUidCheck(context);
     }
 
     /**
@@ -142,6 +143,62 @@ public final class OpxRuntime {
         ensureDirectory(new File(rootfs, "tmp"));
         ensureDirectory(new File(rootfs, "sdcard"));
         ensureDirectory(new File(rootfs, "storage"));
+        // Mount point for the host linker configuration; without it the Android linker of every
+        // guest binary prints a warning on stderr, which in turn corrupts shell captures like
+        // "$(id -u 2>&1)" in the bootstrap maintenance scripts.
+        ensureDirectory(new File(rootfs, "linkerconfig"));
+    }
+
+    /** Whether this device lets an app read /linkerconfig (it is root-only on most builds). */
+    private static boolean hostLinkerConfigVisible() {
+        try {
+            String[] entries = new File("/linkerconfig").list();
+            return entries != null;
+        } catch (SecurityException e) {
+            return false;
+        }
+    }
+
+    /**
+     * The bootstrap second stage insists on {@code id -u 2>&1} returning nothing but digits. Any
+     * warning on stderr (linker configuration, for example) breaks that check, so the capture is
+     * narrowed to stderr-less output. Only run once, by {@link #install(Context)}.
+     */
+    private static void patchSecondStageUidCheck(Context context) {
+        File script = new File(prefixDir(context),
+                "etc/termux/termux-bootstrap/second-stage/termux-bootstrap-second-stage.sh");
+        if (!script.isFile()) return;
+        try {
+            String original = readText(script);
+            String patched = original.replace("\"$(id -u 2>&1)\"", "\"$(id -u 2>/dev/null)\"");
+            if (patched.equals(original)) return;
+            try (FileOutputStream out = new FileOutputStream(script)) {
+                out.write(patched.getBytes("UTF-8"));
+            }
+            Os.chmod(script.getAbsolutePath(), 0700);
+        } catch (Exception ignored) {
+            // The fallback script only logs a failed second stage; the shell still starts.
+        }
+    }
+
+    /**
+     * Idempotent touch-up for an already installed prefix, so an app update does not need a full
+     * reinstall to pick up runtime layout fixes. Blocking; call off the UI thread.
+     */
+    public static void repair(Context context) throws IOException {
+        ensureDirectory(new File(rootfsDir(context), "linkerconfig"));
+        ensureDirectory(new File(rootfsDir(context), "data/data/com.termux/files/usr"));
+        patchSecondStageUidCheck(context);
+    }
+
+    private static String readText(File file) throws IOException {
+        StringBuilder text = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                new java.io.FileInputStream(file), "UTF-8"))) {
+            String line;
+            while ((line = reader.readLine()) != null) text.append(line).append('\n');
+        }
+        return text.toString();
     }
 
     /** argv for the terminal session: proot [flags] bash -l. */
@@ -160,6 +217,10 @@ public final class OpxRuntime {
                 argv.add("-b");
                 argv.add(bind);
             }
+        }
+        if (hostLinkerConfigVisible()) {
+            argv.add("-b");
+            argv.add("/linkerconfig");
         }
         // The bootstrap was compiled for com.termux, so the real prefix and home have to answer
         // on the guest paths baked into every Termux binary.
