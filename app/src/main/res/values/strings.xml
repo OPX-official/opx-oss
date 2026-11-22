@@ -41,6 +41,8 @@
     <string name="terminal_installing">Installing the bundled Termux userland…</string>
     <string name="terminal_install_failed_short">The Termux userland could not be installed</string>
     <string name="terminal_install_failed">Install failed: %1$s</string>
+    <string name="terminal_probe_failed">The bundled proot could not start the shell. Tap to retry.\n\n%1$s</string>
+    <string name="terminal_session_ended">The shell exited. Tap the screen to see the output above.</string>
 
     <string name="about_title">About</string>
     <string name="about_version_value">Version %1$s</string>

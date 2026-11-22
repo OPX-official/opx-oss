@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.res.AssetManager;
 import android.os.Build;
 import android.system.Os;
+import android.text.TextUtils;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -12,6 +13,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -121,9 +123,9 @@ public final class OpxRuntime {
     }
 
     /**
-     * Builds the proot filesystem view. The guest root only carries the paths that have to map
-     * onto the real prefix and home; everything else (system binaries, /dev, /sdcard, ...) is
-     * bind-mounted by {@link #prootArgs(Context)}.
+     * Builds the proot filesystem view. The guest root only needs the mount points that the
+     * bind mounts in {@link #prootArgs(Context)} land on; the real prefix and home are bound
+     * onto the paths the Termux binaries were compiled with.
      */
     private static void createGuestRootfs(Context context) throws Exception {
         File rootfs = rootfsDir(context);
@@ -131,13 +133,11 @@ public final class OpxRuntime {
 
         File termuxFiles = new File(rootfs, "data/data/com.termux/files");
         if (!termuxFiles.mkdirs()) throw new IOException("Cannot create " + termuxFiles);
-
-        // rootfs/data/data/com.termux/files/usr -> rootfs/usr -> ../usr (the real prefix)
-        Os.symlink("../usr", new File(rootfs, "usr").getAbsolutePath());
-        Os.symlink("../home", new File(rootfs, "home").getAbsolutePath());
-        Os.symlink("../tmp", new File(rootfs, "tmp").getAbsolutePath());
-        Os.symlink("../../../../usr", new File(termuxFiles, "usr").getAbsolutePath());
-        Os.symlink("../../../../home", new File(termuxFiles, "home").getAbsolutePath());
+        ensureDirectory(new File(termuxFiles, "usr"));
+        ensureDirectory(new File(termuxFiles, "home"));
+        ensureDirectory(new File(rootfs, "tmp"));
+        ensureDirectory(new File(rootfs, "sdcard"));
+        ensureDirectory(new File(rootfs, "storage"));
     }
 
     /** argv for the terminal session: proot [flags] bash -l. */
@@ -155,6 +155,14 @@ public final class OpxRuntime {
                 argv.add(bind);
             }
         }
+        // The bootstrap was compiled for com.termux, so the real prefix and home have to answer
+        // on the guest paths baked into every Termux binary.
+        argv.add("-b");
+        argv.add(prefixDir(context).getAbsolutePath() + ":" + GUEST_PREFIX);
+        argv.add("-b");
+        argv.add(homeDir(context).getAbsolutePath() + ":" + GUEST_HOME);
+        argv.add("-b");
+        argv.add(tmpDir(context).getAbsolutePath() + ":/tmp");
         argv.add("-w");
         argv.add(GUEST_HOME);
         argv.add(GUEST_PREFIX + "/bin/bash");
@@ -174,11 +182,78 @@ public final class OpxRuntime {
                 "LANG=en_US.UTF-8",
                 "ANDROID_DATA=/data",
                 "ANDROID_ROOT=/system",
-                // proot itself is a host process and resolves its libraries from the real prefix.
-                "LD_LIBRARY_PATH=" + libDir.getAbsolutePath(),
+                // proot itself is a host process and resolves its libraries from the real prefix;
+                // the guest entries are what the mounted prefix binaries look for.
+                "LD_LIBRARY_PATH=" + libDir.getAbsolutePath() + ":" + GUEST_PREFIX + "/lib",
                 "PROOT_LOADER=" + new File(prootDir(context), "loader").getAbsolutePath(),
                 "PROOT_TMP_DIR=" + tmpDir(context).getAbsolutePath()
         };
+    }
+
+    /**
+     * Runs the bundled proot once with a throwaway command and returns {@code null} when the
+     * shell answers, or the captured output when starting it failed. Blocking; call off the UI
+     * thread. The result is also written to {@code files/opx-proot.log} for bug reports.
+     */
+    public static String probe(Context context) {
+        List<String> command = new ArrayList<>(Arrays.asList(prootArgs(context)));
+        command.add("-c");
+        command.add("echo OPX_PROBE_OK; echo PREFIX=$PREFIX; id");
+
+        StringBuilder output = new StringBuilder();
+        output.append("$ ").append(TextUtils.join(" ", command)).append('\n');
+        boolean ok = false;
+        try {
+            ProcessBuilder builder = new ProcessBuilder(command);
+            builder.redirectErrorStream(true);
+            builder.environment().clear();
+            for (String entry : environment(context)) {
+                int split = entry.indexOf('=');
+                builder.environment().put(entry.substring(0, split), entry.substring(split + 1));
+            }
+            Process process = builder.start();
+            Thread reader = new Thread(() -> {
+                try (BufferedReader in = new BufferedReader(
+                        new InputStreamReader(process.getInputStream()))) {
+                    String line;
+                    while ((line = in.readLine()) != null) {
+                        synchronized (output) {
+                            output.append(line).append('\n');
+                        }
+                    }
+                } catch (IOException ignored) {
+                    // The process died; whatever was printed is already captured.
+                }
+            }, "opx-probe-reader");
+            reader.setDaemon(true);
+            reader.start();
+
+            for (int waited = 0; waited < 200 && process.isAlive(); waited++) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            boolean timedOut = process.isAlive();
+            if (timedOut) process.destroy();
+            reader.join(1000);
+            if (timedOut) output.append("[probe timed out after 20s]\n");
+            synchronized (output) {
+                ok = output.toString().contains("OPX_PROBE_OK");
+            }
+        } catch (Exception e) {
+            output.append(e).append('\n');
+        }
+
+        String log = output.toString();
+        try (FileOutputStream out = new FileOutputStream(new File(context.getFilesDir(), "opx-proot.log"))) {
+            out.write(log.getBytes("UTF-8"));
+        } catch (IOException ignored) {
+            // Diagnostics are best effort only.
+        }
+        return ok ? null : log;
     }
 
     private static void extractBootstrap(AssetManager assets, String assetPath, File destination)

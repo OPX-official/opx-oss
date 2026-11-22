@@ -3,6 +3,7 @@ package com.opx.oss;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.graphics.Typeface;
 import android.os.Bundle;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -27,6 +28,7 @@ public class TerminalActivity extends AppCompatActivity
 
     private TerminalView terminalView;
     private View setupPanel;
+    private View setupProgress;
     private TextView setupStatus;
     private TerminalSession session;
     private float textSizePx;
@@ -38,6 +40,7 @@ public class TerminalActivity extends AppCompatActivity
 
         terminalView = findViewById(R.id.terminal_view);
         setupPanel = findViewById(R.id.terminal_setup);
+        setupProgress = findViewById(R.id.terminal_setup_progress);
         setupStatus = findViewById(R.id.terminal_setup_status);
         textSizePx = getResources().getDimensionPixelSize(R.dimen.terminal_text_size);
         terminalView.setTerminalViewClient(this);
@@ -50,29 +53,57 @@ public class TerminalActivity extends AppCompatActivity
 
     private void prepare() {
         if (OpxRuntime.isInstalled(this)) {
-            startSession();
+            verifyThenStart();
             return;
         }
         setupPanel.setVisibility(View.VISIBLE);
         terminalView.setVisibility(View.GONE);
+        setupStatus.setTypeface(Typeface.DEFAULT);
         setupStatus.setText(R.string.terminal_installing);
+        setupProgress.setVisibility(View.VISIBLE);
         new Thread(() -> {
             try {
                 OpxRuntime.install(getApplicationContext());
-                runOnUiThread(this::startSession);
+                verifyThenStart();
             } catch (final Exception e) {
-                runOnUiThread(() -> showInstallError(e));
+                runOnUiThread(() -> showError(getString(R.string.terminal_install_failed, e.getMessage())));
             }
         }, "opx-bootstrap").start();
     }
 
-    private void showInstallError(Exception e) {
-        setupStatus.setText(getString(R.string.terminal_install_failed, e.getMessage()));
+    /**
+     * Starts proot once with a throwaway command first: a failing proot kills the terminal session
+     * right away, which used to look like the screen closing itself. Showing its output keeps the
+     * failure readable (and copyable) instead of silent.
+     */
+    private void verifyThenStart() {
+        new Thread(() -> {
+            final String failure = OpxRuntime.probe(getApplicationContext());
+            runOnUiThread(() -> {
+                if (failure == null) {
+                    startSession();
+                } else {
+                    showError(getString(R.string.terminal_probe_failed, failure));
+                }
+            });
+        }, "opx-probe").start();
+    }
+
+    private void showError(String details) {
+        session = null;
+        setupPanel.setVisibility(View.VISIBLE);
+        terminalView.setVisibility(View.GONE);
+        setupStatus.setTypeface(Typeface.MONOSPACE);
+        setupStatus.setText(details);
+        setupStatus.setTextIsSelectable(true);
+        setupProgress.setVisibility(View.GONE);
+        setupPanel.setOnClickListener(v -> prepare());
         Toast.makeText(this, R.string.terminal_install_failed_short, Toast.LENGTH_LONG).show();
     }
 
     private void startSession() {
         setupPanel.setVisibility(View.GONE);
+        setupPanel.setOnClickListener(null);
         terminalView.setVisibility(View.VISIBLE);
 
         String[] argv = OpxRuntime.prootArgs(this);
@@ -102,7 +133,9 @@ public class TerminalActivity extends AppCompatActivity
 
     @Override
     public void onSessionFinished(TerminalSession finishedSession) {
-        finish();
+        // Keep the screen up with the last output instead of closing on the user: a shell that
+        // dies instantly is exactly when the error text matters.
+        Toast.makeText(this, R.string.terminal_session_ended, Toast.LENGTH_LONG).show();
     }
 
     @Override
