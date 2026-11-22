@@ -37,6 +37,13 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".TerminalActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
+            android:exported="false"
+            android:theme="@style/Theme.Opx.Terminal"
+            android:windowSoftInputMode="adjustResize" />
+
     </application>
 
 </manifest>

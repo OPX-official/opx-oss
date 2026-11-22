@@ -43,6 +43,7 @@ android {
 }
 
 dependencies {
+    implementation project(':terminal-view')
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'androidx.drawerlayout:drawerlayout:1.2.0'
     implementation 'androidx.fragment:fragment:1.8.5'

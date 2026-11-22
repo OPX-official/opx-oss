@@ -38,7 +38,9 @@
     <string name="terminal_subtitle">Real Termux shell inside OPX OSS</string>
     <string name="terminal_body">bash, apt and pkg work exactly like upstream Termux. Packages update from the official repositories.</string>
     <string name="terminal_open">Open terminal</string>
-    <string name="terminal_pending">Terminal view lands in the next phase.</string>
+    <string name="terminal_installing">Installing the bundled Termux userland…</string>
+    <string name="terminal_install_failed_short">The Termux userland could not be installed</string>
+    <string name="terminal_install_failed">Install failed: %1$s</string>
 
     <string name="about_title">About</string>
     <string name="about_version_value">Version %1$s</string>
