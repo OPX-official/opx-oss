@@ -46,8 +46,12 @@ Phase 1 ships the WiFi module only. Every other module stays visible but disable
 
 ### Engine first, terminal second
 
-`OpxService` is started by `MainActivity`, so the bundled userland is extracted and verified as soon
-as the app opens — opening the terminal is not a prerequisite for anything else. The service is a
+`OpxService` is started by `OpxApp` (and again by `MainActivity`), so the bundled userland is
+extracted and verified as soon as the app process starts — opening the terminal is not a
+prerequisite for anything else. Modules never spawn their own shell: they call
+`OpxService.runCommand(...)`, which waits for the runtime to be ready and executes a one-off command
+inside the userland without creating a terminal session. The terminal is therefore optional, aimed
+at advanced users. The service is a
 foreground service with an ongoing notification that stays until its **Exit** action is tapped;
 that is also the only thing that ends the shell sessions. Closing the terminal screen, pressing back
 or swiping the task out of the recents list leaves the sessions running, exactly like Termux, and
@@ -90,7 +94,8 @@ artifacts, and publishes a GitHub Release when a `v*` tag is pushed.
 | Phase | Deliverable |
 |---|---|
 | 1 | App shell: drawer, Material 3 screens, CI build/release **(done)** |
-| 2 | Termux runtime: proot rootfs installer, engine service, multi-session terminal, `termux-api` bridge in-process **(current)** |
+| 2 | Termux runtime: proot rootfs installer, engine service started with the app, headless command runner, multi-session terminal **(current)** |
+| 2b | `termux-api` bridge in-process (started next: `TermuxApiReceiver`, Usb/Wifi APIs) |
 | 3 | WiFi engine bridge (headless wifi4) + scan UI over USB pass-through |
 | 4 | Capture / deauth / WPS campaigns, vault and cracking |
 | 5 | Further Stryker-style modules (LAN, nmap, web scanning, …) |

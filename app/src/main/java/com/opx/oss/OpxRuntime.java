@@ -318,6 +318,52 @@ public final class OpxRuntime {
         return text.toString();
     }
 
+    /** Output and exit status of a one-off command executed in the bundled userland. */
+    public static final class CommandResult {
+        public final int exitCode;
+        public final String output;
+
+        CommandResult(int exitCode, String output) {
+            this.exitCode = exitCode;
+            this.output = output;
+        }
+    }
+
+    /**
+     * Runs a one-off shell command inside the bundled userland without a terminal, so app modules
+     * (the WiFi engine, scripts, future features) can use the runtime while the terminal stays
+     * closed. Blocking; call off the UI thread. stdout and stderr are merged into the result.
+     */
+    public static CommandResult run(Context context, String... command) {
+        StringBuilder output = new StringBuilder();
+        if (command == null || command.length == 0) return new CommandResult(-1, "");
+
+        List<String> argv = new ArrayList<>(Arrays.asList(prootArgs(context)));
+        argv.add("-c");
+        argv.add(TextUtils.join(" ", command));
+
+        int exitCode = -1;
+        try {
+            ProcessBuilder builder = new ProcessBuilder(argv);
+            builder.redirectErrorStream(true);
+            builder.environment().clear();
+            for (String entry : environment(context)) {
+                int split = entry.indexOf('=');
+                builder.environment().put(entry.substring(0, split), entry.substring(split + 1));
+            }
+            Process process = builder.start();
+            try (BufferedReader in = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = in.readLine()) != null) output.append(line).append('\n');
+            }
+            exitCode = process.waitFor();
+        } catch (Exception e) {
+            output.append(e).append('\n');
+        }
+        return new CommandResult(exitCode, output.toString());
+    }
+
     /** argv for the terminal session: proot [flags] bash -l. */
     public static String[] prootArgs(Context context) {
         List<String> argv = new ArrayList<>();

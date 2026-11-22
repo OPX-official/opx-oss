@@ -18,6 +18,7 @@ import com.termux.terminal.TerminalSession;
 import com.termux.terminal.TerminalSessionClient;
 
 import java.io.File;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -58,9 +59,16 @@ public class OpxService extends Service implements TerminalSessionClient {
         void onEngineExited();
     }
 
+    /** Result of a headless command; app modules use this instead of a terminal session. */
+    public interface CommandCallback {
+        void onCommandFinished(int exitCode, String output);
+    }
+
     private static OpxService instance;
 
     private final List<TerminalSession> sessions = new ArrayList<>();
+    /** Actions waiting for the userland to be installed and probed (see {@link #whenReady}). */
+    private final ArrayDeque<Runnable> readyActions = new ArrayDeque<>();
     private volatile int state = STATE_STARTING;
     private volatile String error;
     private Thread engineThread;
@@ -114,6 +122,7 @@ public class OpxService extends Service implements TerminalSessionClient {
     public void onDestroy() {
         instance = null;
         listener = null;
+        clearReadyActions();
         for (TerminalSession session : new ArrayList<>(sessions)) session.finishIfRunning();
         sessions.clear();
         super.onDestroy();
@@ -155,6 +164,8 @@ public class OpxService extends Service implements TerminalSessionClient {
         updateNotification();
         Listener current = listener;
         if (current != null) current.onEngineStateChanged();
+        if (newState == STATE_READY) drainReadyActions();
+        if (newState == STATE_FAILED) clearReadyActions();
     }
 
     public int getState() {
@@ -163,6 +174,59 @@ public class OpxService extends Service implements TerminalSessionClient {
 
     public String getError() {
         return error;
+    }
+
+    // ------------------------------------------------------- headless commands
+
+    /**
+     * Runs the action once the engine is ready, on the caller's thread. Modules use this instead of
+     * poking at the runtime directly, so nothing has to wait for (or depend on) the terminal.
+     * Actions registered before a failure are dropped: there is no runtime to run them against.
+     */
+    public void whenReady(Runnable action) {
+        if (action == null) return;
+        synchronized (readyActions) {
+            if (state == STATE_STARTING || state == STATE_INSTALLING) {
+                readyActions.add(action);
+                return;
+            }
+            if (state == STATE_FAILED) return;
+        }
+        action.run();
+    }
+
+    /**
+     * Runs a one-off shell command in the bundled userland. No terminal and no session is created,
+     * so app features (the WiFi engine, helper scripts) work even when the user never opens the
+     * terminal. The callback runs on a background thread once the command finishes.
+     */
+    public void runCommand(CommandCallback callback, String... command) {
+        if (command == null || command.length == 0) return;
+        whenReady(() -> new Thread(() -> {
+            OpxRuntime.CommandResult result = OpxRuntime.run(this, command);
+            if (callback != null) callback.onCommandFinished(result.exitCode, result.output);
+        }, "opx-command").start());
+    }
+
+    private void drainReadyActions() {
+        List<Runnable> actions;
+        synchronized (readyActions) {
+            actions = new ArrayList<>(readyActions);
+            readyActions.clear();
+        }
+        for (Runnable action : actions) {
+            try {
+                action.run();
+            } catch (RuntimeException ignored) {
+                // One broken module must not keep the others from getting the runtime.
+            }
+        }
+    }
+
+    private void clearReadyActions() {
+        synchronized (readyActions) {
+            readyActions.clear();
+        }
     }
 
     // -------------------------------------------------------------- sessions
@@ -209,6 +273,7 @@ public class OpxService extends Service implements TerminalSessionClient {
     /** The notification's Exit action: end every shell and take the engine down. */
     private void exitAll() {
         exiting = true;
+        clearReadyActions();
         for (TerminalSession session : new ArrayList<>(sessions)) session.finishIfRunning();
         sessions.clear();
         Listener current = listener;

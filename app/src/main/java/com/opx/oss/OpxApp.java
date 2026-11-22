@@ -2,7 +2,7 @@ package com.opx.oss;
 
 import android.app.Application;
 
-/** Application entry point; later phases attach the Termux runtime and the WiFi engine here. */
+/** Application entry point; later phases attach the WiFi engine to the already running runtime. */
 public class OpxApp extends Application {
 
     private static OpxApp instance;
@@ -15,5 +15,11 @@ public class OpxApp extends Application {
     public void onCreate() {
         super.onCreate();
         instance = this;
+
+        // The engine belongs to the app, not to the terminal screen. Starting it here means any
+        // entry point that creates the process (launcher, shortcut, notification, restored task)
+        // warms the bundled userland immediately, so no feature ever depends on the terminal
+        // having been opened. OpxService.start() is idempotent and MainActivity calls it as well.
+        OpxService.start(this);
     }
 }
