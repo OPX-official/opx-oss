@@ -43,6 +43,24 @@
     <string name="terminal_install_failed">Install failed: %1$s</string>
     <string name="terminal_probe_failed">The bundled proot could not start the shell. Tap to retry.\n\n%1$s</string>
     <string name="terminal_session_ended">The shell exited. Tap the screen to see the output above.</string>
+    <string name="terminal_engine_starting">Starting the OPX engine…</string>
+    <string name="terminal_sessions_header">SESSIONS</string>
+    <string name="terminal_sessions_hint">Tap a session to switch to it. Long-press one to close it. Sessions keep running while the app is in the background.</string>
+    <string name="terminal_session_new">＋ New session</string>
+    <string name="terminal_session_n">Session %1$d</string>
+
+    <string name="notification_channel_name">OPX engine</string>
+    <string name="notification_channel_description">Keeps the Termux runtime and the open terminal sessions running.</string>
+    <string name="notification_title">OPX OSS</string>
+    <string name="notification_state_starting">Starting the engine…</string>
+    <string name="notification_state_installing">Installing the bundled Termux userland…</string>
+    <string name="notification_state_failed">Engine error — tap to see details</string>
+    <string name="notification_action_new_session">New session</string>
+    <string name="notification_action_exit">Exit</string>
+    <plurals name="notification_state_ready">
+        <item quantity="one">Engine ready · %1$d session running</item>
+        <item quantity="other">Engine ready · %1$d sessions running</item>
+    </plurals>
 
     <string name="about_title">About</string>
     <string name="about_version_value">Version %1$s</string>

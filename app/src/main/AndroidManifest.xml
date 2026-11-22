@@ -48,6 +48,13 @@
             android:theme="@style/Theme.Opx.Terminal"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- The engine: installs the Termux userland when the app starts, keeps the terminal
+             sessions alive in the background and shows the ongoing notification with Exit. -->
+        <service
+            android:name=".OpxService"
+            android:exported="false"
+            android:stopWithTask="false" />
+
     </application>
 
 </manifest>

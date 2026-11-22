@@ -32,6 +32,11 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         navigation = findViewById(R.id.nav_view);
         navigation.setNavigationItemSelectedListener(this);
 
+        // The engine starts with the app, not with the terminal screen: the bundled userland is
+        // installed and kept warm so every module (and the WiFi engine later) can use it even if
+        // the terminal is never opened.
+        OpxService.start(this);
+
         ActionBarDrawerToggle toggle = new ActionBarDrawerToggle(
                 this, drawer, toolbar, R.string.drawer_open, R.string.drawer_close);
         drawer.addDrawerListener(toggle);
