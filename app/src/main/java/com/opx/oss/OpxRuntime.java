@@ -1,8 +1,12 @@
 package com.opx.oss;
 
+import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.os.Build;
+import android.os.Environment;
+import android.system.ErrnoException;
 import android.system.Os;
 import android.text.TextUtils;
 
@@ -59,6 +63,27 @@ public final class OpxRuntime {
 
     public static File rootfsDir(Context context) {
         return new File(context.getFilesDir(), "rootfs");
+    }
+
+    /**
+     * Guest path {@link #GUEST_CACHE} is the apt cache directory compiled into the Termux packages
+     * ({@code -DCACHE_DIR=${TERMUX_CACHE_DIR}/apt}) and read by the {@code pkg} mirror wrapper. The
+     * Android cache directory of the app is the exact equivalent, so it is bound there; without it
+     * apt fails with "Archives directory .../apt/archives/partial is missing".
+     */
+    public static final String GUEST_CACHE = "/data/data/com.termux/cache";
+
+    public static File cacheDir(Context context) {
+        File cache = context.getCacheDir();
+        return cache != null ? cache : new File(context.getFilesDir(), "cache");
+    }
+
+    /** Recreates the apt cache tree the Termux packages expect inside {@link #cacheDir(Context)}. */
+    private static void ensureAptCache(Context context) throws IOException {
+        File apt = new File(cacheDir(context), "apt");
+        ensureDirectory(apt);
+        ensureDirectory(new File(apt, "archives"));
+        ensureDirectory(new File(apt, "archives/partial"));
     }
 
     public static File prootDir(Context context) {
@@ -122,6 +147,7 @@ public final class OpxRuntime {
         if (!tmpDir(context).exists() && !tmpDir(context).mkdirs()) {
             throw new IOException("Cannot create " + tmpDir(context));
         }
+        ensureAptCache(context);
 
         createGuestRootfs(context);
         patchSecondStageUidCheck(context);
@@ -140,6 +166,7 @@ public final class OpxRuntime {
         if (!termuxFiles.mkdirs()) throw new IOException("Cannot create " + termuxFiles);
         ensureDirectory(new File(termuxFiles, "usr"));
         ensureDirectory(new File(termuxFiles, "home"));
+        ensureDirectory(new File(rootfs, "data/data/com.termux/cache"));
         ensureDirectory(new File(rootfs, "tmp"));
         ensureDirectory(new File(rootfs, "sdcard"));
         ensureDirectory(new File(rootfs, "storage"));
@@ -149,14 +176,30 @@ public final class OpxRuntime {
         ensureDirectory(new File(rootfs, "linkerconfig"));
     }
 
-    /** Whether this device lets an app read /linkerconfig (it is root-only on most builds). */
-    private static boolean hostLinkerConfigVisible() {
+    /**
+     * The host path to bind over the guest's empty {@code /linkerconfig}, or {@code null}.
+     * <p>
+     * Bionic prints "failed to find generated linker configuration" for every guest binary when the
+     * guest has no {@code ld.config.txt}, and the Android runtime executables (the {@code am} wrapper
+     * runs {@code /system/bin/app_process}) cannot resolve {@code /system/lib64} at all without it.
+     * The directory itself is not readable on every ROM, so the single file is preferred: proot can
+     * bind it as long as the app may read it, while binding the directory needs a traversable,
+     * listable {@code /linkerconfig}. When neither works the guest keeps its own empty directory and
+     * only the cosmetic warning remains.
+     */
+    private static String hostLinkerConfig() {
+        File config = new File("/linkerconfig/ld.config.txt");
         try {
-            String[] entries = new File("/linkerconfig").list();
-            return entries != null;
-        } catch (SecurityException e) {
-            return false;
+            if (config.canRead()) return config.getAbsolutePath();
+        } catch (SecurityException ignored) {
+            // Fall through to the directory check below.
         }
+        try {
+            if (new File("/linkerconfig").list() != null) return "/linkerconfig";
+        } catch (SecurityException ignored) {
+            // Neither is usable; the warning is harmless.
+        }
+        return null;
     }
 
     /**
@@ -188,7 +231,81 @@ public final class OpxRuntime {
     public static void repair(Context context) throws IOException {
         ensureDirectory(new File(rootfsDir(context), "linkerconfig"));
         ensureDirectory(new File(rootfsDir(context), "data/data/com.termux/files/usr"));
+        ensureDirectory(new File(rootfsDir(context), "data/data/com.termux/files/home"));
+        ensureDirectory(new File(rootfsDir(context), "data/data/com.termux/cache"));
+        ensureAptCache(context);
         patchSecondStageUidCheck(context);
+    }
+
+    /** Whether the app may read shared storage, needed for {@code ~/storage} to be usable. */
+    public static boolean hasStoragePermission(Context context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+        return context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
+     * Builds {@code ~/storage} the same way the Termux app does after {@code termux-setup-storage}:
+     * the app process links the shared-storage directories into the home directory, because the
+     * broadcast the script sends is addressed to the Termux package itself. Safe to call repeatedly;
+     * blocking, call off the UI thread.
+     */
+    public static void setupStorage(Context context) {
+        if (!hasStoragePermission(context)) return;
+        if (!Environment.MEDIA_MOUNTED.equals(Environment.getExternalStorageState())) return;
+
+        File storage = new File(homeDir(context), "storage");
+        File[] existing = storage.listFiles();
+        if (existing != null) {
+            for (File child : existing) {
+                // Only remove the links: recursing would delete what they point at (shared storage).
+                //noinspection ResultOfMethodCallIgnored
+                child.delete();
+            }
+        }
+        if (!storage.isDirectory() && !storage.mkdirs()) return;
+
+        symlink(storage, "shared", Environment.getExternalStorageDirectory());
+        symlink(storage, "documents",
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS));
+        symlink(storage, "downloads",
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS));
+        symlink(storage, "dcim",
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM));
+        symlink(storage, "pictures",
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES));
+        symlink(storage, "music",
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC));
+        symlink(storage, "movies",
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES));
+        symlink(storage, "podcasts",
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PODCASTS));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            symlink(storage, "audiobooks",
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_AUDIOBOOKS));
+        }
+
+        File[] dirs = context.getExternalFilesDirs(null);
+        if (dirs != null) {
+            for (int i = 0; i < dirs.length; i++) {
+                if (dirs[i] != null) symlink(storage, "external-" + i, dirs[i]);
+            }
+        }
+        dirs = context.getExternalMediaDirs();
+        if (dirs != null) {
+            for (int i = 0; i < dirs.length; i++) {
+                if (dirs[i] != null) symlink(storage, "media-" + i, dirs[i]);
+            }
+        }
+    }
+
+    private static void symlink(File directory, String name, File target) {
+        if (target == null) return;
+        try {
+            Os.symlink(target.getAbsolutePath(), new File(directory, name).getAbsolutePath());
+        } catch (ErrnoException ignored) {
+            // An existing link is recreated on the next run.
+        }
     }
 
     private static String readText(File file) throws IOException {
@@ -218,9 +335,10 @@ public final class OpxRuntime {
                 argv.add(bind);
             }
         }
-        if (hostLinkerConfigVisible()) {
+        String linkerConfig = hostLinkerConfig();
+        if (linkerConfig != null) {
             argv.add("-b");
-            argv.add("/linkerconfig");
+            argv.add(linkerConfig);
         }
         // The bootstrap was compiled for com.termux, so the real prefix and home have to answer
         // on the guest paths baked into every Termux binary.
@@ -230,6 +348,8 @@ public final class OpxRuntime {
         argv.add(homeDir(context).getAbsolutePath() + ":" + GUEST_HOME);
         argv.add("-b");
         argv.add(tmpDir(context).getAbsolutePath() + ":/tmp");
+        argv.add("-b");
+        argv.add(cacheDir(context).getAbsolutePath() + ":" + GUEST_CACHE);
         argv.add("-w");
         argv.add(GUEST_HOME);
         argv.add(GUEST_PREFIX + "/bin/bash");

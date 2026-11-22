@@ -1,8 +1,10 @@
 package com.opx.oss;
 
+import android.Manifest;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.view.KeyEvent;
@@ -46,9 +48,25 @@ public class TerminalActivity extends AppCompatActivity
         terminalView.setTerminalViewClient(this);
         terminalView.setTextSize((int) textSizePx);
 
+        if (!OpxRuntime.hasStoragePermission(this)) {
+            // Termux asks for storage when termux-setup-storage is run; OPX OSS asks once here so
+            // ~/storage is usable, which is what makes ~/storage/shared work from the shell.
+            requestPermissions(new String[]{
+                    Manifest.permission.READ_EXTERNAL_STORAGE,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1);
+        }
+
         if (savedInstanceState == null) {
             prepare();
         }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != 1) return;
+        boolean granted = results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED;
+        if (granted) new Thread(() -> OpxRuntime.setupStorage(getApplicationContext()), "opx-storage").start();
     }
 
     private void prepare() {
@@ -80,6 +98,7 @@ public class TerminalActivity extends AppCompatActivity
         new Thread(() -> {
             try {
                 OpxRuntime.repair(getApplicationContext());
+                OpxRuntime.setupStorage(getApplicationContext());
             } catch (Exception ignored) {
                 // The probe below reports anything that actually blocks the shell.
             }
