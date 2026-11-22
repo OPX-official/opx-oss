@@ -1,0 +1,84 @@
+# OPX OSS
+
+> Termux + Termux:API + a wireless engine in a single Android app, behind a guided GUI.
+> Authorized testing only.
+
+**Package:** `com.opx.oss` · **Version:** 0.1.0 · **Min SDK:** 24 · **Licence:** GPL-3.0
+
+---
+
+## What this is
+
+Upstream ships Termux (the terminal) and Termux:API (the Android-API bridge) as two apps that must be
+installed together and signed with the same key. OPX OSS merges them into one APK, adds the wifi4
+engine (the working parts of [wifit3](https://github.com/derv82/wifit3), without its old TUI), and puts
+a Stryker-style interface in front of it: cards, buttons and dialogs instead of memorised commands.
+
+Phase 1 ships the WiFi module only. Every other module stays visible but disabled until later phases.
+
+## Architecture
+
+```
+┌──────────────────────────── OPX OSS (com.opx.oss) ────────────────────────────┐
+│                                                                               │
+│  GUI (Material 3, drawer)      Terminal (Termux terminal-emulator/view)        │
+│      WiFi · Home · Terminal · About                                           │
+│                    │                                  │                       │
+│                    ▼                                  ▼                       │
+│  WiFi bridge (JSON line protocol)          TermuxService (foreground)          │
+│                    │                                  │                       │
+│                    └──────────────┬───────────────────┘                       │
+│                                   ▼                                           │
+│        Termux userland inside a rootfs the binaries expect:                   │
+│        $PREFIX = /data/data/com.termux/files/usr  (faked by bundled proot)     │
+│                                   │                                           │
+│            python · wifi4 engine · apt/pkg · libusb · termux-api binaries      │
+└───────────────────────────────────┬───────────────────────────────────────────┘
+                                    │ USB host API
+                                OTG USB Wi-Fi adapter
+```
+
+### Why proot
+
+Every Termux bootstrap binary and `.deb` has `/data/data/com.termux/files/usr` compiled in. A different
+`applicationId` therefore cannot use the official bootstrap directly. OPX OSS ships a static `proot`
+and runs the official bootstrap in a rootfs where that path really exists, so `apt`/`pkg` install,
+update and `python` keep working — while the app itself stays `com.opx.oss`.
+
+### USB pass-through on non-rooted devices
+
+The engine obtains the adapter file descriptor through Android's USB host API: `termux-usb -r -E -e
+"<callback>" <device>` → callback receives `TERMUX_USB_FD` → descriptor travels back over a unix
+socket. Because Termux:API lives in the same APK (same UID), the existing broadcast path works
+unchanged, and no root is required.
+
+### ABI support
+
+The userland is downloaded per architecture (`arm`, `aarch64`, `i686`, `x86_64`), so 32-bit devices are
+first-class — no arm64-only chroot payload.
+
+## Building
+
+```bash
+./gradlew assembleDebug
+```
+
+CI (`.github/workflows/build.yml`) builds debug + release APKs on every push, uploads them as
+artifacts, and publishes a GitHub Release when a `v*` tag is pushed.
+
+## Roadmap
+
+| Phase | Deliverable |
+|---|---|
+| 1 | App shell: drawer, Material 3 screens, CI build/release **(current)** |
+| 2 | Termux runtime: proot rootfs installer, terminal view, `termux-api` bridge in-process |
+| 3 | WiFi engine bridge (headless wifi4) + scan UI over USB pass-through |
+| 4 | Capture / deauth / WPS campaigns, vault and cracking |
+| 5 | Further Stryker-style modules (LAN, nmap, web scanning, …) |
+
+## Licence & credits
+
+GPL-3.0. Termux is © the Termux contributors (GPL-3.0); Termux:API likewise; the wireless engine is
+based on wifit3 by derv82, with OPX extensions.
+
+**Disclaimer:** use only on networks and devices you own or are explicitly authorized to test.
