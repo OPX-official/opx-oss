@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Static launcher shortcut: long-pressing the OPX OSS icon offers the terminal directly. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_terminal_launcher"
+        android:shortcutId="open_terminal"
+        android:shortcutLongLabel="@string/shortcut_terminal_long"
+        android:shortcutShortLabel="@string/shortcut_terminal_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.opx.oss.TerminalActivity"
+            android:targetPackage="com.opx.oss" />
+    </shortcut>
+</shortcuts>

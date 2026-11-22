@@ -35,6 +35,10 @@
     <string name="wifi_empty_body">Plug in a supported USB Wi-Fi adapter, then run a scan.</string>
 
     <string name="terminal_title">Terminal</string>
+    <!-- Launcher entry and long-press shortcut of the terminal (one APK, like Stryker). -->
+    <string name="terminal_launcher_label">Terminal</string>
+    <string name="shortcut_terminal_short">Terminal</string>
+    <string name="shortcut_terminal_long">Open the OPX OSS terminal</string>
     <string name="terminal_subtitle">Real Termux shell inside OPX OSS</string>
     <string name="terminal_body">bash, apt and pkg work exactly like upstream Termux. Packages update from the official repositories.</string>
     <string name="terminal_open">Open terminal</string>

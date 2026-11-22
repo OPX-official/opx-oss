@@ -15,8 +15,9 @@ engine (the working parts of [wifit3](https://github.com/derv82/wifit3), without
 a Stryker-style interface in front of it: cards, buttons and dialogs instead of memorised commands.
 
 Everything is one app: the Terminal section is the shortcut into the in-app terminal, the same way
-Stryker keeps its terminal behind a button. There is no second APK to install and nothing extra to
-download.
+Stryker keeps its terminal behind a button. Like Stryker's `TerminalLauncher` alias, the same APK also
+gives the terminal a launcher icon of its own (long-press the OPX OSS icon, or open **Terminal**), so
+no second APK, no second install and nothing extra to download is needed.
 
 Phase 1 ships the WiFi module only. Every other module stays visible but disabled until later phases.
 

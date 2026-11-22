@@ -13,8 +13,8 @@ android {
         // Must stay at 28: Android 10+ refuses to execve() files inside the app home directory for
         // apps targeting 29+, and both proot and the whole Termux userland run from <files>.
         targetSdk 28
-        versionCode 11
-        versionName "0.1.0-alpha.10"
+        versionCode 12
+        versionName "0.1.0-alpha.11"
         vectorDrawables.useSupportLibrary = true
     }
 
