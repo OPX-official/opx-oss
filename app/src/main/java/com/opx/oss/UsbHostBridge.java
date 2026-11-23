@@ -33,14 +33,14 @@ import java.util.concurrent.TimeUnit;
 /**
  * The USB host bridge: the app's own USB API, living in the same process as the engine.
  * <p>
- * wifi4 asks the {@code termux-usb} command for a descriptor; this class answers on the
+ * wifi4 asks the {@code opx-usb} command for a descriptor; this class answers on the
  * abstract socket {@code opx.usb} in the same UID, asks Android for the device permission
  * and hands the descriptor to the requesting process over SCM_RIGHTS. No second app:
  * <pre>
- *   termux-usb (shim in the userland)  ->  abstract socket "opx.usb"  ->  this class
+ *   opx-usb (shim in the userland)  ->  abstract socket "opx.usb"  ->  this class
  *                                      <-  JSON reply + SCM_RIGHTS fd
  * </pre>
- * The engine's wifi4 backend is unchanged: it still asks {@code termux-usb} for a descriptor.
+ * The engine's wifi4 backend is unchanged: it still asks {@code opx-usb} for a descriptor.
  */
 public final class UsbHostBridge {
 
@@ -266,7 +266,7 @@ public final class UsbHostBridge {
         try {
             // Android fills the answer into this PendingIntent's extras (EXTRA_DEVICE and
             // EXTRA_PERMISSION_GRANTED); an immutable intent cannot receive those fill-ins,
-            // so this uses FLAG_MUTABLE like Termux:API does. The grant itself is still read
+            // so this needs FLAG_MUTABLE, like every USB host bridge does. The grant itself is read
             // back with hasPermission(), so the extras are only belt and braces.
             int pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

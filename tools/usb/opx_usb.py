@@ -8,7 +8,7 @@ and receives USB file descriptors over ``SCM_RIGHTS``:
     -> {"cmd": "open", "path": "/dev/bus/usb/1/2"}  <- {"ok": true} + the fd as ancillary data
 
 The descriptor travels with the *first* byte of the reply (that is how
-``LocalSocket#setFileDescriptorsForSend`` works, and how Termux:API sends it too), so the
+``LocalSocket#setFileDescriptorsForSend`` works), so the
 reply must be read with ``recv_fds`` — a plain ``recv()`` would consume the bytes and drop
 the descriptor with them.
 """

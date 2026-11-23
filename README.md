@@ -38,7 +38,7 @@ UI needs goes through one headless process spoken to with JSON lines.
 │                    │                                                             │
 │  UsbHostBridge (abstract socket "opx.usb", SCM_RIGHTS fd)                        │
 │                    ▲                                                             │
-│        termux-usb shim ─┘            (the app's own USB API, in-process)         │
+│        opx-usb shim ────┘            (the app's own USB API, in-process)         │
 │                    │                                                             │
 │  native runtime at /data/data/com.opx.oss/files/usr:                            │
 │    python · libusb · bash · coreutils · wifi4 engine (no TUI)                    │
@@ -49,18 +49,18 @@ UI needs goes through one headless process spoken to with JSON lines.
 
 ### No terminal, no second app
 
-`wifi4` shells out to a `termux-usb` command for its USB adapter. OPX OSS ships that command
-as a native script inside the app: it talks to the in-app USB bridge over the abstract socket
-`opx.usb`, which asks Android for the device permission and returns the descriptor over
-SCM_RIGHTS — the same hand-off the separate API app used to do, now in one UID and one APK:
+`wifi4` shells out to a USB command for its adapter. OPX OSS ships that command as `opx-usb`,
+a native script inside the app with the app's own name and environment (`OPX_USB_FD`): it talks
+to the in-app USB bridge over the abstract socket `opx.usb`, which asks Android for the device
+permission and returns the descriptor over SCM_RIGHTS — one UID, one APK:
 
 ```
-wifi4 → termux-usb (native script) → abstract socket "opx.usb" → UsbHostBridge → UsbManager → fd
+wifi4 → opx-usb (native script) → abstract socket "opx.usb" → UsbHostBridge → UsbManager → fd
 ```
 
 ### Why not proot
 
-The previous build mirrored another app's packages (compiled for `/data/data/com.termux/files/usr`)
+The previous build mirrored another app's packages (compiled for that app's prefix)
 and ran them through a bundled `proot` inside a fake rootfs. That is not how a native app works,
 and it made the WiFi stack unreachable (`wifi4`'s USB backend selection keys off the prefix).
 OPX OSS now compiles its own base runtime **from source for its own prefix** — see
@@ -127,7 +127,7 @@ bash tools/fetch-packages.sh && ./gradlew assembleDebug
 |---|---|
 | 1 | App shell, Material 3 screens, CI build/release **(done)** |
 | 2 | Native runtime at the app's own prefix, engine service started with the app, headless command runner **(done)** |
-| 2b | USB host bridge folded into the app: `termux-usb`, `UsbHostBridge` **(done)** |
+| 2b | USB host bridge folded into the app: `opx-usb`, `UsbHostBridge` **(done)** |
 | 3 | Headless wifi4 engine + WiFi scan UI + copyable logs **(current)** |
 | 4 | Capture / deauth / WPS campaigns, vault and cracking |
 | 5 | Further modules (LAN, nmap, web scanning, …) |

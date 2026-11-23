@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""``termux-usb`` for OPX OSS -- same command line, no second app.
+"""``opx-usb`` for OPX OSS: the command the engine runs, with no second app.
 
-wifi4 shells out to ``termux-usb -l`` and ``termux-usb -r |-E -e <callback> <device>``.
+wifi4 shells out to ``opx-usb -l`` and ``opx-usb -r |-E -e <callback> <device>``.
 This is a native script inside the OPX OSS runtime: it talks to the in-app USB host bridge
 over the abstract socket (see ``opx_usb.py``), which asks Android for the device permission
 and returns the descriptor over SCM_RIGHTS. Everything lives in this app.
@@ -19,11 +19,11 @@ import opx_usb  # noqa: E402
 
 def usage(message=None):
     if message:
-        sys.stderr.write(f"termux-usb: {message}\n")
+        sys.stderr.write(f"opx-usb: {message}\n")
     sys.stderr.write(
-        "usage: termux-usb [-l | -r [-E] -e <callback> <device>]\n"
+        "usage: opx-usb [-l | -r [-E] -e <callback> <device>]\n"
         "  -l  list attached USB device paths as JSON\n"
-        "  -r  request the device and run the callback with TERMUX_USB_FD set\n"
+        "  -r  request the device and run the callback with OPX_USB_FD set\n"
     )
     return 1
 
@@ -38,7 +38,7 @@ def main(argv):
         try:
             print(json.dumps(opx_usb.list_devices()))
         except Exception as exc:
-            sys.stderr.write(f"termux-usb: {exc}\n")
+            sys.stderr.write(f"opx-usb: {exc}\n")
             return 1
         return 0
 
@@ -66,12 +66,12 @@ def main(argv):
     try:
         fd = opx_usb.open_device(device)
     except Exception as exc:
-        sys.stderr.write(f"termux-usb: {exc}\n")
+        sys.stderr.write(f"opx-usb: {exc}\n")
         return 1
 
     environment = dict(os.environ)
-    environment["TERMUX_USB_FD"] = str(fd)
-    environment.setdefault("TERMUX_USB_DEVICE", device)
+    environment["OPX_USB_FD"] = str(fd)
+    environment.setdefault("OPX_USB_DEVICE", device)
     try:
         return subprocess.call(["/system/bin/sh", "-c", callback], env=environment,
                                 pass_fds=(fd,))

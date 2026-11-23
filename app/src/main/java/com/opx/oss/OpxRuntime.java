@@ -31,7 +31,7 @@ import java.util.zip.ZipInputStream;
 /**
  * Owns the bundled native runtime.
  * <p>
- * OPX OSS is a native app like Termux: every binary it runs lives under the app's own private
+ * OPX OSS is a native app: every binary it runs lives under the app's own private
  * directory, {@code /data/data/com.opx.oss/files/usr} (the "prefix"), and every package is
  * compiled for exactly that path. There is no virtualization layer and no other app's prefix
  * anywhere in the stack: the engine, the USB bridge and the UI all run in this process against
@@ -108,7 +108,7 @@ public final class OpxRuntime {
     }
 
     /** The device's primary ABI mapped to a runtime architecture. */
-    public static String termuxArch() {
+    public static String deviceArch() {
         String abi = Build.SUPPORTED_ABIS.length > 0 ? Build.SUPPORTED_ABIS[0] : Build.CPU_ABI;
         String arch = archForAbi(abi);
         if (arch == null) throw new IllegalStateException("Unsupported ABI: " + abi);
@@ -461,7 +461,7 @@ public final class OpxRuntime {
         try {
             arch = arch(context);
         } catch (RuntimeException e) {
-            arch = termuxArch();
+            arch = deviceArch();
         }
         return new String[]{
                 "HOME=" + HOME_GUEST,
@@ -473,13 +473,14 @@ public final class OpxRuntime {
                 "LANG=en_US.UTF-8",
                 "ANDROID_DATA=/data",
                 "ANDROID_ROOT=/system",
-                // The engine stack identifies this runtime the way the packages expect.
-                "TERMUX_VERSION=0.3.0",
-                "TERMUX__UID=" + android.os.Process.myUid(),
-                "TERMUX__USER_ID=" + android.os.Process.myUid(),
-                "TERMUX_PREFIX=" + PREFIX_GUEST,
-                "TERMUX_PACKAGE_MANAGER=apt",
-                "TERMUX_PACKAGE_ARCH=" + arch,
+                // OPX OSS's own identity: the engine and the runtime underneath it see this
+                // app's names only, never another runtime's.
+                "OPX_OSS=1",
+                "OPX_UID=" + android.os.Process.myUid(),
+                "OPX_USER_ID=" + android.os.Process.myUid(),
+                "OPX_PREFIX=" + PREFIX_GUEST,
+                "OPX_PACKAGE_MANAGER=apt",
+                "OPX_PACKAGE_ARCH=" + arch,
                 // The engine and the wifi4 modules live outside the prefix's site-packages so an
                 // apt upgrade of python cannot orphan them.
                 "PYTHONPATH=" + pythonPath,

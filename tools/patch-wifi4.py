@@ -13,7 +13,11 @@ The wifi4 project is a backend plus a Textual TUI. The app keeps the backend onl
     pointed at the headless prompter this script installs as ``wifi4.engine.prompter``.
   * every hardcoded ``/data/data/com.termux`` path and every user-facing message naming the
     separate API app is rewritten to OPX OSS's own prefix and in-app USB bridge, so nothing
-    in the shipped tree still mentions the other app.
+    in the shipped tree still mentions the other app;
+  * the Android half is renamed to OPX OSS's own names: the platform probe (``is_opx_oss``),
+    the setup class (``SetupOpxOss``), the USB bridge module (``wifi4.device.opx_bridge``),
+    the command it runs (``opx-usb``) and the descriptor variable (``OPX_USB_FD``). The tree
+    is then checked for the old name and the patch fails if any is left.
 
 Anything still importing the TUI afterwards is a hard error, so the package can never ship a
 module that raises ImportError on a device without ``textual``.
@@ -58,9 +62,9 @@ PLATFORM_PATCH = (
     '            from wifi4.setup.macos import SetupMacOS\n'
     '            return SetupMacOS()\n'
     '        return NoSetup()\n',
-    '        if is_termux():\n'
-    '            from wifi4.setup.termux import SetupTermux\n'
-    '            return SetupTermux()\n'
+    '        if is_opx_oss():\n'
+    '            from wifi4.setup.opx_oss import SetupOpxOss\n'
+    '            return SetupOpxOss()\n'
     '        # OPX OSS is the Android build: the desktop privileged setup modules\n'
     '        # (WinUSB, udev/modprobe, macOS) are not packaged, so the step is a no-op.\n'
     '        return NoSetup()\n',
@@ -95,10 +99,6 @@ TEXT_PATCHES = [
         "The OPX OSS app provides the USB bridge in-process; no separate app is needed.",
     ),
     (
-        'or the first attached device) and return its fd, or None.\n    The socket is bound before ``termux-usb`` starts, so a fast callback cannot race it."""',
-        'or the first attached device) and return its fd, or None.\n    The socket is bound before ``termux-usb`` starts, so a fast callback cannot race it."""',
-    ),
-    (
         '"no USB device is visible; connect the adapter and install the "\n                       "Termux:API app"',
         '"no USB device is visible; connect the adapter and grant USB access in "\n                       "the OPX OSS app"',
     ),
@@ -111,6 +111,33 @@ TEXT_PATCHES = [
         '"libusb could not be loaded. Reinstall the OPX OSS runtime:\\n\\n"\n            "  opx runtime repair"',
     ),
 ]
+
+# The Android half of the engine is OPX OSS's own all the way down: its probe, its setup class,
+# its module, the command it runs and the variable that carries the descriptor. Anything left
+# named after the other app is a build failure (see the final guard).
+RENAMES = [
+    ("wifi4.setup.termux", "wifi4.setup.opx_oss"),
+    ("wifi4.device.termux_usb", "wifi4.device.opx_bridge"),
+    ("SetupTermux", "SetupOpxOss"),
+    ("TermuxBackend", "OpxUsbBackend"),
+    ("is_termux", "is_opx_oss"),
+    ("termux_usb", "opx_bridge"),
+    ("TERMUX_USB_FD", "OPX_USB_FD"),
+    ("TERMUX_USB_DEVICE", "OPX_USB_DEVICE"),
+    ("TERMUX_VERSION", "OPX_OSS"),
+    ("termux-usb", "opx-usb"),
+    ("termux-api", "opx runtime"),
+]
+
+RENAMED_FILES = [
+    ("wifi4/setup/termux.py", "wifi4/setup/opx_oss.py"),
+    ("wifi4/device/termux_usb.py", "wifi4/device/opx_bridge.py"),
+]
+
+# Prose only: whole words, so an identifier such as ``TermuxBackend`` is handled by RENAMES and
+# never turned into something with a space in it.
+WORD_PATCH = re.compile(r"\bTermux\b")
+LOWER_WORD_PATCH = re.compile(r"\btermux\b")
 
 ENGINE_INIT = '''"""Headless OPX additions: the prompter the engine uses instead of the removed TUI."""
 '''
@@ -233,6 +260,31 @@ def main() -> int:
             paths_changed += 1
     print(f"  rewrote app identity in {paths_changed} file(s)")
 
+    # Move the Android-side modules to their own names before rewriting references to them.
+    for old_name, new_name in RENAMED_FILES:
+        old_path = root / old_name
+        new_path = root / new_name
+        if old_path.is_file():
+            old_path.rename(new_path)
+            print(f"  renamed {old_name} -> {new_name}")
+
+    # OPX OSS's own names for the whole Android path: no code in the shipped tree refers to
+    # another app's command, module, environment variable or descriptor name.
+    renamed_files = 0
+    renames_applied = 0
+    for path in sorted(root.rglob("*.py")):
+        original = path.read_text(encoding="utf-8", errors="replace")
+        text = original
+        for old, new in RENAMES:
+            renames_applied += text.count(old)
+            text = text.replace(old, new)
+        text = WORD_PATCH.sub("OPX OSS", text)
+        text = LOWER_WORD_PATCH.sub("opx oss", text)
+        if text != original:
+            path.write_text(text, encoding="utf-8")
+            renamed_files += 1
+    print(f"  renamed the Android path in {renamed_files} file(s) ({renames_applied} names)")
+
     offenders = []
     for path in sorted(root.rglob("*.py")):
         for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
@@ -240,15 +292,15 @@ def main() -> int:
                 offenders.append(f"{path.relative_to(root)}:{number}: {line.strip()}")
             if "/data/data/com.termux" in line:
                 offenders.append(f"{path.relative_to(root)}:{number}: leftover foreign prefix")
-            if "Termux:API" in line:
-                offenders.append(f"{path.relative_to(root)}:{number}: leftover API-app reference")
+            if "termux" in line.lower():
+                offenders.append(f"{path.relative_to(root)}:{number}: leftover other-app name")
     if offenders:
-        print("modules still reference the removed TUI or the other app's prefix:", file=sys.stderr)
+        print("modules still reference the removed TUI or another app:", file=sys.stderr)
         for offender in offenders:
             print("  " + offender, file=sys.stderr)
         return 1
 
-    print("  no TUI/Textual references left, no foreign prefix left")
+    print("  no TUI/Textual references left, nothing named after another app left")
     return 0
 
 

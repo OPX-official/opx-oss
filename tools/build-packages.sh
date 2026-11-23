@@ -157,17 +157,17 @@ build_opx_runtime() { # $1 = arch label
 }
 
 build_opx_usb() { # $1 = arch label
-  log "opx-usb ${VERSION} (termux-usb client for the in-app USB host bridge)"
+  log "opx-usb ${VERSION} (USB client for the in-app host bridge)"
   local tree
   tree="$(mk_tree)"
 
   install -d "$tree/$PREFIX_REL/bin" "$tree/$PREFIX_REL/lib/opx/python"
-  cp "$ROOT/tools/usb/termux-usb" "$tree/$PREFIX_REL/bin/termux-usb"
+  cp "$ROOT/tools/usb/opx-usb" "$tree/$PREFIX_REL/bin/opx-usb"
   cp "$ROOT/tools/usb/opx_usb.py" "$tree/$PREFIX_REL/lib/opx/python/opx_usb.py"
-  chmod 0755 "$tree/$PREFIX_REL/bin/termux-usb"
+  chmod 0755 "$tree/$PREFIX_REL/bin/opx-usb"
 
   package opx-usb "$1" "$tree" \
-    "termux-usb command that talks to the OPX OSS USB host bridge in-process"
+    "opx-usb command that talks to the OPX OSS USB host bridge in-process"
 }
 
 # --------------------------------------------------------------- base runtime

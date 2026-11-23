@@ -65,9 +65,9 @@ def runtime_info():
         info["wifi4_ok"] = False
         info["wifi4_error"] = f"{type(exc).__name__}: {exc}"
     try:
-        from wifi4.host import is_termux
+        from wifi4.host import is_opx_oss
 
-        info["android_usb_backend"] = bool(is_termux())
+        info["android_usb_backend"] = bool(is_opx_oss())
     except Exception:  # noqa: BLE001
         info["android_usb_backend"] = None
     return info
@@ -194,9 +194,9 @@ class Engine:
         fields = {"devices": devices, "count": len(devices)}
         # When nothing is found, the USB backend's own last error is the useful part.
         try:
-            from wifi4.device import termux_usb
+            from wifi4.device import opx_bridge
 
-            hint = termux_usb.last_error()
+            hint = opx_bridge.last_error()
             if hint and not devices:
                 fields["hint"] = hint
         except Exception:  # noqa: BLE001

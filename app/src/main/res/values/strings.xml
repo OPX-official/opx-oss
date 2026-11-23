@@ -19,7 +19,7 @@
     <string name="home_runtime_ready">Native runtime</string>
     <string name="home_runtime_path">%1$s · python · libusb</string>
     <string name="home_module_logs_body">Every engine and USB line, with a copy button.</string>
-    <string name="home_footer">Like Termux + Termux:API in one native app — no second APK</string>
+    <string name="home_footer">The wireless engine and its USB bridge in one native app</string>
     <string name="home_runtime_value">Not installed yet</string>
     <string name="home_runtime_body">The bundled userland (proot, python, the wifi4 engine) installs on first launch.</string>
     <string name="home_modules_title">MODULES</string>
@@ -103,7 +103,7 @@
     <string name="about_title">About</string>
     <string name="about_version_value">Version %1$s</string>
     <string name="about_version_unknown">Version unknown</string>
-    <string name="about_body">OPX OSS is one app: the wireless engine, its USB host bridge and the guided interface. There is no separate terminal and no Termux:API app to install.</string>
-    <string name="about_license">Licensed under the GNU GPL v3.0. Termux is &#169; its contributors; wifi4 is based on wifit3 by derv82.</string>
+    <string name="about_body">OPX OSS is one app: the wireless engine, its USB host bridge and the guided interface. Everything it needs is installed from within the app — there is no separate terminal and no companion app.</string>
+    <string name="about_license">Licensed under the GNU GPL v3.0. wifi4 is based on wifit3 by derv82.</string>
     <string name="about_disclaimer">Use only on networks and devices you own or are explicitly authorized to test.</string>
 </resources>

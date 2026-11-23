@@ -4,7 +4,7 @@
 # (OPX-official/opx-packages, gh-pages branch). Checksums come from the archive's own
 # index.json.
 #
-#   app/src/main/assets/bootstrap/bootstrap-<arch>.zip   Termux bootstrap
+#   app/src/main/assets/bootstrap/bootstrap-<arch>.zip   runtime bootstrap
 #   app/src/main/assets/payload/<arch>/<name>.tar.gz     everything extracted into $PREFIX
 #   app/src/main/assets/index.json                       the catalogue that was used
 #

@@ -58,7 +58,7 @@ public final class WifiBridge {
     private volatile boolean userStopped;
     private int restarts;
     private long restartWindowStart;
-    /** Termux holds a partial wakelock while a session runs; a scan has to outlive the screen. */
+    /** A running session holds a partial wakelock; a scan has to outlive the screen. */
     private PowerManager.WakeLock wakeLock;
 
     private WifiBridge(Context context) {
@@ -266,8 +266,8 @@ public final class WifiBridge {
     /**
      * Keeps the CPU awake for as long as the engine runs. Aggressive OEM power managers
      * (Xiaomi/Redmi/Poco among them) suspend a backgrounded app between doze windows, which
-     * stalls USB bulk transfers mid-campaign; Termux holds the same lock while its sessions are
-     * live, so this is the behaviour wifi4 already ran under there.
+     * stalls USB bulk transfers mid-campaign; a live session keeps this lock so its scans
+     * survive a screen-off, which is what the engine expects while a campaign runs.
      */
     private void acquireWakeLock() {
         if (wakeLock != null && wakeLock.isHeld()) return;
