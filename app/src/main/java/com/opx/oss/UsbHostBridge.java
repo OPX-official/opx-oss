@@ -29,12 +29,11 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * The USB host bridge that replaces the Termux:API app.
+ * The USB host bridge: the app's own USB API, living in the same process as the engine.
  * <p>
- * Termux:API used to receive a broadcast from {@code termux-usb}, ask Android for permission
- * and hand the device descriptor to the requesting process over a Unix socket. OPX OSS keeps
- * that design but moves the server into this app, so the workspace and the API live in one
- * UID and one APK:
+ * wifi4 asks the {@code termux-usb} command for a descriptor; this class answers on the
+ * abstract socket {@code opx.usb} in the same UID, asks Android for the device permission
+ * and hands the descriptor to the requesting process over SCM_RIGHTS. No second app:
  * <pre>
  *   termux-usb (shim in the userland)  ->  abstract socket "opx.usb"  ->  this class
  *                                      <-  JSON reply + SCM_RIGHTS fd
@@ -80,6 +79,7 @@ public final class UsbHostBridge {
             server = new LocalServerSocket(SOCKET_NAME);
         } catch (Exception e) {
             Log.w(TAG, "cannot open the USB bridge socket", e);
+            AppLog.error(TAG, e);
             return;
         }
         running = true;
@@ -92,7 +92,10 @@ public final class UsbHostBridge {
                     }
                     handle(socket);
                 } catch (Exception e) {
-                    if (running) Log.w(TAG, "USB bridge request failed", e);
+                    if (running) {
+                        Log.w(TAG, "USB bridge request failed", e);
+                        AppLog.error(TAG, e);
+                    }
                 }
             }
         }, "opx-usb-bridge");
@@ -143,6 +146,7 @@ public final class UsbHostBridge {
             JSONObject response = new JSONObject();
             JSONArray devices = new JSONArray();
             for (String path : devicePaths()) devices.put(path);
+            AppLog.info(TAG, "list -> " + devices);
             response.put("ok", true);
             response.put("devices", devices);
             write(socket, response);
@@ -154,12 +158,14 @@ public final class UsbHostBridge {
             JSONObject response = new JSONObject();
             UsbDevice device = find(path);
             if (device == null) {
+                AppLog.info(TAG, "open " + path + " -> no such device");
                 response.put("ok", false);
                 response.put("error", "no USB device at " + path);
                 write(socket, response);
                 return;
             }
             if (!ensurePermission(device)) {
+                AppLog.info(TAG, "open " + path + " -> permission not granted");
                 response.put("ok", false);
                 response.put("error", "USB permission was not granted for " + path);
                 write(socket, response);
@@ -167,6 +173,7 @@ public final class UsbHostBridge {
             }
             UsbDeviceConnection connection = usbManager.openDevice(device);
             if (connection == null) {
+                AppLog.info(TAG, "open " + path + " -> Android refused");
                 response.put("ok", false);
                 response.put("error", "Android refused to open " + path);
                 write(socket, response);
@@ -174,8 +181,10 @@ public final class UsbHostBridge {
             }
             // The connection owns the descriptor; SCM_RIGHTS gives the engine its own copy, so
             // both stay usable and the wrapper must outlive the send (closed in shutdown()).
-            ParcelFileDescriptor descriptor =
-                    ParcelFileDescriptor.adoptFd(connection.getFileDescriptor());
+            // Hand a duplicate to the engine: the connection keeps owning its own fd, so the
+            // two close paths (ParcelFileDescriptor / UsbDeviceConnection) never fight.
+            int duplicated = android.system.Os.dup(connection.getFileDescriptor());
+            ParcelFileDescriptor descriptor = ParcelFileDescriptor.adoptFd(duplicated);
             response.put("ok", true);
             setFileDescriptorsForSend(socket, new FileDescriptor[]{descriptor.getFileDescriptor()});
             write(socket, response);
@@ -187,6 +196,7 @@ public final class UsbHostBridge {
                 openDescriptors.add(descriptor);
             }
             Log.i(TAG, "passed " + path + " to the engine");
+            AppLog.info(TAG, "open " + path + " -> fd passed to the engine");
             return;
         }
 
@@ -239,8 +249,13 @@ public final class UsbHostBridge {
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             usbManager.requestPermission(device, pending);
             boolean answeredInTime = answered.await(120, TimeUnit.SECONDS);
-            if (!answeredInTime) Log.w(TAG, "USB permission request timed out");
-            return usbManager.hasPermission(device);
+            if (!answeredInTime) {
+                Log.w(TAG, "USB permission request timed out");
+                AppLog.info(TAG, "permission request for " + device.getDeviceName() + " timed out");
+            }
+            boolean granted = usbManager.hasPermission(device);
+            AppLog.info(TAG, "permission for " + device.getDeviceName() + " -> " + granted);
+            return granted;
         } catch (Exception e) {
             Log.w(TAG, "USB permission request failed", e);
             return false;
@@ -268,5 +283,50 @@ public final class UsbHostBridge {
     public static String describe(UsbDevice device) {
         if (device == null) return "";
         return String.format(Locale.US, "%04x:%04x", device.getVendorId(), device.getProductId());
+    }
+
+    /**
+     * A text diagnosis of the whole USB path: what Android sees, which devices hold a
+     * permission, and whether the bridge socket is listening. This is what the WiFi screen
+     * shows under "USB adapter" and what its Copy button shares.
+     */
+    public static String diagnose(Context context) {
+        StringBuilder text = new StringBuilder();
+        text.append("OPX USB diagnosis
+");
+        text.append("app: ").append(context.getPackageName()).append('
+');
+        text.append("bridge socket: ").append(SOCKET_NAME)
+                .append(" (").append(instance != null && instance.running ? "listening" : "not listening").append(")
+");
+
+        UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
+        if (manager == null) {
+            text.append("UsbManager: unavailable
+");
+            AppLog.info(TAG, text.toString().replace('\n', " | "));
+            return text.toString();
+        }
+        java.util.List<UsbDevice> devices = new ArrayList<>(manager.getDeviceList().values());
+        text.append("USB devices attached: ").append(devices.size()).append('
+');
+        for (UsbDevice device : devices) {
+            text.append("- ").append(device.getDeviceName())
+                    .append("  product=").append(device.getProductId())
+                    .append(" vendor=").append(device.getVendorId())
+                    .append(" permission=").append(manager.hasPermission(device) ? "granted" : "not granted")
+                    .append('
+');
+        }
+        if (devices.isEmpty()) {
+            text.append("  (none — plug an OTG Wi-Fi adapter in and accept the permission prompt)
+");
+        }
+        text.append("runtime prefix: ").append(OpxRuntime.PREFIX_GUEST).append('
+');
+        text.append("installed: ").append(OpxRuntime.isInstalled(context)).append('
+');
+        AppLog.info(TAG, text.toString().replace('\n', " | "));
+        return text.toString();
     }
 }

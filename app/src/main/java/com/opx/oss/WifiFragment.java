@@ -2,6 +2,8 @@ package com.opx.oss;
 
 import android.Manifest;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -25,6 +27,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.google.android.material.snackbar.Snackbar;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.List;
@@ -38,6 +41,9 @@ import java.util.Locale;
  *   <li>the headless wifi4 engine over a USB adapter (monitor mode, the real tool), and</li>
  *   <li>Android's built-in radio, so the screen is useful before an adapter is plugged in.</li>
  * </ul>
+ * Below the status card sits the USB diagnosis: what Android currently sees, whether the
+ * in-app bridge socket is listening and what the engine found. Diagnose refreshes it,
+ * Copy puts it on the clipboard for bug reports.
  */
 public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxService.Listener {
 
@@ -48,6 +54,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     private TextView ifaceValue;
     private TextView chipsetValue;
     private TextView engineState;
+    private TextView usbDiag;
     private TextView countChip;
     private View emptyCard;
     private LinearProgressIndicator progress;
@@ -72,6 +79,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         ifaceValue = view.findViewById(R.id.wifi_iface_value);
         chipsetValue = view.findViewById(R.id.wifi_chipset_value);
         engineState = view.findViewById(R.id.wifi_engine_state);
+        usbDiag = view.findViewById(R.id.wifi_usb_diag);
         countChip = view.findViewById(R.id.wifi_count_chip);
         emptyCard = view.findViewById(R.id.wifi_empty_card);
         progress = view.findViewById(R.id.wifi_scan_progress);
@@ -88,6 +96,12 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
 
         view.findViewById(R.id.wifi_scan_usb).setOnClickListener(v -> scan());
         view.findViewById(R.id.wifi_scan_builtin).setOnClickListener(v -> scanBuiltInRadio());
+
+        view.findViewById(R.id.wifi_usb_diagnose).setOnClickListener(v -> {
+            usbDiag.setText(UsbHostBridge.diagnose(requireContext()));
+            Snackbar.make(requireView(), R.string.wifi_usb_diagnosed, Snackbar.LENGTH_SHORT).show();
+        });
+        view.findViewById(R.id.wifi_usb_copy).setOnClickListener(v -> copy(usbDiag.getText().toString()));
 
         wifiManager = (WifiManager) requireContext().getApplicationContext()
                 .getSystemService(Context.WIFI_SERVICE);
@@ -134,12 +148,16 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         switch (state) {
             case OpxService.STATE_READY:
                 engineState.setText(R.string.wifi_state_ready);
+                if (usbDiag.getText().length() == 0) {
+                    usbDiag.setText(getString(R.string.wifi_usb_waiting));
+                }
                 WifiBridge bridge = WifiBridge.get(requireContext());
                 bridge.start();
                 bridge.requestDevices();
                 break;
             case OpxService.STATE_FAILED:
                 engineState.setText(R.string.wifi_state_failed);
+                usbDiag.setText(getString(R.string.wifi_usb_error, service == null ? "" : String.valueOf(service.getError())));
                 break;
             case OpxService.STATE_INSTALLING:
                 engineState.setText(R.string.notification_state_installing);
@@ -161,6 +179,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         adapter.clear();
         updateCount();
         progress.setVisibility(View.VISIBLE);
+        usbDiag.setText(getString(R.string.wifi_usb_scanning));
         WifiBridge bridge = WifiBridge.get(requireContext());
         bridge.start();
         bridge.scan(25);
@@ -173,7 +192,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             WifiAdapter.Network network = new WifiAdapter.Network();
             network.ssid = event.optString("ssid");
             network.bssid = event.optString("bssid");
-            network.privacy = event.optString("privacy");
+            network.privacy = event.optString("privacy", "");
             network.wps = event.optBoolean("wps");
             network.channel = event.optInt("channel");
             network.signal = event.optInt("signal");
@@ -181,22 +200,56 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             adapter.upsert(network);
             updateCount();
             ifaceValue.setText(getString(R.string.wifi_state_ready));
+        } else if ("ready".equals(name)) {
+            engineState.setText(R.string.wifi_state_ready);
+            if (usbDiag.getText().toString().contains(getString(R.string.wifi_usb_waiting))) {
+                usbDiag.setText(getString(R.string.wifi_usb_waiting));
+            }
         } else if ("scan_done".equals(name)) {
             scanning = false;
             progress.setVisibility(View.GONE);
+            usbDiag.setText(getString(R.string.wifi_usb_scan_done, event.optInt("count"), adapter.size()));
         } else if ("devices".equals(name)) {
-            int count = event.optJSONArray("devices") == null ? 0 : event.optJSONArray("devices").length();
+            JSONArray devices = event.optJSONArray("devices");
+            int count = devices == null ? 0 : devices.length();
+            StringBuilder text = new StringBuilder();
+            text.append(getString(R.string.wifi_usb_devices, count)).append('\n');
+            if (devices != null) {
+                for (int i = 0; i < devices.length(); i++) {
+                    JSONObject device = devices.optJSONObject(i);
+                    if (device == null) continue;
+                    text.append("- ");
+                    String description = device.optString("description", "");
+                    if (!description.isEmpty()) text.append(description).append(" ");
+                    String chipset = device.optString("chipset", "");
+                    if (chipset != null && !chipset.equals("null") && !chipset.isEmpty()) {
+                        text.append("(").append(chipset).append(")");
+                    }
+                    text.append('\n');
+                }
+            }
+            if (count == 0) {
+                text.append(getString(R.string.wifi_usb_none));
+            }
+            usbDiag.setText(text.toString());
             ifaceValue.setText(count == 0 ? getString(R.string.wifi_state_no_adapter)
                     : String.format(Locale.US, "wlan0 (%d USB)", count));
         } else if ("status".equals(name)) {
-            ifaceValue.setText(event.optString("iface", getString(R.string.wifi_state_ready)));
-            String chipset = event.optString("chipset", "");
-            chipsetValue.setText(chipset.isEmpty() ? "—" : chipset);
+            boolean connected = event.optBoolean("connected");
+            ifaceValue.setText(connected
+                    ? String.valueOf(event.optString("iface", "wlan0"))
+                    : getString(R.string.wifi_state_no_adapter));
+            String chipset = event.has("chipset") ? event.optString("chipset", "") : "";
+            chipsetValue.setText("null".equals(chipset) || chipset.isEmpty() ? "—" : chipset);
+            if (!connected && usbDiag.getText().length() > 0) {
+                // Keep the devices text; only refresh the diagnosis when nothing is attached.
+            }
         } else if ("error".equals(name)) {
             scanning = false;
             progress.setVisibility(View.GONE);
             String message = event.optString("message");
             engineState.setText(getString(R.string.wifi_engine_error, message));
+            usbDiag.setText(getString(R.string.wifi_usb_error, message));
         }
     }
 
@@ -205,6 +258,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         scanning = false;
         progress.setVisibility(View.GONE);
         engineState.setText(R.string.wifi_state_no_adapter);
+        usbDiag.setText(getString(R.string.wifi_usb_stopped, reason));
     }
 
     // ----------------------------------------------------------- built-in radio
@@ -268,6 +322,16 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         countChip.setText(getString(R.string.wifi_networks, adapter.size()));
         emptyCard.setVisibility(adapter.size() == 0 ? View.VISIBLE : View.GONE);
         list.setVisibility(adapter.size() == 0 ? View.GONE : View.VISIBLE);
+    }
+
+    private void copy(String text) {
+        if (text == null || text.isEmpty()) return;
+        ClipboardManager clipboard = (ClipboardManager) requireContext()
+                .getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard != null) {
+            clipboard.setPrimaryClip(ClipData.newPlainText("OPX OSS", text));
+            Snackbar.make(requireView(), R.string.wifi_usb_copied, Snackbar.LENGTH_SHORT).show();
+        }
     }
 
     // --------------------------------------------------------- OpxService.Listener

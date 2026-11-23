@@ -3,6 +3,10 @@
 indexes for the OPX package archive.
 
 Run by ``tools/build-packages.sh`` after the artifacts are on disk.
+
+The index is also an audit gate: every artifact is scanned for the foreign prefix
+(``/data/data/com.termux``). A single leftover path means the build fails here, before
+anything is published.
 """
 
 import argparse
@@ -10,12 +14,14 @@ import gzip
 import hashlib
 import json
 import pathlib
-import shutil
 import subprocess
 import sys
+import tarfile
 import time
+import zipfile
 
 DEFAULT_BASE_URL = "https://raw.githubusercontent.com/OPX-official/opx-packages/gh-pages/"
+FOREIGN = "com.termux"
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -59,6 +65,31 @@ def split_name(path: pathlib.Path) -> tuple[str, str, str]:
     return parts[0], parts[1], parts[2]
 
 
+def audit(path: pathlib.Path, relative: str) -> None:
+    """Fail if the artifact contains a path under the foreign prefix."""
+    hits: list[str] = []
+    try:
+        if relative.endswith(".deb"):
+            out = subprocess.check_output(
+                ["dpkg-deb", "--contents", str(path)], text=True, stderr=subprocess.DEVNULL
+            )
+            hits = [line for line in out.splitlines() if FOREIGN in line]
+        elif relative.endswith(".tar.gz"):
+            with tarfile.open(path, "r:gz") as tar:
+                hits = [name for name in tar.getnames() if FOREIGN in name]
+        elif relative.endswith(".zip"):
+            with zipfile.ZipFile(path) as archive:
+                hits = [name for name in archive.namelist() if FOREIGN in name]
+    except (OSError, tarfile.TarError, subprocess.CalledProcessError) as exc:
+        print(f"cannot audit {relative}: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    if hits:
+        print(f"foreign prefix ({FOREIGN}) found in {relative}:", file=sys.stderr)
+        for hit in hits[:5]:
+            print("  " + hit, file=sys.stderr)
+        raise SystemExit(1)
+
+
 def collect(out: pathlib.Path, base_url: str) -> list[dict]:
     entries = []
     for path in sorted(out.rglob("*")):
@@ -75,10 +106,9 @@ def collect(out: pathlib.Path, base_url: str) -> list[dict]:
             kind = "payload"
         elif relative.startswith("base/bootstrap/"):
             kind = "bootstrap"
-        elif relative.startswith("base/"):
-            kind = "payload"
         else:
             continue
+        audit(path, relative)
         name, version, arch = split_name(path)
         if kind == "bootstrap":
             # "bootstrap-aarch64.zip" carries neither a version nor an underscore, so the arch
@@ -149,7 +179,7 @@ def write_apt_index(out: pathlib.Path, entries: list[dict]) -> None:
                 "Label: OPX OSS",
                 "Suite: stable",
                 "Codename: stable",
-                "Architectures: all aarch64 arm i686 x86_64",
+                "Architectures: all aarch64 arm",
                 f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S UTC', time.gmtime())}",
                 "Description: OPX OSS package archive",
                 "",
@@ -183,7 +213,7 @@ def main() -> int:
     kinds = {}
     for entry in entries:
         kinds[entry["kind"]] = kinds.get(entry["kind"], 0) + 1
-    print(f"  index.json: {len(entries)} artifacts {kinds}")
+    print(f"  index.json: {len(entries)} artifacts {kinds} (all foreign-prefix-free)")
     return 0
 
 

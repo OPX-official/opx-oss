@@ -40,6 +40,27 @@
     <string name="wifi_engine_pending">Starting the engine…</string>
     <string name="wifi_engine_error">Engine error: %1$s</string>
     <string name="wifi_builtin_unavailable">The built-in radio is not reporting any networks.</string>
+    <string name="wifi_usb_title">USB ADAPTER</string>
+    <string name="wifi_usb_waiting">Engine ready — waiting for the USB adapter list…</string>
+    <string name="wifi_usb_scanning">Scanning with the USB adapter…</string>
+    <string name="wifi_usb_scan_done">Scan finished: %1$d from the engine, %2$d in the list.</string>
+    <string name="wifi_usb_devices">Adapters reported by the engine: %1$d</string>
+    <string name="wifi_usb_none">No supported USB Wi-Fi adapter yet. Plug an OTG adapter in, then tap Scan. Use Diagnose USB to see exactly what Android sees.</string>
+    <string name="wifi_usb_error">USB error: %1$s</string>
+    <string name="wifi_usb_stopped">Engine stopped (%1$s). The full log is on the Logs screen.</string>
+    <string name="wifi_usb_diagnose">Diagnose USB</string>
+    <string name="wifi_usb_copy">Copy</string>
+    <string name="wifi_usb_diagnosed">Diagnosis updated</string>
+    <string name="wifi_usb_copied">Copied</string>
+    <string name="nav_logs">Logs</string>
+    <string name="logs_title">Logs</string>
+    <string name="logs_subtitle">Everything the app logged — copy it into a bug report</string>
+    <string name="logs_count">%1$d lines</string>
+    <string name="logs_copy">Copy all logs</string>
+    <string name="logs_clear">Clear</string>
+    <string name="logs_empty">No logs yet</string>
+    <string name="logs_cleared">Logs cleared</string>
+    <string name="logs_copied">All logs copied</string>
 
     <string name="notification_channel_name">OPX engine</string>
     <string name="notification_channel_description">Keeps the OPX engine and the bundled runtime running.</string>

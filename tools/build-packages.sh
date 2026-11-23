@@ -6,20 +6,21 @@
 #   out/pool/main/<letter>/<name>/<name>_<ver>_<arch>.deb    apt packages
 #   out/payload/<arch>/<name>_<ver>_<arch>.tar.gz            the same tree, ready to untar
 #                                                            into $PREFIX on device
-#   out/base/bootstrap/bootstrap-<arch>.zip                  Termux bootstrap (mirrored)
+#   out/base/bootstrap/bootstrap-<arch>.zip                  the OPX bootstrap (built, not mirrored)
 #   out/index.json                                           the catalogue the APK consumes
 #   out/dists/stable/main/binary-<arch>/Packages(.gz)        apt index (for `pkg` later)
 #
-# Our own packages are built from source in this repository (and from the wifi4 source
-# checkout). The Termux base runtime is mirrored once from Termux's signed apt repository
-# with every checksum recorded in out/base/base-lock.json: the app cannot compile a
-# libc-level Python toolchain itself, and mirroring keeps a single pinned source.
+# The base runtime (python, libusb, bash, coreutils) is compiled from source in CI inside the
+# termux-packages docker builder with scripts/properties.sh forked to this app
+# (tools/patch-properties.py + tools/build-base.sh): every binary gets
+# /data/data/com.opx.oss/files/usr compiled in, which is exactly where the app installs it.
+# Nothing is mirrored from another app's repository, and nothing foreign enters the APK.
 #
 # Environment:
 #   WIFI4_SRC   path to the opx-wifi4 checkout        (default ../references/opx-wifi4)
 #   OUT         output directory                      (default build/packages)
-#   ARCHES      space separated ABIs                  (default all four)
-#   WITH_BASE   1 = mirror the Termux base runtime    (default 1)
+#   ARCHES      space separated ABIs                  (default aarch64 arm)
+#   SKIP_BASE   1 = skip building the base runtime    (default 0)
 #   VERSION     package version                       (default UTC date)
 
 set -euo pipefail
@@ -27,24 +28,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${OUT:-$ROOT/build/packages}"
 WIFI4_SRC="${WIFI4_SRC:-$ROOT/../references/opx-wifi4}"
-ARCHES="${ARCHES:-aarch64 arm i686 x86_64}"
-# Accept the GitHub Actions boolean ("true"/"false") as well as 1/0/yes/no.
-case "${WITH_BASE:-1}" in
-  1|true|TRUE|True|yes|YES) WITH_BASE=1 ;;
-  *) WITH_BASE=0 ;;
-esac
+ARCHES="${ARCHES:-aarch64 arm}"
+SKIP_BASE="${SKIP_BASE:-0}"
 VERSION="${VERSION:-$(date -u +%Y.%m.%d)}"
 
-PREFIX_REL="data/data/com.termux/files/usr"
-TERMUX_REPO="https://packages.termux.dev/apt/termux-main"
-BOOTSTRAP_BASE="https://github.com/termux/termux-packages/releases/download/bootstrap-2026.02.12-r1%2Bapt.android-7"
-
-declare -A BOOTSTRAP_SHA256=(
-  [aarch64]="ea2aeba8819e517db711f8c32369e89e7c52cee73e07930ff91185e1ab93f4f3"
-  [arm]="a38f4d3b2f735f83be2bf54eff463e86dc32a3e2f9f861c1557c4378d249c018"
-  [i686]="f5bc0b025b9f3b420b5fcaeefc064f888f5f22a0d6fd7090f4aac0c33eb3555b"
-  [x86_64]="b7fd0f2e3a4de534be3144f9f91acc768630fc463eaf134ab2e64c545e834f7a"
-)
+PREFIX_REL="data/data/com.opx.oss/files/usr"
+# Any path under the other app's prefix must never appear in a shipped artifact.
+FOREIGN="com.termux"
 
 log() { printf '\n== %s\n' "$*"; }
 
@@ -58,6 +48,27 @@ mk_tree() {
   tree="$(mktemp -d)"
   mkdir -p "$tree/$PREFIX_REL"
   printf '%s\n' "$tree"
+}
+
+# Fail if any file in a staged tree is literally addressed at the foreign prefix.
+audit_tree() {
+  local tree="$1" label="$2"
+  # -a: also scan binaries, where the prefix is embedded as an ELF string.
+  if grep -ral "$FOREIGN" "$tree" 2>/dev/null | head -5 | grep -q .; then
+    echo "foreign prefix ($FOREIGN) found in $label" >&2
+    grep -ral "$FOREIGN" "$tree" 2>/dev/null | head -10 >&2
+    exit 1
+  fi
+}
+
+# Fail if a .deb contains a foreign path (contents listing, not just control).
+audit_deb() {
+  local deb="$1"
+  if dpkg-deb --contents "$deb" 2>/dev/null | grep -q "$FOREIGN"; then
+    echo "foreign prefix ($FOREIGN) found inside $deb" >&2
+    dpkg-deb --contents "$deb" | grep "$FOREIGN" | head -5 >&2
+    exit 1
+  fi
 }
 
 build_deb() { # name ver arch tree description depends
@@ -80,6 +91,7 @@ build_deb() { # name ver arch tree description depends
   out="$OUT/pool/main/${name:0:1}/$name/${name}_${ver}_${arch}.deb"
   mkdir -p "$(dirname "$out")"
   dpkg-deb --root-owner-group --build "$stage" "$out" >/dev/null
+  audit_deb "$out"
   rm -rf "$stage"
   printf '  deb      %s\n' "${out#"$OUT"/}"
 }
@@ -94,6 +106,7 @@ build_payload() { # name ver arch tree
 
 package() { # name arch tree description [depends]
   local name="$1" arch="$2" tree="$3" desc="$4" depends="${5:-}"
+  audit_tree "$tree" "$name"
   build_deb "$name" "$VERSION" "$arch" "$tree" "$desc" "$depends"
   build_payload "$name" "$VERSION" "$arch" "$tree"
   rm -rf "$tree"
@@ -116,9 +129,9 @@ build_opx_wifi4() { # $1 = arch label for the payload ("all")
   cp -a "$WIFI4_SRC/src/wifi4" "$py/wifi4"
   find "$py/wifi4" -name '__pycache__' -type d -prune -exec rm -rf {} +
 
-  # Drop the TUI and the desktop-only setup modules, and install the headless prompter the
-  # engine uses instead of the modal dialogs. The script fails if anything still imports the
-  # TUI, so a device without textual can never hit an ImportError.
+  # Drop the TUI and the desktop-only setup modules, rewrite the app identity to our prefix,
+  # and install the headless prompter the engine uses instead of the modal dialogs. The script
+  # fails if anything still imports the TUI or names the foreign prefix.
   python3 "$ROOT/tools/patch-wifi4.py" "$py"
 
   # Pure-Python runtime dependencies, vendored so the device needs no pip and no network.
@@ -130,7 +143,7 @@ build_opx_wifi4() { # $1 = arch label for the payload ("all")
 }
 
 build_opx_runtime() { # $1 = arch label
-  log "opx-runtime ${VERSION} (engine entry point and OPX userland glue)"
+  log "opx-runtime ${VERSION} (engine entry point and OPX runtime glue)"
   local tree
   tree="$(mk_tree)"
 
@@ -154,34 +167,18 @@ build_opx_usb() { # $1 = arch label
   chmod 0755 "$tree/$PREFIX_REL/bin/termux-usb"
 
   package opx-usb "$1" "$tree" \
-    "termux-usb replacement that talks to the OPX OSS USB host bridge in-process"
+    "termux-usb command that talks to the OPX OSS USB host bridge in-process"
 }
 
-# --------------------------------------------------------------- base mirror
+# --------------------------------------------------------------- base runtime
 
-mirror_base() {
-  if [ "$WITH_BASE" != "1" ]; then
-    log "mirror_base skipped (WITH_BASE=$WITH_BASE)"
+build_base() {
+  if [ "$SKIP_BASE" = "1" ]; then
+    log "base build skipped (SKIP_BASE=1)"
     return
   fi
-  log "Termux base runtime (mirrored, checksums recorded)"
-  mkdir -p "$OUT/base/bootstrap"
-  local arch url file
-  for arch in $ARCHES; do
-    file="$OUT/base/bootstrap/bootstrap-$arch.zip"
-    if [ ! -f "$file" ]; then
-      url="$BOOTSTRAP_BASE/bootstrap-$arch.zip"
-      curl -fsSL --retry 3 -o "$file.tmp" "$url"
-      mv "$file.tmp" "$file"
-    fi
-    printf '  bootstrap %s (%s)\n' "$arch" "$(sha256 "$file")"
-  done
-
-  python3 "$ROOT/tools/mirror-base.py" \
-    --repo "$TERMUX_REPO" \
-    --arch "$(echo $ARCHES | tr ' ' ',')" \
-    --out "$OUT" \
-    --version "$VERSION"
+  log "base runtime (built from source for /data/data/com.opx.oss/files/usr)"
+  bash "$ROOT/tools/build-base.sh" --out "$OUT" --arches "$ARCHES" --version "$VERSION"
 }
 
 # --------------------------------------------------------------------- main
@@ -192,7 +189,7 @@ mkdir -p "$OUT"
 build_opx_wifi4 all
 build_opx_runtime all
 build_opx_usb all
-mirror_base
+build_base
 
 log "index"
 python3 "$ROOT/tools/make-index.py" --out "$OUT"

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Client for the OPX OSS USB host bridge (the in-app replacement for Termux:API).
+"""Client for the OPX OSS USB host bridge (the in-app replacement for the API app).
 
 The app owns one abstract Unix socket (``opx.usb``). This module speaks its tiny protocol
-and receives USB file descriptors over ``SCM_RIGHTS`` -- exactly the mechanism
-Termux:API used, minus the second APK:
+and receives USB file descriptors over ``SCM_RIGHTS``:
 
     -> {"cmd": "list"}                              <- {"ok": true, "devices": [...]}
     -> {"cmd": "open", "path": "/dev/bus/usb/1/2"}  <- {"ok": true} + the fd as ancillary data

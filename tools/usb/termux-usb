@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""``termux-usb`` for OPX OSS -- same command line, no Termux:API app.
+"""``termux-usb`` for OPX OSS -- same command line, no second app.
 
-wifi4 shells out to ``termux-usb -l`` and ``termux-usb -r -E -e <callback> <device>``.
-This drop-in implementation talks to the OPX OSS USB host bridge inside the app instead of
-the Termux:API broadcast receiver, so the single APK is the only thing installed.
+wifi4 shells out to ``termux-usb -l`` and ``termux-usb -r |-E -e <callback> <device>``.
+This is a native script inside the OPX OSS runtime: it talks to the in-app USB host bridge
+over the abstract socket (see ``opx_usb.py``), which asks Android for the device permission
+and returns the descriptor over SCM_RIGHTS. Everything lives in this app.
 """
 
 import os
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.join(os.environ.get("PREFIX", "/data/data/com.termux/files/usr"),
+sys.path.insert(0, os.path.join(os.environ.get("PREFIX", "/data/data/com.opx.oss/files/usr"),
                                 "lib/opx/python"))
 
 import opx_usb  # noqa: E402
@@ -72,7 +73,8 @@ def main(argv):
     environment["TERMUX_USB_FD"] = str(fd)
     environment.setdefault("TERMUX_USB_DEVICE", device)
     try:
-        return subprocess.call(["/bin/sh", "-c", callback], env=environment, pass_fds=(fd,))
+        return subprocess.call(["/system/bin/sh", "-c", callback], env=environment,
+                                pass_fds=(fd,))
     finally:
         try:
             os.close(fd)

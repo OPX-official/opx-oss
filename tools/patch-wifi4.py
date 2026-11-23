@@ -11,6 +11,9 @@ The wifi4 project is a backend plus a Textual TUI. The app keeps the backend onl
     are only imported lazily by ``Setup.for_platform()``.
   * the one backend module that lazily built the TUI prompter (``device/manager.py``) is
     pointed at the headless prompter this script installs as ``wifi4.engine.prompter``.
+  * every hardcoded ``/data/data/com.termux`` path and every user-facing message naming the
+    separate API app is rewritten to OPX OSS's own prefix and in-app USB bridge, so nothing
+    in the shipped tree still mentions the other app.
 
 Anything still importing the TUI afterwards is a hard error, so the package can never ship a
 module that raises ImportError on a device without ``textual``.
@@ -71,6 +74,43 @@ PROMPTER_PATCH = (
     "            from wifi4.engine.prompter import HeadlessPrompter\n"
     "            prompter = HeadlessPrompter(app)\n",
 )
+
+# Every occurrence of these exact strings is rewritten to OPX OSS's own app identity. Newline
+# and quote variants are handled by applying to the raw text.
+TEXT_PATCHES = [
+    (
+        '"/data/data/com.termux/files/usr"',
+        '"/data/data/com.opx.oss/files/usr"',
+    ),
+    (
+        '"/com.termux/files/usr"',
+        '"/com.opx.oss/files/usr"',
+    ),
+    (
+        '"/data/data/com.termux"',
+        '"/data/data/com.opx.oss"',
+    ),
+    (
+        "The Termux:API app must be installed (the termux-api package alone is not enough).",
+        "The OPX OSS app provides the USB bridge in-process; no separate app is needed.",
+    ),
+    (
+        'or the first attached device) and return its fd, or None.\n    The socket is bound before ``termux-usb`` starts, so a fast callback cannot race it."""',
+        'or the first attached device) and return its fd, or None.\n    The socket is bound before ``termux-usb`` starts, so a fast callback cannot race it."""',
+    ),
+    (
+        '"no USB device is visible; connect the adapter and install the "\n                       "Termux:API app"',
+        '"no USB device is visible; connect the adapter and grant USB access in "\n                       "the OPX OSS app"',
+    ),
+    (
+        '"termux-usb is unavailable; install the Termux:API app and its "\n                       "termux-api package"',
+        '"termux-usb is unavailable; grant USB access in the OPX OSS app and retry"',
+    ),
+    (
+        '"libusb could not be loaded. Install it in Termux and relaunch:\\n\\n"\n            "  pkg install libusb"',
+        '"libusb could not be loaded. Reinstall the OPX OSS runtime:\\n\\n"\n            "  opx runtime repair"',
+    ),
+]
 
 ENGINE_INIT = '''"""Headless OPX additions: the prompter the engine uses instead of the removed TUI."""
 '''
@@ -181,18 +221,34 @@ def main() -> int:
     (engine / "prompter.py").write_text(HEADLESS_PROMPTER, encoding="utf-8")
     print("  added wifi4/engine/{__init__,prompter}.py")
 
+    # Rewrite the app identity: every hardcoded path and message that names the other app.
+    paths_changed = 0
+    for path in sorted(root.rglob("*.py")):
+        original = path.read_text(encoding="utf-8", errors="replace")
+        text = original
+        for old, new in TEXT_PATCHES:
+            text = text.replace(old, new)
+        if text != original:
+            path.write_text(text, encoding="utf-8")
+            paths_changed += 1
+    print(f"  rewrote app identity in {paths_changed} file(s)")
+
     offenders = []
     for path in sorted(root.rglob("*.py")):
         for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             if any(pattern.search(line) for pattern in FORBIDDEN):
                 offenders.append(f"{path.relative_to(root)}:{number}: {line.strip()}")
+            if "/data/data/com.termux" in line:
+                offenders.append(f"{path.relative_to(root)}:{number}: leftover foreign prefix")
+            if "Termux:API" in line:
+                offenders.append(f"{path.relative_to(root)}:{number}: leftover API-app reference")
     if offenders:
-        print("modules still reference the removed TUI:", file=sys.stderr)
+        print("modules still reference the removed TUI or the other app's prefix:", file=sys.stderr)
         for offender in offenders:
             print("  " + offender, file=sys.stderr)
         return 1
 
-    print("  no TUI/Textual references left")
+    print("  no TUI/Textual references left, no foreign prefix left")
     return 0
 
 

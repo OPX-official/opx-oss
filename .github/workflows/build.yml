@@ -40,12 +40,12 @@ jobs:
             app/src/main/assets/bootstrap
             app/src/main/assets/payload
             app/src/main/assets/index.json
-          key: opx-runtime-${{ hashFiles('tools/fetch-packages.sh') }}-${{ github.run_number }}
+          key: opx-runtime-v3-${{ hashFiles('tools/fetch-packages.sh') }}-${{ github.run_number }}
           restore-keys: |
             opx-runtime-
 
       # Everything the APK ships is built by the Packages workflow and downloaded from the OPX
-      # package archive; nothing here talks to Termux's releases or packages.termux.dev.
+      # package archive; nothing here talks to another app's repository.
       - name: Fetch runtime from the OPX package archive
         run: bash tools/fetch-packages.sh
 

@@ -16,3 +16,8 @@ captures/
 __pycache__/
 *.pyc
 build/packages/
+
+# Runtime assets fetched from the OPX package archive at APK build time
+app/src/main/assets/bootstrap/
+app/src/main/assets/payload/
+app/src/main/assets/index.json

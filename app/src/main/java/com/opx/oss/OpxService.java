@@ -110,12 +110,13 @@ public class OpxService extends Service {
     // ---------------------------------------------------------------- engine
 
     /**
-     * Installs the packaged userland on first launch and verifies it with a throwaway proot
-     * run, so a broken runtime is reported here instead of looking like a dead WiFi screen.
+     * Installs the packaged runtime on first launch and verifies it with a throwaway run,
+     * so a broken runtime is reported here instead of looking like a dead WiFi screen.
      */
     private void startEngine() {
         if (state == STATE_READY && OpxRuntime.isInstalled(this)) return;
         if (engineThread != null && engineThread.isAlive()) return;
+        AppLog.info("OpxService", "engine thread starting (installed=" + OpxRuntime.isInstalled(this) + ")");
 
         engineThread = new Thread(() -> {
             final Context context = getApplicationContext();
@@ -127,9 +128,11 @@ public class OpxService extends Service {
                 OpxRuntime.repair(context);
                 OpxRuntime.setupStorage(context);
                 String failure = OpxRuntime.probe(context);
+                AppLog.info("OpxService", "probe " + (failure == null ? "OK" : "FAILED"));
                 if (exiting) return;
                 setState(failure == null ? STATE_READY : STATE_FAILED, failure);
             } catch (Exception e) {
+                AppLog.error("OpxService", e);
                 if (exiting) return;
                 setState(STATE_FAILED, e.toString());
             }
@@ -138,6 +141,7 @@ public class OpxService extends Service {
     }
 
     private void setState(int newState, String newError) {
+        AppLog.info("OpxService", "state -> " + newState + (newError == null ? "" : " (" + newError + ")"));
         state = newState;
         error = newError;
         updateNotification();

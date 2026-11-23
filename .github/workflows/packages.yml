@@ -7,10 +7,10 @@ name: Packages
 on:
   workflow_dispatch:
     inputs:
-      with_base:
-        description: "Also mirror the Termux base runtime (python, proot, libusb)"
+      skip_base:
+        description: "Skip building the base runtime from source (packaging-only check)"
         type: boolean
-        default: true
+        default: false
   push:
     branches: [main]
     paths:
@@ -51,12 +51,13 @@ jobs:
 
       - name: Build packages
         env:
-          WITH_BASE: ${{ github.event_name == 'workflow_dispatch' && inputs.with_base || true }}
+          SKIP_BASE: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_base || false }}
           OUT: ${{ github.workspace }}/out
           WIFI4_SRC: ${{ github.workspace }}/references/opx-wifi4
         run: |
           set -euo pipefail
           chmod +x tools/build-packages.sh tools/fetch-packages.sh
+          docker --version
           tools/build-packages.sh
           echo "--- index summary ---"
           python3 - <<'PY'

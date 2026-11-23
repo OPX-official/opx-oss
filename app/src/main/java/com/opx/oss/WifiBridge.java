@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Drives the headless wifi4 engine: one long-lived process inside the bundled userland,
+ * Drives the headless wifi4 engine: one long-lived process inside the bundled runtime,
  * spoken to with JSON lines. The WiFi screen never sees a shell and there is no terminal UI
  * anywhere in the app.
  * <p>
@@ -29,6 +29,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *   {"event":"scan_done","count":7}
  *   {"event":"error","message":".."}
  * </pre>
+ * Every line (stdout and stderr) is also written to the in-app log, so a failure always has
+ * a visible reason.
  */
 public final class WifiBridge {
 
@@ -52,6 +54,8 @@ public final class WifiBridge {
     private Thread stdoutThread;
     private Thread stderrThread;
     private volatile boolean running;
+    private volatile boolean userStopped;
+    private int restarts;
 
     private WifiBridge(Context context) {
         this.context = context.getApplicationContext();
@@ -77,8 +81,12 @@ public final class WifiBridge {
     /** Starts the engine if it is not running. Cheap to call from onResume. */
     public synchronized void start() {
         if (running) return;
+        userStopped = false;
         OpxService service = OpxService.get();
-        if (service == null || service.getState() != OpxService.STATE_READY) return;
+        if (service == null || service.getState() != OpxService.STATE_READY) {
+            AppLog.info(TAG, "start() ignored: runtime not ready");
+            return;
+        }
 
         // The engine reaches the adapter through the in-app USB bridge, so it must be listening
         // before the process asks for its first device.
@@ -89,10 +97,12 @@ public final class WifiBridge {
         builder.redirectErrorStream(false);
         builder.environment().clear();
         OpxRuntime.applyEnvironment(builder, context);
+        AppLog.info(TAG, "starting engine: " + String.join(" ", command));
         try {
             process = builder.start();
         } catch (IOException e) {
             Log.w(TAG, "cannot start the engine", e);
+            AppLog.error(TAG, e);
             notifyStopped("cannot start the engine: " + e.getMessage());
             return;
         }
@@ -108,6 +118,12 @@ public final class WifiBridge {
         stderrThread = new Thread(this::readErrors, "opx-engine-stderr");
         stderrThread.setDaemon(true);
         stderrThread.start();
+
+        // The engine only speaks after a command: the ready ping, then the adapter list and
+        // the status, so the WiFi screen always knows whether an adapter is there.
+        send(json("cmd", "ping"));
+        requestDevices();
+        send(json("cmd", "status"));
     }
 
     private void readEvents() {
@@ -120,18 +136,21 @@ public final class WifiBridge {
                 if (payload.isEmpty()) continue;
                 try {
                     final JSONObject event = new JSONObject(payload);
+                    AppLog.info(TAG, "event: " + payload);
                     main.post(() -> deliver(event));
                 } catch (JSONException e) {
-                    Log.d(TAG, "non-JSON engine output: " + payload);
+                    AppLog.info(TAG, "non-JSON engine output: " + payload);
                 }
             }
         } catch (IOException e) {
-            Log.d(TAG, "engine stream closed", e);
+            AppLog.info(TAG, "engine stream closed");
         } finally {
             final boolean wasRunning = running;
             running = false;
             if (wasRunning) {
+                AppLog.info(TAG, "engine process exited");
                 main.post(() -> notifyStopped("the engine stopped"));
+                maybeRestart();
             }
         }
     }
@@ -141,10 +160,22 @@ public final class WifiBridge {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(started.getErrorStream(), StandardCharsets.UTF_8))) {
             String line;
-            while ((line = reader.readLine()) != null) Log.d(TAG, "engine: " + line);
+            while ((line = reader.readLine()) != null) AppLog.info(TAG, "stderr: " + line);
         } catch (IOException ignored) {
             // The process is gone; the stdout thread reports it.
         }
+    }
+
+    /** One restart after an unexpected exit, so a flaky engine run self-heals. */
+    private void maybeRestart() {
+        if (userStopped || restarts >= 1) return;
+        restarts++;
+        OpxService service = OpxService.get();
+        if (service == null || service.getState() != OpxService.STATE_READY) return;
+        main.postDelayed(() -> {
+            AppLog.info(TAG, "restarting the engine after an unexpected exit");
+            start();
+        }, 2000);
     }
 
     private void deliver(JSONObject event) {
@@ -170,12 +201,14 @@ public final class WifiBridge {
     /** Sends one command. Ignored when the engine is not running. */
     public synchronized void send(JSONObject command) {
         if (!running || stdin == null) return;
+        AppLog.info(TAG, "send: " + command);
         try {
             stdin.write(command.toString());
             stdin.write('\n');
             stdin.flush();
         } catch (IOException e) {
             Log.w(TAG, "cannot write to the engine", e);
+            AppLog.error(TAG, e);
             running = false;
             notifyStopped("the engine is not accepting commands");
         }
@@ -211,6 +244,7 @@ public final class WifiBridge {
 
     /** Shuts the engine process down. The next {@link #start()} spawns a fresh one. */
     public synchronized void stop() {
+        userStopped = true;
         running = false;
         if (process != null) {
             try {
@@ -224,5 +258,6 @@ public final class WifiBridge {
         }
         stdin = null;
         UsbHostBridge.stop();
+        AppLog.info(TAG, "engine stopped by the app");
     }
 }

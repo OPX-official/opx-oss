@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # Fetches every binary the APK ships with from the OPX package archive
-# (OPX-official/opx-packages, gh-pages branch) instead of from Termux's releases or
-# packages.termux.dev. Checksums come from the archive's own index.json.
+# (OPX-official/opx-packages, gh-pages branch). Checksums come from the archive's own
+# index.json.
 #
 #   app/src/main/assets/bootstrap/bootstrap-<arch>.zip   Termux bootstrap
 #   app/src/main/assets/payload/<arch>/<name>.tar.gz     everything extracted into $PREFIX
@@ -65,6 +65,26 @@ asset_name() {
   esac
 }
 
+# The APK may only ship a runtime compiled for this app's prefix. An archive built before the
+# native switch still carries the other app's paths; fail here instead of shipping it.
+assert_native() { # destination
+  local destination="$1"
+  case "$destination" in
+    *.targz|*.tar.gz)
+      if tar -xzOf "$destination" 2>/dev/null | grep -aq "com\.termux"; then
+        echo "foreign prefix in $destination: run the Packages workflow first" >&2
+        exit 1
+      fi
+      ;;
+    *.zip)
+      if unzip -p "$destination" 2>/dev/null | grep -aq "com\.termux"; then
+        echo "foreign prefix in $destination: run the Packages workflow first" >&2
+        exit 1
+      fi
+      ;;
+  esac
+}
+
 fetch_verified() { # url sha256 destination
   local url="$1" expected="$2" destination="$3"
   mkdir -p "$(dirname "$destination")"
@@ -79,6 +99,7 @@ fetch_verified() { # url sha256 destination
     echo "checksum mismatch for $url: expected $expected, got $actual" >&2
     exit 1
   fi
+  assert_native "$destination.tmp"
   mv "$destination.tmp" "$destination"
   echo "  get     ${destination#"$ASSETS"/}"
 }

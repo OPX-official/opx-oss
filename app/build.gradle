@@ -11,10 +11,10 @@ android {
         // Android 6.0 and up, 32- and 64-bit ABIs alike.
         minSdk 23
         // Must stay at 28: Android 10+ refuses to execve() files inside the app home directory for
-        // apps targeting 29+, and both proot and the whole Termux userland run from <files>.
+        // apps targeting 29+, and the whole OPX OSS runtime runs from <files>.
         targetSdk 28
-        versionCode 21
-        versionName "0.2.0-alpha.2"
+        versionCode 22
+        versionName "0.3.0-alpha.1"
         vectorDrawables.useSupportLibrary = true
     }
 
@@ -39,7 +39,7 @@ android {
     }
 
     lint {
-        // The target SDK is pinned at 28 on purpose (proot exec permissions), so the
+        // The target SDK is pinned at 28 on purpose (runtime exec permissions), so the
         // "expired target SDK" check would otherwise fail every release build.
         disable 'ExpiredTargetSdkVersion'
     }

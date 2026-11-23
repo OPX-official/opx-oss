@@ -11,7 +11,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-    <!-- ~/storage (the termux-setup-storage equivalent); targetSdk 28 keeps these ordinary
+    <!-- ~/storage (the storage-setup equivalent); targetSdk 28 keeps these ordinary
          runtime permissions rather than scoped-storage media permissions. -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />

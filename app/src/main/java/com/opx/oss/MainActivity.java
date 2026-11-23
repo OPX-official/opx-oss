@@ -55,6 +55,8 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         Fragment target;
         if (itemId == R.id.nav_home) {
             target = new HomeFragment();
+        } else if (itemId == R.id.nav_logs) {
+            target = new LogsFragment();
         } else if (itemId == R.id.nav_about) {
             target = new AboutFragment();
         } else {
