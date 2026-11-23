@@ -30,27 +30,32 @@ import com.google.android.material.snackbar.Snackbar;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
- * The WiFi section, laid out like Stryker's: screen title, status card (interface, adapter count
- * chip, interface/adapters/channel meta row), then the network card.
+ * The WiFi section, laid out like Stryker's: screen title, status card (interface, network count
+ * chip, interface/band/channel meta row), then the network card.
  * <p>
  * Two scan paths, both terminal-free: the headless wifi4 engine over a USB adapter, and
- * Android's built-in radio. The USB card below carries the live diagnosis and its Copy button.
+ * Android's built-in radio. Every field comes from wifi4's own model — the security bucket from
+ * {@code EncryptionType}, the vendor from {@code ap.identity.manufacturer}, the band from the
+ * channels seen — so a row here says the same thing the engine's output says.
  */
 public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxService.Listener {
 
     private static final int REQUEST_LOCATION = 2;
 
     private final WifiAdapter adapter = new WifiAdapter();
+    private final Set<String> bands = new HashSet<>();
 
     private TextView ifaceValue;
     private TextView statusValue;
     private TextView countChip;
     private TextView ifaceMeta;
-    private TextView adaptersValue;
+    private TextView bandValue;
     private TextView channelValue;
     private TextView usbDiag;
     private TextView scanText;
@@ -83,7 +88,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         statusValue = view.findViewById(R.id.wifi_status_value);
         countChip = view.findViewById(R.id.wifi_count_chip);
         ifaceMeta = view.findViewById(R.id.wifi_iface_meta);
-        adaptersValue = view.findViewById(R.id.wifi_band_value);
+        bandValue = view.findViewById(R.id.wifi_band_value);
         channelValue = view.findViewById(R.id.wifi_channel_value);
         usbDiag = view.findViewById(R.id.wifi_usb_diag);
         scanText = view.findViewById(R.id.scan_text);
@@ -183,6 +188,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         if (scanning) return;
         scanning = true;
         adapter.clear();
+        bands.clear();
+        updateBand();
         updateCount();
         progress.setVisibility(View.VISIBLE);
         scanText.setText(R.string.wifi_scanning);
@@ -204,25 +211,44 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         String name = event.optString("event");
         if ("network".equals(name)) {
             WifiAdapter.Network network = new WifiAdapter.Network();
+            network.hidden = event.optBoolean("hidden");
             network.ssid = event.optString("ssid");
             network.bssid = event.optString("bssid");
             network.privacy = event.optString("privacy", "");
+            network.security = event.optString("security", "");
             network.vendor = event.optString("vendor", "");
+            network.chipset = event.optString("chipset", "");
+            network.band = event.optString("band", "");
             network.wps = event.optBoolean("wps");
             network.channel = event.optInt("channel");
             network.signal = event.optInt("signal");
             network.source = "usb";
             adapter.upsert(network);
+            if (!network.band.isEmpty() && !"null".equals(network.band)) {
+                bands.add(network.band);
+                updateBand();
+            }
             if (network.channel > 0) {
                 lastChannel = network.channel;
                 channelValue.setText(String.valueOf(lastChannel));
             }
             updateCount();
         } else if ("ready".equals(name)) {
-            String version = event.optString("version", "");
-            statusValue.setText(version.isEmpty()
-                    ? getString(R.string.wifi_state_ready)
-                    : getString(R.string.wifi_engine_ready_version, version));
+            JSONObject runtime = event.optJSONObject("runtime");
+            boolean wifi4Ok = runtime == null || runtime.optBoolean("wifi4_ok", true);
+            if (!wifi4Ok) {
+                // The runtime is up but the engine cannot import wifi4: say so instead of
+                // looking like an empty scan (the "engine ready, no adapters" case).
+                String error = runtime.optString("wifi4_error", "");
+                String message = getString(R.string.wifi4_missing, error);
+                statusValue.setText(message);
+                usbDiag.setText(message + "\n\n" + usbDiag.getText());
+            } else {
+                String version = event.optString("version", "");
+                statusValue.setText(version.isEmpty()
+                        ? getString(R.string.wifi_state_ready)
+                        : getString(R.string.wifi_engine_ready_version, version));
+            }
         } else if ("scan_done".equals(name)) {
             scanning = false;
             progress.setVisibility(View.GONE);
@@ -248,10 +274,15 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                     text.append('\n');
                 }
             }
-            if (adapters == 0) text.append(getString(R.string.wifi_usb_none));
+            if (adapters == 0) {
+                text.append(getString(R.string.wifi_usb_none));
+                // wifi4's USB backend knows why: no permission, no host support, no card.
+                String hint = event.optString("hint", "");
+                if (!hint.isEmpty() && !"null".equals(hint)) text.append("\n\n").append(hint);
+            }
             usbDiag.setText(text.toString());
-            adaptersValue.setText(String.valueOf(adapters));
-            ifaceValue.setText(adapters == 0 ? getString(R.string.wifi_state_no_adapter) : "wlan0");
+            ifaceValue.setText(adapters == 0
+                    ? getString(R.string.wifi_state_no_adapter) : "wlan0");
         } else if ("status".equals(name)) {
             boolean connected = event.optBoolean("connected");
             String iface = event.optString("iface", "");
@@ -262,8 +293,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             if (connected && !chipset.isEmpty() && !"null".equals(chipset)) {
                 statusValue.setText(chipset);
             }
-            int aps = event.optInt("access_points", 0);
-            if (aps > 0) adaptersValue.setText(String.valueOf(adapters == 0 ? aps : adapters));
+            String band = event.optString("band", "");
+            if (!band.isEmpty() && !"null".equals(band)) bandValue.setText(band);
         } else if ("error".equals(name)) {
             scanning = false;
             progress.setVisibility(View.GONE);
@@ -320,19 +351,39 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         if (results == null) return;
         for (ScanResult result : results) {
             WifiAdapter.Network network = new WifiAdapter.Network();
+            network.hidden = result.SSID == null || result.SSID.isEmpty();
             network.ssid = result.SSID;
             network.bssid = result.BSSID;
             network.privacy = result.capabilities;
+            network.security = builtInSecurity(result.capabilities);
             network.wps = result.capabilities != null && result.capabilities.contains("WPS");
             network.channel = frequencyToChannel(result.frequency);
             network.signal = result.level;
             network.source = "builtin";
+            if (network.channel > 0) {
+                network.band = network.isFiveGhz() ? "5" : "2.4";
+                bands.add(network.band);
+                lastChannel = network.channel;
+            }
             adapter.upsert(network);
-            if (network.channel > 0) lastChannel = network.channel;
         }
+        updateBand();
         channelValue.setText(lastChannel > 0 ? String.valueOf(lastChannel) : "—");
         statusValue.setText(getString(R.string.wifi_scan_done_short, adapter.size()));
         updateCount();
+    }
+
+    /** Android's capabilities string mapped to the same buckets wifi4 uses. */
+    private static String builtInSecurity(String capabilities) {
+        if (capabilities == null || capabilities.isEmpty()) return "OPEN";
+        String upper = capabilities.toUpperCase(Locale.US);
+        if (upper.contains("WPA3")) {
+            return upper.contains("WPA2") || upper.contains("RSN") ? "WPA3_TRANSITION" : "WPA3";
+        }
+        if (upper.contains("WPA2")) return "WPA2";
+        if (upper.contains("WPA")) return "WPA";
+        if (upper.contains("WEP")) return "WEP";
+        return "OPEN";
     }
 
     private static int frequencyToChannel(int frequency) {
@@ -340,6 +391,17 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         if (frequency >= 2412 && frequency <= 2484) return (frequency - 2412) / 5 + 1;
         if (frequency >= 5000) return (frequency - 5000) / 5;
         return 0;
+    }
+
+    private void updateBand() {
+        if (bandValue == null) return;
+        if (bands.isEmpty()) {
+            bandValue.setText("—");
+        } else if (bands.size() > 1) {
+            bandValue.setText("2.4 / 5");
+        } else {
+            bandValue.setText(bands.iterator().next());
+        }
     }
 
     private void updateCount() {

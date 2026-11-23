@@ -68,8 +68,62 @@ def runtime_info():
     return info
 
 
+try:  # wifi4's own security ladder; never fork it when the UI formatter is importable.
+    from wifi4.ui.encryption_format import EncryptionType as _EncryptionType
+    ENCRYPTION_TYPES = _EncryptionType
+except Exception:  # noqa: BLE001 - a trimmed runtime must still scan
+    ENCRYPTION_TYPES = None
+
+
+def security_of(ap, encryption):
+    """One security bucket: OPEN / WEP / WPA / WPA2 / WPA3 / WPA3_TRANSITION / OWE / UNKNOWN.
+
+    Mirrors ``EncryptionType.from_ap`` (RSN evidence outranks the legacy encryption string)
+    for runtimes where the UI formatter is not shipped.
+    """
+    if ENCRYPTION_TYPES is not None:
+        try:
+            return ENCRYPTION_TYPES.from_ap(ap).value
+        except Exception:  # noqa: BLE001
+            pass
+    if getattr(ap, "wpa3", False) and getattr(ap, "transition_mode", False):
+        return "WPA3_TRANSITION"
+    if getattr(ap, "wpa3", False):
+        return "WPA3"
+    if "OWE" in (getattr(ap, "akms", None) or []):
+        return "OWE"
+    enc = (encryption or "").upper()
+    if enc == "WPA" or enc.startswith("WPA-"):
+        return "WPA"
+    if getattr(ap, "akms", None):
+        return "WPA2"
+    if enc in ("", "OPEN", "UNKNOWN"):
+        return "OPEN"
+    if enc == "WEP":
+        return "WEP"
+    return "UNKNOWN"
+
+
+def band_of(channel):
+    """2.4 / 5 for a channel number, None when the AP's channel is not known yet."""
+    if not isinstance(channel, int) or channel <= 0:
+        return None
+    return "5" if channel > 14 else "2.4"
+
+
+def bands_text(access_points):
+    """What Stryker's BAND cell shows: '2.4 / 5', '2.4' or '5'."""
+    seen = {band_of(getattr(ap, "channel", None)) for ap in access_points.values()}
+    seen.discard(None)
+    if not seen:
+        return None
+    if len(seen) > 1:
+        return "2.4 / 5"
+    return seen.pop()
+
+
 def ap_fields(ap):
-    """Best-effort mapping of an AccessPoint to what the UI draws."""
+    """Mapping of an AccessPoint to exactly what the app's rows draw."""
     def pick(*names):
         for name in names:
             value = getattr(ap, name, None)
@@ -77,15 +131,28 @@ def ap_fields(ap):
                 return value
         return None
 
-    privacy = pick("privacy", "security", "encryption")
+    encryption = pick("privacy", "security", "encryption")
+    ssid = pick("ssid", "essid")
+    # wifi4 keeps hidden networks as None or the "<hidden>" placeholder; the row shows a label.
+    hidden = bool(getattr(ap, "is_hidden", False)) or not ssid or ssid == "<hidden>"
+    # AccessPoint has no vendor/manuf field: manufacturer lives in the WPS/OUI identity.
+    identity = getattr(ap, "identity", None)
+    vendor = getattr(identity, "manufacturer", None) if identity is not None else None
+    vendor = vendor or pick("vendor", "manuf")
+    channel = pick("channel")
     return {
-        "ssid": pick("ssid", "essid") or "",
+        "ssid": "" if hidden else str(ssid),
+        "hidden": hidden,
         "bssid": pick("bssid", "mac") or "",
-        "channel": pick("channel"),
+        "channel": channel,
+        "band": band_of(channel),
         "signal": pick("rssi", "signal", "power", "dbm"),
-        "privacy": str(privacy) if privacy is not None else None,
+        "privacy": str(encryption) if encryption is not None else None,
+        "security": security_of(ap, encryption),
         "wps": bool(pick("wps", "wps_version") or False),
-        "vendor": pick("vendor", "manuf"),
+        "wps_locked": bool(getattr(ap, "wps_locked", False)),
+        "vendor": vendor,
+        "chipset": pick("chipset"),
     }
 
 
@@ -156,15 +223,18 @@ class Engine:
 
     async def status(self):
         if self.iface is None:
-            emit("status", connected=False, iface=None, access_points=0, runtime=runtime_info())
+            emit("status", connected=False, iface=None, access_points=0, band=None,
+                 runtime=runtime_info())
             return
+        aps = self.array.access_points() if self.array else {}
         emit(
             "status",
             connected=True,
             iface=self.iface.name,
             chipset=getattr(self.iface, "chipset", None),
             mac=getattr(self.iface, "mac_address", None),
-            access_points=len(self.array.access_points()) if self.array else 0,
+            access_points=len(aps),
+            band=bands_text(aps),
             runtime=runtime_info(),
         )
 

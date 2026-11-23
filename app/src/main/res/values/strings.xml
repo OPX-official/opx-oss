@@ -34,7 +34,7 @@
     <string name="wifi_section_status">STATUS</string>
     <string name="wifi_section_networks">NETWORKS</string>
     <string name="wifi_meta_interface">INTERFACE</string>
-    <string name="wifi_meta_adapters">ADAPTERS</string>
+    <string name="wifi_meta_band">BAND</string>
     <string name="wifi_meta_channel">CHANNEL</string>
     <string name="wifi_meta_source">Source</string>
     <string name="wifi_status_scanning">Scanning for networks…</string>
@@ -42,6 +42,7 @@
     <string name="wifi_engine_ready_version">Engine %1$s ready</string>
     <string name="wifi_scan_done_short">%1$d networks found</string>
     <string name="wifi_retry">Scan again</string>
+    <string name="wifi4_missing">wifi4 unavailable: %1$s</string>
     <string name="wifi_chip_wps">WPS</string>
     <string name="wifi_chip_lock">LOCK</string>
     <string name="wifi_chip_5g">5G</string>
