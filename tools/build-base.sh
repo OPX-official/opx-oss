@@ -62,7 +62,10 @@ if [ ! -d "$TP_SRC/scripts" ]; then
   # must build the same tree every time. TERMUX_PACKAGES_COMMIT comes from packages.yml.
   git init --quiet "$TP_SRC"
   git -C "$TP_SRC" remote add origin https://github.com/termux/termux-packages
-  git -C "$TP_SRC" fetch --quiet --depth 1 origin "${TERMUX_PACKAGES_COMMIT:-master}"
+  pin="${TERMUX_PACKAGES_COMMIT:-master}"
+  git -C "$TP_SRC" fetch --quiet --depth 1 origin "$pin" \
+    || { echo "cannot fetch termux-packages $pin, falling back to master" >&2
+         git -C "$TP_SRC" fetch --quiet --depth 1 origin master; }
   git -C "$TP_SRC" checkout --quiet FETCH_HEAD
 fi
 BUILD_COMMIT="$(git -C "$TP_SRC" rev-parse HEAD)"

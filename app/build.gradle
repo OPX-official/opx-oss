@@ -13,19 +13,39 @@ android {
         // Must stay at 28: Android 10+ refuses to execve() files inside the app home directory for
         // apps targeting 29+, and the whole OPX OSS runtime runs from <files>.
         targetSdk 28
-        versionCode 22
+        // Android only installs a build over an existing app whose versionCode is higher, so CI
+        // derives it from the workflow run number. A hand-edited constant meant two builds of
+        // the same version could not replace each other.
+        versionCode = System.getenv("GITHUB_RUN_NUMBER") != null
+                ? 1000 + System.getenv("GITHUB_RUN_NUMBER").toInteger()
+                : 22
         versionName "0.3.0-alpha.1"
         vectorDrawables.useSupportLibrary = true
+    }
+
+    // One key for every artifact this repository builds. Android treats a different signature as
+    // a different app and refuses to update over it, and AGP's debug signing config generates a
+    // fresh key on every CI runner - which is exactly why each new build had to be uninstalled
+    // first. The committed key keeps successive builds installable over each other; point the
+    // OPX_RELEASE_* variables at a private key to sign releases with your own.
+    signingConfigs {
+        opx {
+            storeFile rootProject.file(System.getenv("OPX_RELEASE_STORE_FILE") ?: "keystore/opx-release.p12")
+            storeType System.getenv("OPX_RELEASE_STORE_TYPE") ?: "PKCS12"
+            storePassword System.getenv("OPX_RELEASE_STORE_PASSWORD") ?: "opxoss"
+            keyAlias System.getenv("OPX_RELEASE_KEY_ALIAS") ?: "opx"
+            keyPassword System.getenv("OPX_RELEASE_KEY_PASSWORD") ?: "opxoss"
+        }
     }
 
     buildTypes {
         debug {
             applicationIdSuffix ""
+            signingConfig signingConfigs.opx
         }
         release {
             minifyEnabled false
-            // CI signs with the debug key so every workflow run produces an installable APK.
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.opx
         }
     }
 
