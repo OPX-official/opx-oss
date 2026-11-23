@@ -22,6 +22,12 @@ import zipfile
 
 DEFAULT_BASE_URL = "https://raw.githubusercontent.com/OPX-official/opx-packages/gh-pages/"
 FOREIGN = "com.termux"
+OURS = "com.opx.oss"
+
+# The prefix the toolchain compiled in is baked into the binaries themselves. These are the
+# files that carry it in the base payload and the bootstrap; a mirrored or unforked build is
+# caught here even when its member paths look right.
+PREFIX_WITNESSES = ("/bin/bash", "/bin/dash", "/bin/python3", "/lib/libpython3")
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -65,9 +71,22 @@ def split_name(path: pathlib.Path) -> tuple[str, str, str]:
     return parts[0], parts[1], parts[2]
 
 
+def _is_witness(name: str) -> bool:
+    return any(witness in "/" + name for witness in PREFIX_WITNESSES)
+
+
 def audit(path: pathlib.Path, relative: str) -> None:
-    """Fail if the artifact contains a path under the foreign prefix."""
+    """Fail if the artifact references the foreign prefix, in its paths or inside its binaries.
+
+    Paths alone are not enough: every package is compiled with a prefix, and a mirrored or
+    unforked build bakes another app's prefix into bash, python and their libraries while the
+    archive member names can still look right.
+    """
     hits: list[str] = []
+    witnesses = 0
+    ours = 0
+    foreign = FOREIGN.encode()
+    ours_bytes = OURS.encode()
     try:
         if relative.endswith(".deb"):
             out = subprocess.check_output(
@@ -76,10 +95,29 @@ def audit(path: pathlib.Path, relative: str) -> None:
             hits = [line for line in out.splitlines() if FOREIGN in line]
         elif relative.endswith(".tar.gz"):
             with tarfile.open(path, "r:gz") as tar:
-                hits = [name for name in tar.getnames() if FOREIGN in name]
+                members = tar.getmembers()
+                hits = [member.name for member in members if FOREIGN in member.name]
+                for member in members:
+                    if hits or not member.isfile() or not _is_witness(member.name):
+                        continue
+                    blob = tar.extractfile(member).read()
+                    witnesses += 1
+                    if foreign in blob:
+                        hits.append(member.name)
+                    if ours_bytes in blob:
+                        ours += 1
         elif relative.endswith(".zip"):
             with zipfile.ZipFile(path) as archive:
                 hits = [name for name in archive.namelist() if FOREIGN in name]
+                for name in archive.namelist() if not hits else []:
+                    if not _is_witness(name):
+                        continue
+                    blob = archive.read(name)
+                    witnesses += 1
+                    if foreign in blob:
+                        hits.append(name)
+                    if ours_bytes in blob:
+                        ours += 1
     except (OSError, tarfile.TarError, subprocess.CalledProcessError) as exc:
         print(f"cannot audit {relative}: {exc}", file=sys.stderr)
         raise SystemExit(1)
@@ -88,6 +126,10 @@ def audit(path: pathlib.Path, relative: str) -> None:
         for hit in hits[:5]:
             print("  " + hit, file=sys.stderr)
         raise SystemExit(1)
+    if witnesses and not ours:
+        print(f"warning: no {OURS} prefix compiled into {relative} "
+              f"({witnesses} binaries checked); the toolchain fork may not have applied",
+              file=sys.stderr)
 
 
 def collect(out: pathlib.Path, base_url: str) -> list[dict]:
