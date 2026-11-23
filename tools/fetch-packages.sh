@@ -66,24 +66,42 @@ asset_name() {
 }
 
 # The APK may only ship a runtime compiled for this app's prefix. An archive built before the
-# native switch still carries the other app's paths; fail here instead of shipping it.
+# native switch still carries the other app's paths; one built for no app would run on whatever
+# prefix it was compiled with. Fail here instead of shipping either.
 assert_native() { # final-name file-to-scan
   local name="$1" scan="$2"
-  local found=0
+  local found=0 require_ours=0
+  # Only the base runtime and the bootstrap carry compiled binaries; the OPX packages are
+  # scripts installed under the prefix and are checked by path instead.
+  case "$name" in
+    bootstrap-*.zip|opx-base_*) require_ours=1 ;;
+  esac
   case "$name" in
     *.targz|*.tar.gz)
       # Names AND file contents: a compiled binary only carries the prefix inside itself.
       # "|| true" keeps a SIGPIPE from tar (grep -q stops early) out of the pipefail status.
       if { tar -tzf "$scan" 2>/dev/null || true; tar -xzOf "$scan" 2>/dev/null || true; } \
           | grep -aq "com\.termux"; then found=1; fi
+      if [ "$require_ours" = "1" ] && [ "$found" = "0" ] \
+          && ! { tar -xzOf "$scan" 2>/dev/null || true; } | grep -aq "com\.opx\.oss"; then
+        found=2
+      fi
       ;;
     *.zip)
       if { unzip -Z1 "$scan" 2>/dev/null || true; unzip -p "$scan" 2>/dev/null || true; } \
           | grep -aq "com\.termux"; then found=1; fi
+      if [ "$require_ours" = "1" ] && [ "$found" = "0" ] \
+          && ! { unzip -p "$scan" 2>/dev/null || true; } | grep -aq "com\.opx\.oss"; then
+        found=2
+      fi
       ;;
   esac
   if [ "$found" = "1" ]; then
     echo "foreign prefix in $name: the archive predates the native runtime; run the Packages workflow" >&2
+    exit 1
+  fi
+  if [ "$found" = "2" ]; then
+    echo "$name carries no com.opx.oss prefix: it was not built for this app; run the Packages workflow" >&2
     exit 1
   fi
 }

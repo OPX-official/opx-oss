@@ -127,9 +127,13 @@ def audit(path: pathlib.Path, relative: str) -> None:
             print("  " + hit, file=sys.stderr)
         raise SystemExit(1)
     if witnesses and not ours:
-        print(f"warning: no {OURS} prefix compiled into {relative} "
-              f"({witnesses} binaries checked); the toolchain fork may not have applied",
-              file=sys.stderr)
+        # A binary that names no prefix at all is not ours either: it was built for another
+        # app or for no app, and it would run (or fail) on whatever prefix it was compiled
+        # with. These packages must work in OPX OSS and nowhere else, so refuse to publish.
+        print(f"no {OURS} prefix compiled into {relative} "
+              f"({witnesses} binaries checked): the toolchain fork did not apply, so these "
+              f"binaries were not built for this app", file=sys.stderr)
+        raise SystemExit(1)
 
 
 def collect(out: pathlib.Path, base_url: str) -> list[dict]:
