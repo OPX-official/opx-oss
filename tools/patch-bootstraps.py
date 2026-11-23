@@ -26,6 +26,31 @@ import sys
 
 ANCHOR = '\t\t# Build packages.\n\t\tfor package_name in "${PACKAGES[@]}"; do\n'
 
+# build-bootstraps.sh moves the finished archive into the checkout root. Inside the builder
+# container that root is a mount whose owner is the CI runner's uid, not the builder uid, so
+# the move dies with "Permission denied" after the entire build succeeded and the archive is
+# deleted with the temp dir (OPX OSS run 45231179508: 59 minutes, no bootstrap). The deb output
+# directory is written by the build itself, so it is writable: fall back to it, and fail loudly
+# if neither location takes the archive.
+MOVE_ANCHOR = '\tmv -f "${BOOTSTRAP_TMPDIR}/bootstrap-${1}.zip" "$TERMUX_PACKAGES_DIRECTORY/"\n'
+
+MOVE = '''\t# The archive must land on the mounted checkout, and the mount root is not always
+	# writable for the uid the container runs as. Fall back to the deb output directory,
+	# which the build itself writes, and make a failed move fatal.
+	local archive="${BOOTSTRAP_TMPDIR}/bootstrap-${1}.zip"
+	if mv -f "$archive" "$TERMUX_PACKAGES_DIRECTORY/" 2>/dev/null; then
+		BOOTSTRAP_ARCHIVE="$TERMUX_PACKAGES_DIRECTORY/bootstrap-${1}.zip"
+	else
+		mkdir -p "$TERMUX_BUILT_DEBS_DIRECTORY"
+		if ! mv -f "$archive" "$TERMUX_BUILT_DEBS_DIRECTORY/" 2>/dev/null; then
+			echo "[!] cannot write bootstrap-${1}.zip into $TERMUX_PACKAGES_DIRECTORY or $TERMUX_BUILT_DEBS_DIRECTORY" 1>&2
+			exit 1
+		fi
+		BOOTSTRAP_ARCHIVE="$TERMUX_BUILT_DEBS_DIRECTORY/bootstrap-${1}.zip"
+	fi
+	echo "[*] bootstrap archive: $BOOTSTRAP_ARCHIVE"
+'''
+
 RESOLVER = '''\t\t# Resolve the package list against this checkout: upstream moves packages around
 \t\t# (bzip2 ships as libbz2's subpackage now), and build-package.sh aborts on a name
 \t\t# that has no directory even though its deb is produced by a parent build.
@@ -75,8 +100,19 @@ def main(root: str, extra: list[str]) -> int:
         print("patch-bootstraps: the build loop anchor moved upstream", file=sys.stderr)
         return 1
     else:
-        script.write_text(text.replace(ANCHOR, RESOLVER + ANCHOR, 1), encoding="utf-8")
+        text = text.replace(ANCHOR, RESOLVER + ANCHOR, 1)
+        script.write_text(text, encoding="utf-8")
         print("  patched scripts/build-bootstraps.sh (package resolver)")
+
+    if "BOOTSTRAP_ARCHIVE" in text:
+        print("  build-bootstraps.sh already moves the archive defensively")
+    elif MOVE_ANCHOR not in text:
+        print("patch-bootstraps: the archive move anchor moved upstream", file=sys.stderr)
+        return 1
+    else:
+        text = text.replace(MOVE_ANCHOR, MOVE, 1)
+        script.write_text(text, encoding="utf-8")
+        print("  patched scripts/build-bootstraps.sh (archive placement)")
 
     # Preflight in seconds what would otherwise fail inside docker after ~40 minutes.
     missing = resolve(directory, extra)

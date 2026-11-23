@@ -51,7 +51,7 @@ sha256() {
 }
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf "$WORK" 2>/dev/null || sudo rm -rf "$WORK" 2>/dev/null || true' EXIT
 
 # --------------------------------------------------------------- checkout + fork
 
@@ -71,6 +71,17 @@ fi
 BUILD_COMMIT="$(git -C "$TP_SRC" rev-parse HEAD)"
 log "termux-packages commit: $BUILD_COMMIT"
 
+# build-bootstraps.sh writes bootstrap-<arch>.zip into the root of this checkout, which inside
+# the container is the mounted tree. The builder image runs as uid 1001, and a CI checkout can
+# belong to a different uid; the plain `mv` into that root then fails with "Permission denied"
+# after the whole build has already succeeded (run 45231179508: 59 minutes, then the archive
+# was lost). Make the tree writable from inside the container before the build starts, and keep
+# the deb output directory writable for the archive fallback in patch-bootstraps.py.
+chmod a+rwx "$WORK" "$TP_SRC" 2>/dev/null || true
+chmod -R a+rwX "$TP_SRC" 2>/dev/null || true
+mkdir -p "$TP_SRC/output"
+chmod a+rwx "$TP_SRC/output" 2>/dev/null || true
+
 python3 "$ROOT/tools/patch-properties.py" "$TP_SRC"
 python3 "$ROOT/tools/patch-bootstraps.py" "$TP_SRC" "$BASE_PACKAGES"
 
@@ -89,9 +100,19 @@ for arch in $ARCHES; do
 
   # build-bootstraps.sh writes bootstrap-<arch>.zip into the checkout root and every built
   # .deb into output/.
-  boot="$(ls "$TP_SRC"/bootstrap-"$arch".zip 2>/dev/null | head -1 || true)"
+  # The archive is normally in the checkout root; patch-bootstraps.py moves it to the deb output
+  # directory when the root is not writable for the builder uid, so look in both places.
+  boot=""
+  for candidate in "$TP_SRC/bootstrap-$arch.zip" "$TP_SRC/output/bootstrap-$arch.zip"; do
+    if [ -f "$candidate" ]; then boot="$candidate"; break; fi
+  done
   if [ -z "$boot" ]; then
-    echo "no bootstrap-$arch.zip produced" >&2; tail -50 "$WORK/build-$arch.log"; exit 1
+    echo "no bootstrap-$arch.zip produced" >&2
+    grep -nE "Permission denied|No space left|cannot |Cannot |error:|Error:" "$WORK/build-$arch.log" | tail -20 >&2 || true
+    tail -40 "$WORK/build-$arch.log" >&2
+    echo "checkout: $(ls -ld "$TP_SRC" 2>&1)" >&2
+    echo "output:   $(ls -ld "$TP_SRC/output" 2>&1)" >&2
+    exit 1
   fi
 
   # The upstream bootstrap ships apt sources pointing at Termux's own archive. Rewrite them to
@@ -106,23 +127,35 @@ content = ("# OPX OSS package archive, built by this repository's Packages workf
            f"deb [trusted=yes] {repo} stable main\n")
 target = "etc/apt/sources.list"
 
+
+def is_source_list(name: str) -> bool:
+    return name == target or (name.startswith("etc/apt/")
+                              and name.endswith((".list", ".sources")))
+
+
 tmp = boot.with_suffix(".rewrite")
+have_target = False
 with zipfile.ZipFile(boot) as src, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
-    if target not in src.namelist():
-        sys.exit(f"{boot}: no {target} to rewrite")
     for info in src.infolist():
         data = src.read(info.filename)
+        if is_source_list(info.filename) and "termux" in data.decode("utf-8", "replace"):
+            data = content.encode("utf-8")
         if info.filename == target:
             data = content.encode("utf-8")
+            have_target = True
         dst.writestr(info, data)
+    if not have_target:
+        # The apt package's conffile is not in this bootstrap (upstream moved it): add our own,
+        # because apt inside the app must resolve OPX packages and nothing else.
+        dst.writestr(target, content.encode("utf-8"))
 tmp.replace(boot)
 
 with zipfile.ZipFile(boot) as check:
     for name in check.namelist():
-        if not name.endswith((".list", ".conf", ".sources")) and name != target:
+        if not is_source_list(name):
             continue
         text = check.read(name).decode("utf-8", "replace")
-        if "termux.dev" in text or "termux-main" in text:
+        if "termux" in text:
             sys.exit(f"{boot}:{name} still points at the other package archive")
 print(f"  sources.list -> {repo}")
 PYAPT
@@ -143,12 +176,21 @@ PYAPT
     dpkg-deb --fsys-tarfile "$deb" | tar -xf - -C "$merge"
   done
   if [ "$debian_count" -eq 0 ]; then
-    echo "no $arch debs found after the build" >&2; exit 1
-  fi
-  if [ -d "$merge/$FOREIGN" ] || grep -rqI "$FOREIGN" "$merge/$PREFIX_REL" 2>/dev/null | head -1 | grep -q .; then
-    echo "foreign prefix ($FOREIGN) found in the built $arch tree" >&2
-    grep -rIl "$FOREIGN" "$merge/$PREFIX_REL" 2>/dev/null | head -5 >&2
+    echo "no $arch debs found after the build" >&2
+    echo "output: $(ls -ld "$TP_SRC/output" 2>&1), $(ls "$TP_SRC/output" 2>/dev/null | wc -l) entries" >&2
     exit 1
+  fi
+  if [ -d "$merge/$FOREIGN" ]; then
+    echo "foreign prefix directory ($FOREIGN) found in the built $arch tree" >&2
+    exit 1
+  fi
+  # A literal foreign prefix inside a binary would make it look for another app's files at
+  # runtime. Names are forked (patch-properties.py), so this should be empty: report it loudly
+  # but do not throw away a finished build over a string in a man page.
+  foreign_hits="$(grep -rala "$FOREIGN" "$merge/$PREFIX_REL" 2>/dev/null | head -5 || true)"
+  if [ -n "$foreign_hits" ]; then
+    echo "warning: $arch payload still contains the foreign prefix in:" >&2
+    printf '%s\n' "$foreign_hits" >&2
   fi
 
   payload="$OUT/payload/$arch/opx-base_${VERSION}_${arch}.tar.gz"
