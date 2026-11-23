@@ -125,7 +125,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/home_module_terminal"
+                    android:text="@string/home_module_soon"
                     android:textColor="@color/opx_text"
                     android:textSize="15sp"
                     android:textStyle="bold" />
@@ -134,7 +134,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="@string/home_module_terminal_body"
+                    android:text="@string/home_coming_soon"
                     android:textAppearance="@style/OpxBody" />
 
             </LinearLayout>

@@ -1,0 +1,120 @@
+name: Packages
+
+# Builds the OPX package archive (OPX-official/opx-packages) from source. It runs next to
+# the APK workflow: nothing here depends on the APK, and the APK build consumes only what
+# this workflow publishes. Trigger it manually or whenever the packaging inputs change.
+
+on:
+  workflow_dispatch:
+    inputs:
+      with_base:
+        description: "Also mirror the Termux base runtime (python, proot, libusb)"
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - 'tools/**'
+      - '.github/workflows/packages.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packages
+  cancel-in-progress: false
+
+env:
+  WIFI4_REPO: https://github.com/OPX-official/opx-wifi4.git
+  # Pinned: the engine is built from this exact commit, never from a moving branch.
+  WIFI4_COMMIT: 0654049669dfb8c2af8d70f27c766eaadc1d8c28
+  PACKAGES_REPO: OPX-official/opx-packages
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout OPX OSS
+        uses: actions/checkout@v4
+
+      - name: Checkout wifi4 source (pinned)
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout "$WIFI4_REPO" references/opx-wifi4
+          git -C references/opx-wifi4 checkout "$WIFI4_COMMIT"
+          git -C references/opx-wifi4 log -1 --format='wifi4 %h %s'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build packages
+        env:
+          WITH_BASE: ${{ github.event_name == 'workflow_dispatch' && inputs.with_base || true }}
+          OUT: ${{ github.workspace }}/out
+          WIFI4_SRC: ${{ github.workspace }}/references/opx-wifi4
+        run: |
+          set -euo pipefail
+          chmod +x tools/build-packages.sh tools/fetch-packages.sh
+          tools/build-packages.sh
+          echo "--- index summary ---"
+          python3 - <<'PY'
+          import json, collections
+          index = json.load(open("out/index.json", encoding="utf-8"))
+          kinds = collections.Counter(e["kind"] for e in index["packages"])
+          print("artifacts:", dict(kinds))
+          print("total MiB:", round(sum(e["size"] for e in index["packages"]) / 1048576, 1))
+          PY
+
+      - name: Publish to the package archive
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PACKAGES_TOKEN:-}" ]; then
+            echo "PACKAGES_TOKEN is not set in this repository's secrets" >&2
+            exit 1
+          fi
+          remote="https://x-access-token:${PACKAGES_TOKEN}@github.com/${PACKAGES_REPO}.git"
+          work="$(mktemp -d)"
+          if git clone --depth 1 --branch gh-pages "$remote" "$work/page" 2>/dev/null; then
+            echo "publishing over the existing gh-pages branch"
+          else
+            mkdir -p "$work/page"
+            git -C "$work/page" init --quiet
+            git -C "$work/page" checkout --quiet -b gh-pages
+            git -C "$work/page" remote add origin "$remote"
+          fi
+          rsync -a --delete --exclude .git out/ "$work/page/"
+          {
+            echo "# OPX package archive"
+            echo
+            echo "Built from [OPX OSS](https://github.com/OPX-official/opx-oss) by its \`Packages\` workflow."
+            echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "| kind | files |"
+            echo "|---|---|"
+            python3 - <<'PY'
+          import collections, json
+          index = json.load(open("out/index.json", encoding="utf-8"))
+          for kind, count in sorted(collections.Counter(e["kind"] for e in index["packages"]).items()):
+              print(f"| {kind} | {count} |")
+          PY
+            echo
+            echo "\`index.json\` lists every artifact with its SHA-256; the APK build downloads only from here."
+          } > "$work/page/README.md"
+          git -C "$work/page" add -A
+          git -C "$work/page" -c user.name="OPX Packages" -c user.email="opx@opx.dev" \
+            commit --quiet -m "packages: $(date -u +%Y.%m.%d-%H%M)"
+          git -C "$work/page" push --quiet origin gh-pages
+          echo "published $(git -C "$work/page" rev-parse --short HEAD) to gh-pages"
+
+      - name: Summary
+        run: |
+          set -euo pipefail
+          {
+            echo "### OPX packages"
+            echo
+            du -sh out/* 2>/dev/null || true
+          } >> "$GITHUB_STEP_SUMMARY"

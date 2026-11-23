@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+# Entry point for the OPX engine inside the bundled userland.
+#   opx-engine            NDJSON on stdin/stdout
+# The app starts the same file through proot; this wrapper only exists so the engine can
+# also be driven by hand over adb/ssh while debugging a device.
+set -eu
+PY="${OPX_PYTHON_DIR:-$PREFIX/lib/opx/python}"
+exec python3 "$PY/opx_engine.py" "$@"

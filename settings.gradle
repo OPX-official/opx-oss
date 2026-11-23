@@ -15,4 +15,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "OPX OSS"
-include ':app', ':terminal-emulator', ':terminal-view'
+// One app, no terminal modules: the terminal UI was removed, the userland is driven by the
+// headless engine service instead.
+include ':app'

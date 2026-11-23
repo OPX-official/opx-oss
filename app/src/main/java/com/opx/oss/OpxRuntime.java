@@ -3,48 +3,62 @@ package com.opx.oss;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
-import android.content.res.AssetManager;
 import android.os.Build;
 import android.os.Environment;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.text.TextUtils;
 
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
+
 import java.io.BufferedReader;
+import java.io.BufferedInputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * Owns the bundled Termux userland.
+ * Owns the bundled userland.
  * <p>
- * The Termux bootstrap binaries are compiled with a hardcoded {@code $PREFIX} of
- * {@code /data/data/com.termux/files/usr}. OPX OSS lives in {@code com.opx.oss}, so the
- * real prefix ({@code <files>/usr}) is bind-mounted onto that expected guest path by the
- * bundled proot. Everything the app needs is extracted from the APK on first launch, so
- * installing never touches the network.
+ * Two kinds of assets are shipped, both built by the repository's package pipeline and
+ * downloaded from the OPX package archive at APK build time:
+ * <ul>
+ *   <li>{@code assets/bootstrap/bootstrap-<arch>.zip} — the Termux bootstrap.</li>
+ *   <li>{@code assets/payload/<arch|all>/*.tar.gz} — .deb-style trees (proot, python, the
+ *       wifi4 engine, the USB bridge) that are untarred straight into the prefix.</li>
+ * </ul>
+ * The Termux binaries have {@code /data/data/com.termux/files/usr} compiled in, so the real
+ * prefix is bind-mounted onto that guest path by the bundled proot.
  * <p>
  * The app targets SDK 28 on purpose: Android 10+ denies {@code execve()} on files in the app
- * home directory for apps targeting 29+, which is where the bundled proot and the Termux
- * binaries live (upstream Termux keeps the same target SDK for the same reason).
+ * home directory for apps targeting 29+, which is where proot and the userland live.
  */
 public final class OpxRuntime {
 
     public static final String GUEST_PREFIX = "/data/data/com.termux/files/usr";
     public static final String GUEST_HOME = "/data/data/com.termux/files/home";
 
+    /** Guest path the Termux packages compile their apt cache into. */
+    public static final String GUEST_CACHE = "/data/data/com.termux/cache";
+
     private static final String[] SHARED_BINDS = {
             "/dev", "/proc", "/sys",
             "/system", "/system_ext", "/vendor", "/odm", "/product", "/apex",
             "/sdcard", "/storage"
     };
+
+    private static final String PAYLOAD_ROOT = "data/data/com.termux/files/";
 
     private OpxRuntime() {
     }
@@ -65,29 +79,14 @@ public final class OpxRuntime {
         return new File(context.getFilesDir(), "rootfs");
     }
 
-    /**
-     * Guest path {@link #GUEST_CACHE} is the apt cache directory compiled into the Termux packages
-     * ({@code -DCACHE_DIR=${TERMUX_CACHE_DIR}/apt}) and read by the {@code pkg} mirror wrapper. The
-     * Android cache directory of the app is the exact equivalent, so it is bound there; without it
-     * apt fails with "Archives directory .../apt/archives/partial is missing".
-     */
-    public static final String GUEST_CACHE = "/data/data/com.termux/cache";
-
     public static File cacheDir(Context context) {
         File cache = context.getCacheDir();
         return cache != null ? cache : new File(context.getFilesDir(), "cache");
     }
 
-    /** Recreates the apt cache tree the Termux packages expect inside {@link #cacheDir(Context)}. */
-    private static void ensureAptCache(Context context) throws IOException {
-        File apt = new File(cacheDir(context), "apt");
-        ensureDirectory(apt);
-        ensureDirectory(new File(apt, "archives"));
-        ensureDirectory(new File(apt, "archives/partial"));
-    }
-
-    public static File prootDir(Context context) {
-        return new File(context.getFilesDir(), "libexec/opx-proot");
+    /** Where the packages put the Python modules (wifi4, the engine, the USB client). */
+    public static File pythonDir(Context context) {
+        return new File(prefixDir(context), "lib/opx/python");
     }
 
     public static String termuxArch() {
@@ -111,7 +110,7 @@ public final class OpxRuntime {
         return new File(prefixDir(context), "bin/bash").isFile();
     }
 
-    /** Extracts the bundled bootstrap and proot runtime. Blocking; call off the UI thread. */
+    /** Extracts the bootstrap and every payload. Blocking; call off the UI thread. */
     public static void install(Context context) throws Exception {
         String arch = termuxArch();
         File files = context.getFilesDir();
@@ -122,31 +121,13 @@ public final class OpxRuntime {
         deleteTree(prefix);
         if (!staging.mkdirs()) throw new IOException("Cannot create " + staging);
 
-        extractBootstrap(context.getAssets(), "bootstrap/bootstrap-" + arch + ".zip", staging);
-
+        extractBootstrap(context, "bootstrap/bootstrap-" + arch + ".zip", staging);
         if (!staging.renameTo(prefix)) throw new IOException("Cannot move the bootstrap into place");
 
-        // proot is kept outside the bootstrap: it has to start before the prefix exists in the guest.
-        File prootDir = prootDir(context);
-        deleteTree(prootDir);
-        if (!prootDir.mkdirs()) throw new IOException("Cannot create " + prootDir);
+        extractPayloads(context, arch, prefix);
 
-        File libDir = new File(prefix, "lib");
-        if (!libDir.exists() && !libDir.mkdirs()) throw new IOException("Cannot create " + libDir);
-
-        copyAsset(context.getAssets(), "proot/" + arch + "/proot", new File(prootDir, "proot"), 0700);
-        copyAsset(context.getAssets(), "proot/" + arch + "/loader", new File(prootDir, "loader"), 0700);
-        copyAsset(context.getAssets(), "proot/" + arch + "/libtalloc.so.2",
-                new File(libDir, "libtalloc.so.2"), 0600);
-        copyAsset(context.getAssets(), "proot/" + arch + "/libandroid-shmem.so",
-                new File(libDir, "libandroid-shmem.so"), 0600);
-
-        if (!homeDir(context).exists() && !homeDir(context).mkdirs()) {
-            throw new IOException("Cannot create " + homeDir(context));
-        }
-        if (!tmpDir(context).exists() && !tmpDir(context).mkdirs()) {
-            throw new IOException("Cannot create " + tmpDir(context));
-        }
+        ensureDirectory(homeDir(context));
+        ensureDirectory(tmpDir(context));
         ensureAptCache(context);
 
         createGuestRootfs(context);
@@ -154,38 +135,118 @@ public final class OpxRuntime {
     }
 
     /**
-     * Builds the proot filesystem view. The guest root only needs the mount points that the
-     * bind mounts in {@link #prootArgs(Context)} land on; the real prefix and home are bound
-     * onto the paths the Termux binaries were compiled with.
+     * Untars the packaged trees into the prefix. The arch-specific payload carries the mirrored
+     * Termux runtime (python, proot, libusb); the {@code all} payloads carry our own packages.
+     */
+    private static void extractPayloads(Context context, String arch, File prefix) throws Exception {
+        for (String dir : new String[]{"all", arch}) {
+            String[] names;
+            try {
+                names = context.getAssets().list("payload/" + dir);
+            } catch (IOException e) {
+                names = null;
+            }
+            if (names == null || names.length == 0) {
+                if ("all".equals(dir)) throw new IOException("No packaged payloads in the APK");
+                continue;
+            }
+            List<String> sorted = new ArrayList<>(Arrays.asList(names));
+            Collections.sort(sorted);
+            for (String name : sorted) {
+                if (!name.endsWith(".tar.gz")) continue;
+                extractTarGz(new File(context.getCacheDir(), "opx-" + name),
+                        context.getAssets().open("payload/" + dir + "/" + name),
+                        context.getFilesDir());
+            }
+        }
+        if (!new File(prefix, "bin/proot").isFile()) {
+            throw new IOException("The packaged runtime has no proot");
+        }
+    }
+
+    /** Streams a payload tar.gz into {@code files}, mapping guest paths onto the app home. */
+    private static void extractTarGz(File scratch, InputStream asset, File appFiles)
+            throws IOException {
+        try (InputStream in = new BufferedInputStream(asset, 1 << 16);
+             GzipCompressorInputStream gzip = new GzipCompressorInputStream(in, true);
+             TarArchiveInputStream tar = new TarArchiveInputStream(gzip)) {
+
+            TarArchiveEntry entry;
+            while ((entry = tar.getNextEntry()) != null) {
+                String name = entry.getName();
+                while (name.startsWith("./")) name = name.substring(2);
+                if (name.isEmpty()) continue;
+                if (name.startsWith(PAYLOAD_ROOT)) {
+                    name = name.substring(PAYLOAD_ROOT.length());
+                } else if (!name.startsWith("usr/") && !name.startsWith("home/")) {
+                    // Only the prefix and the home directory belong in the app home.
+                    continue;
+                }
+                if (name.contains("..")) continue;
+
+                File target = new File(appFiles, name);
+                if (entry.isDirectory()) {
+                    ensureDirectory(target);
+                    continue;
+                }
+                ensureDirectory(target.getParentFile());
+                if (entry.isSymbolicLink()) {
+                    try {
+                        if (target.exists()) target.delete();
+                        Os.symlink(entry.getLinkName(), target.getAbsolutePath());
+                    } catch (ErrnoException ignored) {
+                        // A stale link or an unsupported target: the next install recreates it.
+                    }
+                    continue;
+                }
+                try (FileOutputStream out = new FileOutputStream(target)) {
+                    byte[] buffer = new byte[1 << 16];
+                    int read;
+                    while ((read = tar.read(buffer)) != -1) out.write(buffer, 0, read);
+                }
+                int mode = entry.getMode() & 0777;
+                try {
+                    Os.chmod(target.getAbsolutePath(), mode == 0 ? 0644 : mode);
+                } catch (ErrnoException ignored) {
+                    // Default permissions are good enough for a non-executable file.
+                }
+            }
+        }
+        //noinspection ResultOfMethodCallIgnored
+        scratch.delete();
+    }
+
+    /** Recreates the apt cache tree the Termux packages expect inside the app cache. */
+    private static void ensureAptCache(Context context) throws IOException {
+        File apt = new File(cacheDir(context), "apt");
+        ensureDirectory(apt);
+        ensureDirectory(new File(apt, "archives"));
+        ensureDirectory(new File(apt, "archives/partial"));
+    }
+
+    /**
+     * Builds the proot filesystem view. The guest root only needs the mount points the bind
+     * mounts land on; the real prefix and home are bound onto the compiled-in Termux paths.
      */
     private static void createGuestRootfs(Context context) throws Exception {
         File rootfs = rootfsDir(context);
         deleteTree(rootfs);
 
         File termuxFiles = new File(rootfs, "data/data/com.termux/files");
-        if (!termuxFiles.mkdirs()) throw new IOException("Cannot create " + termuxFiles);
+        ensureDirectory(termuxFiles);
         ensureDirectory(new File(termuxFiles, "usr"));
         ensureDirectory(new File(termuxFiles, "home"));
         ensureDirectory(new File(rootfs, "data/data/com.termux/cache"));
         ensureDirectory(new File(rootfs, "tmp"));
         ensureDirectory(new File(rootfs, "sdcard"));
         ensureDirectory(new File(rootfs, "storage"));
-        // Mount point for the host linker configuration; without it the Android linker of every
-        // guest binary prints a warning on stderr, which in turn corrupts shell captures like
-        // "$(id -u 2>&1)" in the bootstrap maintenance scripts.
         ensureDirectory(new File(rootfs, "linkerconfig"));
     }
 
     /**
      * The host path to bind over the guest's empty {@code /linkerconfig}, or {@code null}.
-     * <p>
-     * Bionic prints "failed to find generated linker configuration" for every guest binary when the
-     * guest has no {@code ld.config.txt}, and the Android runtime executables (the {@code am} wrapper
-     * runs {@code /system/bin/app_process}) cannot resolve {@code /system/lib64} at all without it.
-     * The directory itself is not readable on every ROM, so the single file is preferred: proot can
-     * bind it as long as the app may read it, while binding the directory needs a traversable,
-     * listable {@code /linkerconfig}. When neither works the guest keeps its own empty directory and
-     * only the cosmetic warning remains.
+     * Bionic prints "failed to find generated linker configuration" for every guest binary when
+     * the guest has none, which corrupts shell captures like {@code "$(id -u 2>&1)"}.
      */
     private static String hostLinkerConfig() {
         File config = new File("/linkerconfig/ld.config.txt");
@@ -203,9 +264,8 @@ public final class OpxRuntime {
     }
 
     /**
-     * The bootstrap second stage insists on {@code id -u 2>&1} returning nothing but digits. Any
-     * warning on stderr (linker configuration, for example) breaks that check, so the capture is
-     * narrowed to stderr-less output. Only run once, by {@link #install(Context)}.
+     * The bootstrap second stage insists on {@code id -u 2>&1} returning nothing but digits.
+     * Any warning on stderr breaks that check, so the capture is narrowed to stdout only.
      */
     private static void patchSecondStageUidCheck(Context context) {
         File script = new File(prefixDir(context),
@@ -224,10 +284,7 @@ public final class OpxRuntime {
         }
     }
 
-    /**
-     * Idempotent touch-up for an already installed prefix, so an app update does not need a full
-     * reinstall to pick up runtime layout fixes. Blocking; call off the UI thread.
-     */
+    /** Idempotent touch-up for an installed prefix, so an app update avoids a full reinstall. */
     public static void repair(Context context) throws IOException {
         ensureDirectory(new File(rootfsDir(context), "linkerconfig"));
         ensureDirectory(new File(rootfsDir(context), "data/data/com.termux/files/usr"));
@@ -245,10 +302,8 @@ public final class OpxRuntime {
     }
 
     /**
-     * Builds {@code ~/storage} the same way the Termux app does after {@code termux-setup-storage}:
-     * the app process links the shared-storage directories into the home directory, because the
-     * broadcast the script sends is addressed to the Termux package itself. Safe to call repeatedly;
-     * blocking, call off the UI thread.
+     * Builds {@code ~/storage} the way {@code termux-setup-storage} does: the app links the
+     * shared-storage directories into the home directory. Safe to call repeatedly; blocking.
      */
     public static void setupStorage(Context context) {
         if (!hasStoragePermission(context)) return;
@@ -258,7 +313,7 @@ public final class OpxRuntime {
         File[] existing = storage.listFiles();
         if (existing != null) {
             for (File child : existing) {
-                // Only remove the links: recursing would delete what they point at (shared storage).
+                // Only remove the links: recursing would delete what they point at.
                 //noinspection ResultOfMethodCallIgnored
                 child.delete();
             }
@@ -311,7 +366,7 @@ public final class OpxRuntime {
     private static String readText(File file) throws IOException {
         StringBuilder text = new StringBuilder();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                new java.io.FileInputStream(file), "UTF-8"))) {
+                new FileInputStream(file), "UTF-8"))) {
             String line;
             while ((line = reader.readLine()) != null) text.append(line).append('\n');
         }
@@ -329,16 +384,13 @@ public final class OpxRuntime {
         }
     }
 
-    /**
-     * Runs a one-off shell command inside the bundled userland without a terminal, so app modules
-     * (the WiFi engine, scripts, future features) can use the runtime while the terminal stays
-     * closed. Blocking; call off the UI thread. stdout and stderr are merged into the result.
-     */
+    /** Runs a one-off shell command inside the userland. Blocking; call off the UI thread. */
     public static CommandResult run(Context context, String... command) {
         StringBuilder output = new StringBuilder();
         if (command == null || command.length == 0) return new CommandResult(-1, "");
 
-        List<String> argv = new ArrayList<>(Arrays.asList(prootArgs(context)));
+        List<String> argv = prootCommand(context);
+        argv.add(GUEST_PREFIX + "/bin/bash");
         argv.add("-c");
         argv.add(TextUtils.join(" ", command));
 
@@ -347,10 +399,7 @@ public final class OpxRuntime {
             ProcessBuilder builder = new ProcessBuilder(argv);
             builder.redirectErrorStream(true);
             builder.environment().clear();
-            for (String entry : environment(context)) {
-                int split = entry.indexOf('=');
-                builder.environment().put(entry.substring(0, split), entry.substring(split + 1));
-            }
+            applyEnvironment(builder, context);
             Process process = builder.start();
             try (BufferedReader in = new BufferedReader(
                     new InputStreamReader(process.getInputStream()))) {
@@ -364,14 +413,21 @@ public final class OpxRuntime {
         return new CommandResult(exitCode, output.toString());
     }
 
-    /** argv for the terminal session: proot [flags] bash -l. */
-    public static String[] prootArgs(Context context) {
+    /** argv that starts the headless engine; the app feeds it JSON lines on stdin. */
+    public static List<String> engineCommand(Context context) {
+        List<String> argv = prootCommand(context);
+        argv.add(GUEST_PREFIX + "/bin/python3");
+        argv.add(GUEST_PREFIX + "/lib/opx/python/opx_engine.py");
+        return argv;
+    }
+
+    /** The proot invocation plus its bind mounts, without a command to run. */
+    private static List<String> prootCommand(Context context) {
         List<String> argv = new ArrayList<>();
-        argv.add(new File(prootDir(context), "proot").getAbsolutePath());
+        argv.add(new File(prefixDir(context), "bin/proot").getAbsolutePath());
         argv.add("--link2symlink");
-        // Deliberately no "-0": faking uid 0 makes the bootstrap second stage abort with
-        // "The uid '0' returned by 'id -u' command is not valid", and packages are meant to be
-        // configured as the real app uid, exactly like upstream Termux.
+        // Deliberately no "-0": faking uid 0 makes the bootstrap second stage abort, and
+        // packages are meant to be configured as the real app uid, exactly like upstream Termux.
         argv.add("--kill-on-exit");
         argv.add("-r");
         argv.add(rootfsDir(context).getAbsolutePath());
@@ -386,8 +442,6 @@ public final class OpxRuntime {
             argv.add("-b");
             argv.add(linkerConfig);
         }
-        // The bootstrap was compiled for com.termux, so the real prefix and home have to answer
-        // on the guest paths baked into every Termux binary.
         argv.add("-b");
         argv.add(prefixDir(context).getAbsolutePath() + ":" + GUEST_PREFIX);
         argv.add("-b");
@@ -398,13 +452,13 @@ public final class OpxRuntime {
         argv.add(cacheDir(context).getAbsolutePath() + ":" + GUEST_CACHE);
         argv.add("-w");
         argv.add(GUEST_HOME);
-        argv.add(GUEST_PREFIX + "/bin/bash");
-        argv.add("-l");
-        return argv.toArray(new String[0]);
+        return argv;
     }
 
     public static String[] environment(Context context) {
-        File libDir = new File(prefixDir(context), "lib");
+        File prefix = prefixDir(context);
+        File lib = new File(prefix, "lib");
+        String pythonPath = pythonDir(context).getAbsolutePath();
         return new String[]{
                 "HOME=" + GUEST_HOME,
                 "PREFIX=" + GUEST_PREFIX,
@@ -415,46 +469,59 @@ public final class OpxRuntime {
                 "LANG=en_US.UTF-8",
                 "ANDROID_DATA=/data",
                 "ANDROID_ROOT=/system",
-                // What the Termux app exports for its own shell; the bootstrap maintenance
-                // scripts check these.
+                // What the Termux app exports for its own shell; the bootstrap scripts check these.
                 "TERMUX__UID=" + android.os.Process.myUid(),
                 "TERMUX__USER_ID=" + android.os.Process.myUid(),
                 "TERMUX_PREFIX=" + GUEST_PREFIX,
                 "TERMUX_PACKAGE_MANAGER=apt",
                 "TERMUX_PACKAGE_ARCH=" + termuxArch(),
-                // proot itself is a host process and resolves its libraries from the real prefix;
-                // the guest entries are what the mounted prefix binaries look for.
-                "LD_LIBRARY_PATH=" + libDir.getAbsolutePath() + ":" + GUEST_PREFIX + "/lib",
-                "PROOT_LOADER=" + new File(prootDir(context), "loader").getAbsolutePath(),
+                // The engine and the wifi4 modules live outside the prefix's site-packages so an
+                // apt upgrade of python cannot orphan them.
+                "PYTHONPATH=" + pythonPath,
+                "PYTHONUNBUFFERED=1",
+                // proot is a host process and resolves its libraries from the real prefix; the
+                // guest entries are what the mounted prefix binaries look for.
+                "LD_LIBRARY_PATH=" + lib.getAbsolutePath() + ":" + GUEST_PREFIX + "/lib",
+                "PROOT_LOADER=" + new File(prefix, "libexec/proot/loader").getAbsolutePath(),
                 "PROOT_TMP_DIR=" + tmpDir(context).getAbsolutePath()
         };
     }
 
+    /** Fills a ProcessBuilder with the userland environment. */
+    public static void applyEnvironment(ProcessBuilder builder, Context context) {
+        for (String entry : environment(context)) {
+            int split = entry.indexOf('=');
+            if (split > 0) {
+                builder.environment().put(entry.substring(0, split), entry.substring(split + 1));
+            }
+        }
+    }
+
     /**
      * Runs the bundled proot once with a throwaway command and returns {@code null} when the
-     * shell answers, or the captured output when starting it failed. Blocking; call off the UI
-     * thread. The result is also written to {@code files/opx-proot.log} for bug reports.
+     * shell answers, or the captured output when starting it failed. Blocking; the result is
+     * also written to {@code files/opx-proot.log} for bug reports.
      */
     public static String probe(Context context) {
-        List<String> command = new ArrayList<>(Arrays.asList(prootArgs(context)));
+        List<String> command = prootCommand(context);
+        command.add(GUEST_PREFIX + "/bin/bash");
         command.add("-c");
         command.add("echo OPX_PROBE_OK; echo PREFIX=$PREFIX; id");
 
         StringBuilder output = new StringBuilder();
         output.append("$ ").append(TextUtils.join(" ", command)).append('\n');
         boolean ok = false;
+        Process process = null;
         try {
             ProcessBuilder builder = new ProcessBuilder(command);
             builder.redirectErrorStream(true);
             builder.environment().clear();
-            for (String entry : environment(context)) {
-                int split = entry.indexOf('=');
-                builder.environment().put(entry.substring(0, split), entry.substring(split + 1));
-            }
-            Process process = builder.start();
+            applyEnvironment(builder, context);
+            process = builder.start();
+            final Process started = process;
             Thread reader = new Thread(() -> {
                 try (BufferedReader in = new BufferedReader(
-                        new InputStreamReader(process.getInputStream()))) {
+                        new InputStreamReader(started.getInputStream()))) {
                     String line;
                     while ((line = in.readLine()) != null) {
                         synchronized (output) {
@@ -485,6 +552,8 @@ public final class OpxRuntime {
             }
         } catch (Exception e) {
             output.append(e).append('\n');
+        } finally {
+            if (process != null) process.destroy();
         }
 
         String log = output.toString();
@@ -496,12 +565,12 @@ public final class OpxRuntime {
         return ok ? null : log;
     }
 
-    private static void extractBootstrap(AssetManager assets, String assetPath, File destination)
+    private static void extractBootstrap(Context context, String assetPath, File destination)
             throws Exception {
         byte[] buffer = new byte[8192];
         List<String[]> symlinks = new ArrayList<>();
 
-        try (InputStream asset = assets.open(assetPath);
+        try (InputStream asset = context.getAssets().open(assetPath);
              ZipInputStream zip = new ZipInputStream(asset)) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
@@ -539,18 +608,6 @@ public final class OpxRuntime {
 
         if (symlinks.isEmpty()) throw new IOException("No SYMLINKS.txt in the bootstrap archive");
         for (String[] symlink : symlinks) Os.symlink(symlink[0], symlink[1]);
-    }
-
-    private static void copyAsset(AssetManager assets, String assetPath, File destination, int mode)
-            throws Exception {
-        ensureDirectory(destination.getParentFile());
-        try (InputStream in = assets.open(assetPath);
-             FileOutputStream out = new FileOutputStream(destination)) {
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
-        }
-        Os.chmod(destination.getAbsolutePath(), mode);
     }
 
     private static void ensureDirectory(File directory) throws IOException {

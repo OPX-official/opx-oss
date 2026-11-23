@@ -33,16 +33,21 @@ jobs:
           set -e
           [ "$status" -eq 0 ] || exit "$status"
 
-      - name: Cache runtime assets
+      - name: Cache packaged runtime
         uses: actions/cache@v4
         with:
           path: |
             app/src/main/assets/bootstrap
-            app/src/main/assets/proot
-          key: opx-runtime-${{ hashFiles('tools/fetch-runtime.sh') }}
+            app/src/main/assets/payload
+            app/src/main/assets/index.json
+          key: opx-runtime-${{ hashFiles('tools/fetch-packages.sh') }}-${{ github.run_number }}
+          restore-keys: |
+            opx-runtime-
 
-      - name: Fetch bundled runtime
-        run: bash tools/fetch-runtime.sh
+      # Everything the APK ships is built by the Packages workflow and downloaded from the OPX
+      # package archive; nothing here talks to Termux's releases or packages.termux.dev.
+      - name: Fetch runtime from the OPX package archive
+        run: bash tools/fetch-packages.sh
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4

@@ -13,7 +13,7 @@ import androidx.fragment.app.Fragment;
 
 import com.google.android.material.navigation.NavigationView;
 
-/** Single-activity host: drawer navigation between WiFi, Home, Terminal and About. */
+/** Single-activity host: drawer navigation between WiFi, Home and About (there is no terminal). */
 public class MainActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener {
 
     private DrawerLayout drawer;
@@ -55,8 +55,6 @@ public class MainActivity extends AppCompatActivity implements NavigationView.On
         Fragment target;
         if (itemId == R.id.nav_home) {
             target = new HomeFragment();
-        } else if (itemId == R.id.nav_terminal) {
-            target = new TerminalFragment();
         } else if (itemId == R.id.nav_about) {
             target = new AboutFragment();
         } else {
