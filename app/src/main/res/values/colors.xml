@@ -1,13 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="opx_bg">#0B0B0F</color>
-    <color name="opx_surface">#16161E</color>
-    <color name="opx_surface_alt">#1E1E28</color>
-    <color name="opx_stroke">#2A2A36</color>
-    <color name="opx_accent">#AB47BC</color>
-    <color name="opx_accent_soft">#2A1730</color>
-    <color name="opx_text">#ECEAF3</color>
-    <color name="opx_muted">#8A8797</color>
-    <color name="opx_green">#3DDC97</color>
-    <color name="ic_launcher_background">#0B0B0F</color>
+    <!-- Stryker's palette, taken from its open-source res/values/colors.xml. -->
+    <color name="dialog_background_color">#FFFFFFFF</color>
+    <color name="stryker_accent">#1565C0</color>
+    <color name="stryker_accent_contrast">#304FFE</color>
+    <color name="stryker_logo_accent">#1565C0</color>
+
+    <color name="yellow">#F9A825</color>
+    <color name="red">#C62828</color>
+    <color name="green">#2E7D32</color>
+
+    <color name="light_contrast">#FFFFFF</color>
+    <color name="light_lite_contrast">#EDECEC</color>
+    <color name="night_contrast">#404040</color>
+    <color name="night_contrast_2">#1C1C1C</color>
+    <color name="grey">#757575</color>
+    <color name="toolbar_color">#ededed</color>
+    <color name="console">#000000</color>
+    <color name="row_locked">#61757575</color>
+
+    <color name="icon_tile_neutral">#E9EBEE</color>
+    <color name="tile_blue">#E3F2FD</color>
+    <color name="tile_cyan">#E0F7FA</color>
+    <color name="tile_green">#E8F5E9</color>
+    <color name="tile_indigo">#E8EAF6</color>
+    <color name="tile_orange">#FFF3E0</color>
+    <color name="tile_pink">#FCE4EC</color>
+    <color name="tile_purple">#F3E5F5</color>
+    <color name="tile_red">#FFEBEE</color>
+
+    <color name="accent_wifi">#1565C0</color>
+    <color name="accent_local">#AB47BC</color>
+    <color name="accent_handshakes">#00897B</color>
+    <color name="accent_utilities">#5E35B1</color>
+    <color name="status_booting">#F9A825</color>
+    <color name="status_offline">#9E9E9E</color>
+
+    <!-- OPX aliases: old names now resolve to the Stryker palette, so no screen can
+         fall back to the previous dark theme. -->
+    <color name="opx_bg">@color/light_contrast</color>
+    <color name="opx_surface">@color/light_contrast</color>
+    <color name="opx_surface_alt">@color/light_lite_contrast</color>
+    <color name="opx_stroke">@color/light_lite_contrast</color>
+    <color name="opx_accent">@color/stryker_accent</color>
+    <color name="opx_accent_soft">@color/tile_blue</color>
+    <color name="opx_text">@color/night_contrast_2</color>
+    <color name="opx_muted">@color/grey</color>
+    <color name="opx_green">@color/green</color>
+
+    <color name="ic_launcher_background">#1565C0</color>
 </resources>

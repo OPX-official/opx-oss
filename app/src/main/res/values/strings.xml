@@ -8,10 +8,19 @@
     <string name="nav_wifi">WiFi</string>
     <string name="nav_home">Home</string>
     <string name="nav_about">About</string>
+    <string name="nav_section_essentials">ESSENTIALS</string>
+    <string name="nav_section_wireless">WIRELESS</string>
+    <string name="nav_section_about">ABOUT</string>
+    <string name="nav_footer">Native runtime · authorized testing only</string>
 
     <string name="home_title">OPX OSS</string>
     <string name="home_subtitle">All-in-one wireless toolkit. No terminal, no second app: the engine runs inside OPX OSS.</string>
     <string name="home_runtime_title">Runtime</string>
+    <string name="home_section_runtime">RUNTIME</string>
+    <string name="home_runtime_ready">Native runtime</string>
+    <string name="home_runtime_path">%1$s · python · libusb</string>
+    <string name="home_module_logs_body">Every engine and USB line, with a copy button.</string>
+    <string name="home_footer">Like Termux + Termux:API in one native app — no second APK</string>
     <string name="home_runtime_value">Not installed yet</string>
     <string name="home_runtime_body">The bundled userland (proot, python, the wifi4 engine) installs on first launch.</string>
     <string name="home_modules_title">MODULES</string>
@@ -23,6 +32,19 @@
     <string name="wifi_title">WiFi</string>
     <string name="wifi_subtitle">USB adapter for monitor mode, built-in radio for a quick scan</string>
     <string name="wifi_section_status">STATUS</string>
+    <string name="wifi_section_networks">NETWORKS</string>
+    <string name="wifi_meta_interface">INTERFACE</string>
+    <string name="wifi_meta_adapters">ADAPTERS</string>
+    <string name="wifi_meta_channel">CHANNEL</string>
+    <string name="wifi_meta_source">Source</string>
+    <string name="wifi_status_scanning">Scanning for networks…</string>
+    <string name="wifi_status_ready">Ready</string>
+    <string name="wifi_engine_ready_version">Engine %1$s ready</string>
+    <string name="wifi_scan_done_short">%1$d networks found</string>
+    <string name="wifi_retry">Scan again</string>
+    <string name="wifi_chip_wps">WPS</string>
+    <string name="wifi_chip_lock">LOCK</string>
+    <string name="wifi_chip_5g">5G</string>
     <string name="wifi_iface_label">Interface</string>
     <string name="wifi_chipset_label">Chipset</string>
     <string name="wifi_engine_label">Engine</string>
@@ -55,12 +77,14 @@
     <string name="nav_logs">Logs</string>
     <string name="logs_title">Logs</string>
     <string name="logs_subtitle">Everything the app logged — copy it into a bug report</string>
-    <string name="logs_count">%1$d lines</string>
+    <string name="logs_count">%1$d lines · tap an icon to copy, share or clear</string>
     <string name="logs_copy">Copy all logs</string>
     <string name="logs_clear">Clear</string>
-    <string name="logs_empty">No logs yet</string>
+    <string name="logs_empty">No log entries yet.</string>
     <string name="logs_cleared">Logs cleared</string>
     <string name="logs_copied">All logs copied</string>
+    <string name="logs_share">Share logs</string>
+    <string name="logs_subject">OPX OSS logs</string>
 
     <string name="notification_channel_name">OPX engine</string>
     <string name="notification_channel_description">Keeps the OPX engine and the bundled runtime running.</string>

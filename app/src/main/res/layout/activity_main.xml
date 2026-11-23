@@ -4,38 +4,67 @@
     android:id="@+id/drawer_layout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/opx_bg"
-    android:fitsSystemWindows="true">
+    android:background="@color/light_contrast">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical">
 
-        <com.google.android.material.appbar.MaterialToolbar
-            android:id="@+id/toolbar"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
-            android:background="@color/opx_bg"
-            app:titleTextColor="@color/opx_text" />
+            android:background="@color/toolbar_color"
+            android:gravity="center_vertical"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp">
+
+            <ImageView
+                android:id="@+id/menu_img"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/drawer_open"
+                android:src="@drawable/menu"
+                app:tint="@color/night_contrast" />
+
+            <TextView
+                android:id="@+id/opx_main_logo"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:layout_weight="1"
+                android:fontFamily="sans-serif"
+                android:text="@string/app_name"
+                android:textColor="@color/night_contrast_2"
+                android:textSize="26sp"
+                android:textStyle="bold" />
+
+            <ImageView
+                android:id="@+id/settings_icon"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/nav_logs"
+                android:src="@drawable/settings"
+                app:tint="@color/night_contrast" />
+
+        </LinearLayout>
 
         <FrameLayout
             android:id="@+id/content_frame"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1" />
+            android:layout_weight="1"
+            android:background="@color/light_contrast" />
 
     </LinearLayout>
 
-    <com.google.android.material.navigation.NavigationView
+    <include
         android:id="@+id/nav_view"
-        android:layout_width="wrap_content"
+        layout="@layout/drawer_content"
+        android:layout_width="300dp"
         android:layout_height="match_parent"
-        android:layout_gravity="start"
-        android:background="@color/opx_surface"
-        app:headerLayout="@layout/nav_header"
-        app:itemIconTint="@color/opx_muted"
-        app:itemTextColor="@color/opx_text"
-        app:menu="@menu/drawer_menu" />
+        android:layout_gravity="start" />
 
 </androidx.drawerlayout.widget.DrawerLayout>

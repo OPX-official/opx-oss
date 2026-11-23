@@ -135,6 +135,7 @@ bash tools/fetch-packages.sh && ./gradlew assembleDebug
 ## Licence & credits
 
 GPL-3.0. The wireless engine is based on wifit3 by derv82, with OPX extensions; the base
-runtime is built from the open-source package set with OPX's own app identity.
+runtime is built from the open-source package set with OPX's own app identity. The interface
+follows the open-source StrykerOSS design (same licence), including a few of its icon vectors.
 
 **Disclaimer:** use only on networks and devices you own or are explicitly authorized to test.

@@ -1,66 +1,161 @@
 <?xml version="1.0" encoding="utf-8"?>
-<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    style="@style/OpxCard"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginBottom="8dp">
+    android:orientation="vertical">
 
     <LinearLayout
+        android:id="@+id/item"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:background="?attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:minHeight="68dp"
         android:orientation="horizontal"
-        android:paddingStart="16dp"
-        android:paddingTop="12dp"
-        android:paddingEnd="16dp"
-        android:paddingBottom="12dp">
+        android:paddingStart="14dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="14dp"
+        android:paddingBottom="10dp">
+
+        <FrameLayout
+            android:id="@+id/iconl"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="@drawable/settings_icon_bg">
+
+            <ImageView
+                android:id="@+id/icon_wifi"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:layout_gravity="center"
+                android:src="@drawable/wifi"
+                android:contentDescription="@string/wifi_title"
+                app:tint="@color/stryker_accent" />
+        </FrameLayout>
 
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginStart="14dp"
             android:layout_weight="1"
             android:orientation="vertical">
 
-            <TextView
-                android:id="@+id/wifi_name"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:textColor="@color/opx_text"
-                android:textSize="15sp"
-                android:textStyle="bold" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/wifi_name"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:singleLine="true"
+                    android:text="@string/wifi_hidden_ssid"
+                    android:textColor="@color/night_contrast_2"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/wps_mark"
+                    style="@style/OpxPill"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:backgroundTint="#D2F1E7"
+                    android:text="@string/wifi_chip_wps"
+                    android:textColor="#00695C"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/lock_mark"
+                    style="@style/OpxPill"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:backgroundTint="#FFD7DA"
+                    android:text="@string/wifi_chip_lock"
+                    android:textColor="#B71C1C"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/five_mark"
+                    style="@style/OpxPill"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:text="@string/wifi_chip_5g"
+                    android:visibility="gone" />
+            </LinearLayout>
 
             <TextView
-                android:id="@+id/wifi_meta"
+                android:id="@+id/wifi_bssid"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:ellipsize="end"
-                android:maxLines="1"
-                android:textColor="@color/opx_muted"
-                android:textSize="11sp" />
+                android:fontFamily="monospace"
+                android:singleLine="true"
+                android:text="00:00:00:00:00:00"
+                android:textColor="@color/grey"
+                android:textSize="10sp" />
 
             <TextView
-                android:id="@+id/wifi_badges"
-                android:layout_width="wrap_content"
+                android:id="@+id/wifi_model"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:textColor="@color/opx_accent"
-                android:textSize="10sp"
-                android:visibility="gone" />
-
+                android:layout_marginTop="1dp"
+                android:ellipsize="end"
+                android:singleLine="true"
+                android:text="@string/wifi_meta_source"
+                android:textColor="@color/grey"
+                android:textSize="11sp" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/wifi_signal"
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="center_vertical"
             android:layout_marginStart="10dp"
-            android:textColor="@color/opx_green"
-            android:textSize="12sp" />
+            android:gravity="center"
+            android:orientation="vertical">
 
+            <TextView
+                android:id="@+id/wifi_power"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/settings_value_chip_bg"
+                android:gravity="center"
+                android:minWidth="40dp"
+                android:paddingStart="8dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="4dp"
+                android:text="0%"
+                android:textColor="@color/night_contrast_2"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/iswps"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="@string/wifi_chip_wps"
+                android:textColor="@color/grey"
+                android:textSize="9sp"
+                android:visibility="gone" />
+        </LinearLayout>
     </LinearLayout>
 
-</com.google.android.material.card.MaterialCardView>
+    <View
+        android:id="@+id/wifi_item_divider"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginStart="68dp"
+        android:background="@color/light_lite_contrast" />
+</LinearLayout>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Destination tokens used by the drawer and the dashboard tiles. -->
+    <item name="nav_home" type="id" />
+    <item name="nav_wifi" type="id" />
+    <item name="nav_logs" type="id" />
+    <item name="nav_about" type="id" />
+</resources>
