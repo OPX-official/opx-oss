@@ -52,6 +52,7 @@ public final class UsbHostBridge {
     private final Context context;
     private final UsbManager usbManager;
     private final List<UsbDeviceConnection> openConnections = new ArrayList<>();
+    private final List<ParcelFileDescriptor> openDescriptors = new ArrayList<>();
 
     private Thread acceptThread;
     private LocalServerSocket server;
@@ -108,6 +109,16 @@ public final class UsbHostBridge {
             // Closing twice is harmless.
         }
         server = null;
+        synchronized (openDescriptors) {
+            for (ParcelFileDescriptor descriptor : openDescriptors) {
+                try {
+                    descriptor.close();
+                } catch (Exception ignored) {
+                    // Already closed together with its connection.
+                }
+            }
+            openDescriptors.clear();
+        }
         synchronized (openConnections) {
             for (UsbDeviceConnection connection : openConnections) {
                 try {
@@ -161,22 +172,19 @@ public final class UsbHostBridge {
                 write(socket, response);
                 return;
             }
-            // Duplicate, so the kernel keeps the connection usable after SCM_RIGHTS hands a copy
-            // to the engine.
-            ParcelFileDescriptor descriptor = ParcelFileDescriptor
-                    .dup(connection.getFileDescriptor());
+            // The connection owns the descriptor; SCM_RIGHTS gives the engine its own copy, so
+            // both stay usable and the wrapper must outlive the send (closed in shutdown()).
+            ParcelFileDescriptor descriptor =
+                    ParcelFileDescriptor.adoptFd(connection.getFileDescriptor());
             response.put("ok", true);
-            try {
-                setFileDescriptorsForSend(socket,
-                        new FileDescriptor[]{descriptor.getFileDescriptor()});
-                write(socket, response);
-                setFileDescriptorsForSend(socket, null);
-            } finally {
-                descriptor.close();
-            }
-            // Keep the connection alive for as long as the engine holds its duplicated fd.
+            setFileDescriptorsForSend(socket, new FileDescriptor[]{descriptor.getFileDescriptor()});
+            write(socket, response);
+            setFileDescriptorsForSend(socket, null);
             synchronized (openConnections) {
                 openConnections.add(connection);
+            }
+            synchronized (openDescriptors) {
+                openDescriptors.add(descriptor);
             }
             Log.i(TAG, "passed " + path + " to the engine");
             return;
