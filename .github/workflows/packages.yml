@@ -28,6 +28,9 @@ env:
   WIFI4_REPO: https://github.com/OPX-official/opx-wifi4.git
   # Pinned: the engine is built from this exact commit, never from a moving branch.
   WIFI4_COMMIT: 0654049fba6d53ea5fd5cddd541cbc4f860125e7
+  # Pinned termux-packages tree: the base runtime is built from this exact commit, so a
+  # bootstrap run cannot change under us between attempts. Bump deliberately, with a test run.
+  TERMUX_PACKAGES_COMMIT: e735b3bcf2746f12d1b0a4db8d1c4146a4591384
   PACKAGES_REPO: OPX-official/opx-packages
 
 jobs:

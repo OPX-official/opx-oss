@@ -58,12 +58,18 @@ trap 'rm -rf "$WORK"' EXIT
 log "termux-packages checkout (pinned by the workflow)"
 TP_SRC="${TP_SRC:-$WORK/termux-packages}"
 if [ ! -d "$TP_SRC/scripts" ]; then
-  git clone --depth 1 https://github.com/termux/termux-packages "$TP_SRC"
+  # Fetch one commit, not a moving branch: a bootstrap run costs the better part of an hour and
+  # must build the same tree every time. TERMUX_PACKAGES_COMMIT comes from packages.yml.
+  git init --quiet "$TP_SRC"
+  git -C "$TP_SRC" remote add origin https://github.com/termux/termux-packages
+  git -C "$TP_SRC" fetch --quiet --depth 1 origin "${TERMUX_PACKAGES_COMMIT:-master}"
+  git -C "$TP_SRC" checkout --quiet FETCH_HEAD
 fi
 BUILD_COMMIT="$(git -C "$TP_SRC" rev-parse HEAD)"
 log "termux-packages commit: $BUILD_COMMIT"
 
 python3 "$ROOT/tools/patch-properties.py" "$TP_SRC"
+python3 "$ROOT/tools/patch-bootstraps.py" "$TP_SRC" "$BASE_PACKAGES"
 
 # --------------------------------------------------------------- build per arch
 
