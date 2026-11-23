@@ -107,6 +107,42 @@ fetch_verified() { # url sha256 destination
   echo "  get     ${destination#"$ASSETS"/}"
 }
 
+# Every ABI the APK advertises has to be complete, or the failure only shows up on the phone:
+# the APK installs fine and then has no runtime to untar for that device.
+#
+#  * the bootstrap must exist and its bin/bash must be an ELF of the right width, so a
+#    cross-built or mislabelled archive cannot ship a 64-bit tree to 32-bit devices;
+#  * the base payload (python, libusb, bash, coreutils) must exist for the arch.
+assert_complete_arch() { # arch
+  local arch="$1"
+  local bootstrap="$ASSETS/bootstrap/bootstrap-$arch.zip"
+  if [ ! -f "$bootstrap" ]; then
+    echo "the archive carries no bootstrap-$arch.zip: the APK would have nothing to install on $arch devices" >&2
+    exit 1
+  fi
+  python3 - "$bootstrap" "$arch" <<'PYELF'
+import sys, zipfile
+
+path, arch = sys.argv[1], sys.argv[2]
+want = {"arm": 1, "i686": 1}.get(arch, 2)   # EI_CLASS: 1 = 32-bit, 2 = 64-bit
+want_bits = 32 if want == 1 else 64
+with zipfile.ZipFile(path) as z:
+    if "bin/bash" not in z.namelist():
+        sys.exit(f"{path}: no bin/bash in the bootstrap")
+    head = z.read("bin/bash")[:5]
+if head[:4] != b"\x7fELF":
+    sys.exit(f"{path}: bin/bash is not an ELF binary")
+if head[4] != want:
+    have = 64 if head[4] == 2 else 32
+    sys.exit(f"{path}: bin/bash is {have}-bit but {arch} is {want_bits}-bit")
+print(f"  check   bootstrap-{arch}.zip ({want_bits}-bit ELF)")
+PYELF
+  if ! compgen -G "$ASSETS/payload/$arch/opx-base_*.targz" > /dev/null; then
+    echo "the archive carries no base runtime payload for $arch (python, libusb, bash)" >&2
+    exit 1
+  fi
+}
+
 for arch in $ARCHES; do
   echo "== $arch bootstrap"
   while read -r url checksum path; do
@@ -119,6 +155,8 @@ for arch in $ARCHES; do
     [ -z "${url:-}" ] && continue
     fetch_verified "$url" "$checksum" "$ASSETS/payload/$arch/$(asset_name "$path")"
   done < <(artifact_url payload "$arch")
+
+  assert_complete_arch "$arch"
 done
 
 echo "== $arch-independent payloads"
@@ -126,6 +164,13 @@ while read -r url checksum path; do
   [ -z "${url:-}" ] && continue
   fetch_verified "$url" "$checksum" "$ASSETS/payload/all/$(asset_name "$path")"
 done < <(artifact_url payload all)
+
+for required in opx-wifi4 opx-runtime opx-usb; do
+  if ! compgen -G "$ASSETS/payload/all/${required}_*.targz" > /dev/null; then
+    echo "the archive carries no $required payload: the engine would be missing from the APK" >&2
+    exit 1
+  fi
+done
 
 cp "$WORK/index.json" "$ASSETS/index.json"
 

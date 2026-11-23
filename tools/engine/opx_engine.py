@@ -24,6 +24,7 @@ import asyncio
 import json
 import os
 import platform
+import struct
 import sys
 import time
 import traceback
@@ -50,6 +51,10 @@ def runtime_info():
         "prefix": os.environ.get("PREFIX"),
         "python": platform.python_version(),
         "platform": sys.platform,
+        # Which runtime tree this process is: "arm" (32-bit) and "aarch64" (64-bit) are
+        # separate builds, so a log line that names the machine settles every ABI question.
+        "machine": platform.machine(),
+        "pointer_bits": struct.calcsize("P") * 8,
     }
     try:
         import wifi4

@@ -84,8 +84,14 @@ public final class OpxRuntime {
         return new File(prefixDir(context), "lib/opx/python");
     }
 
-    public static String termuxArch() {
-        String abi = Build.SUPPORTED_ABIS.length > 0 ? Build.SUPPORTED_ABIS[0] : Build.CPU_ABI;
+    /**
+     * The runtime architecture for one Android ABI name, or {@code null} when this app has no
+     * runtime for it. {@code armeabi-v7a} is the 32-bit ARM phone build (Xiaomi, Redmi, Poco,
+     * Infinix and the rest run it whenever their userspace is 32-bit), {@code arm64-v8a} the
+     * 64-bit one; both are built and shipped, so the same APK runs on either.
+     */
+    private static String archForAbi(String abi) {
+        if (abi == null) return null;
         switch (abi) {
             case "arm64-v8a":
                 return "aarch64";
@@ -97,8 +103,53 @@ public final class OpxRuntime {
             case "x86_64":
                 return "x86_64";
             default:
-                throw new IllegalStateException("Unsupported ABI: " + abi);
+                return null;
         }
+    }
+
+    /** The device's primary ABI mapped to a runtime architecture. */
+    public static String termuxArch() {
+        String abi = Build.SUPPORTED_ABIS.length > 0 ? Build.SUPPORTED_ABIS[0] : Build.CPU_ABI;
+        String arch = archForAbi(abi);
+        if (arch == null) throw new IllegalStateException("Unsupported ABI: " + abi);
+        return arch;
+    }
+
+    /** Every runtime architecture this APK actually carries a bootstrap for. */
+    public static List<String> shippedArches(Context context) {
+        List<String> arches = new ArrayList<>();
+        try {
+            for (String name : context.getAssets().list("bootstrap")) {
+                if (name.startsWith("bootstrap-") && name.endsWith(".zip")) {
+                    arches.add(name.substring("bootstrap-".length(), name.length() - ".zip".length()));
+                }
+            }
+        } catch (IOException ignored) {
+            // An APK with no bootstrap assets at all: the caller reports it.
+        }
+        return arches;
+    }
+
+    /**
+     * The architecture to install on this device: the first ABI Android reports for which the
+     * APK carries a runtime. Reading the assets, not just {@code SUPPORTED_ABIS[0]}, keeps a
+     * device whose primary ABI came up short on the runtime it can actually run - a 64-bit
+     * phone with only the 32-bit tree present installs that one instead of failing.
+     */
+    public static String arch(Context context) {
+        List<String> candidates = new ArrayList<>();
+        Collections.addAll(candidates, Build.SUPPORTED_ABIS);
+        if (!TextUtils.isEmpty(Build.CPU_ABI)) candidates.add(Build.CPU_ABI);
+        if (!TextUtils.isEmpty(Build.CPU_ABI2)) candidates.add(Build.CPU_ABI2);
+
+        List<String> shipped = shippedArches(context);
+        for (String abi : candidates) {
+            String arch = archForAbi(abi);
+            if (arch != null && shipped.contains(arch)) return arch;
+        }
+        throw new IllegalStateException("This APK ships a runtime for "
+                + (shipped.isEmpty() ? "no architecture" : TextUtils.join("/", shipped))
+                + " but this device reports " + TextUtils.join(",", candidates));
     }
 
     /** Written last by {@link #install(Context)}: a half-extracted prefix is not "installed". */
@@ -111,7 +162,7 @@ public final class OpxRuntime {
 
     /** Extracts the bootstrap and every payload into the app's own prefix. Blocking. */
     public static void install(Context context) throws Exception {
-        String arch = termuxArch();
+        String arch = arch(context);
         File files = context.getFilesDir();
         File prefix = prefixDir(context);
         File staging = new File(files, "usr-staging");
@@ -404,6 +455,14 @@ public final class OpxRuntime {
         File prefix = prefixDir(context);
         File lib = new File(prefix, "lib");
         String pythonPath = pythonDir(context).getAbsolutePath();
+        // The installed arch, so apt and the engine agree with the tree on disk; before an
+        // install exists this falls back to the device's own ABI mapping.
+        String arch;
+        try {
+            arch = arch(context);
+        } catch (RuntimeException e) {
+            arch = termuxArch();
+        }
         return new String[]{
                 "HOME=" + HOME_GUEST,
                 "PREFIX=" + PREFIX_GUEST,
@@ -420,7 +479,7 @@ public final class OpxRuntime {
                 "TERMUX__USER_ID=" + android.os.Process.myUid(),
                 "TERMUX_PREFIX=" + PREFIX_GUEST,
                 "TERMUX_PACKAGE_MANAGER=apt",
-                "TERMUX_PACKAGE_ARCH=" + termuxArch(),
+                "TERMUX_PACKAGE_ARCH=" + arch,
                 // The engine and the wifi4 modules live outside the prefix's site-packages so an
                 // apt upgrade of python cannot orphan them.
                 "PYTHONPATH=" + pythonPath,

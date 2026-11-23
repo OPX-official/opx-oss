@@ -3,6 +3,7 @@ package com.opx.oss;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.util.Log;
 
 import org.json.JSONException;
@@ -57,6 +58,8 @@ public final class WifiBridge {
     private volatile boolean userStopped;
     private int restarts;
     private long restartWindowStart;
+    /** Termux holds a partial wakelock while a session runs; a scan has to outlive the screen. */
+    private PowerManager.WakeLock wakeLock;
 
     private WifiBridge(Context context) {
         this.context = context.getApplicationContext();
@@ -92,6 +95,7 @@ public final class WifiBridge {
         // The engine reaches the adapter through the in-app USB bridge, so it must be listening
         // before the process asks for its first device.
         UsbHostBridge.start(context);
+        acquireWakeLock();
         // pyusb needs the prefix's libusb visible; the shim must exist before python starts.
         OpxRuntime.ensureSiteShim(context);
 
@@ -152,6 +156,7 @@ public final class WifiBridge {
             running = false;
             if (wasRunning) {
                 AppLog.info(TAG, "engine process exited");
+                releaseWakeLock();
                 main.post(() -> notifyStopped("the engine stopped"));
                 maybeRestart();
             }
@@ -258,6 +263,38 @@ public final class WifiBridge {
         return object;
     }
 
+    /**
+     * Keeps the CPU awake for as long as the engine runs. Aggressive OEM power managers
+     * (Xiaomi/Redmi/Poco among them) suspend a backgrounded app between doze windows, which
+     * stalls USB bulk transfers mid-campaign; Termux holds the same lock while its sessions are
+     * live, so this is the behaviour wifi4 already ran under there.
+     */
+    private void acquireWakeLock() {
+        if (wakeLock != null && wakeLock.isHeld()) return;
+        try {
+            PowerManager power = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            if (power == null) return;
+            wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "opx:engine");
+            wakeLock.setReferenceCounted(false);
+            wakeLock.acquire();
+            AppLog.info(TAG, "wakelock held while the engine runs");
+        } catch (RuntimeException e) {
+            AppLog.info(TAG, "cannot hold a wakelock: " + e.getMessage());
+        }
+    }
+
+    private void releaseWakeLock() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+                AppLog.info(TAG, "wakelock released");
+            }
+        } catch (RuntimeException ignored) {
+            // Already released with the process.
+        }
+        wakeLock = null;
+    }
+
     /** Shuts the engine process down. The next {@link #start()} spawns a fresh one. */
     public synchronized void stop() {
         userStopped = true;
@@ -274,6 +311,7 @@ public final class WifiBridge {
         }
         stdin = null;
         UsbHostBridge.stop();
+        releaseWakeLock();
         AppLog.info(TAG, "engine stopped by the app");
     }
 }

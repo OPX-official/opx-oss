@@ -50,7 +50,8 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         }
         TextView arch = findViewById(R.id.drawer_arch_badge);
         try {
-            arch.setText(OpxRuntime.termuxArch());
+            // The runtime that is actually installed (32-bit phones show arm, 64-bit aarch64).
+            arch.setText(OpxRuntime.arch(MainActivity.this));
         } catch (RuntimeException ignored) {
             arch.setText("—");
         }

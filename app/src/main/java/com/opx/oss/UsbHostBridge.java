@@ -12,6 +12,7 @@ import android.net.LocalServerSocket;
 import android.net.LocalSocket;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
+import android.text.TextUtils;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -306,6 +307,23 @@ public final class UsbHostBridge {
         method.invoke(socket, (Object) descriptors);
     }
 
+    /**
+     * Which runtime tree is in use and which ABIs Android reports for this device: the one line
+     * that tells a 32-bit phone and a 64-bit one apart in a copied diagnosis.
+     */
+    private static String runtimeLine(Context context) {
+        String device = Build.SUPPORTED_ABIS.length > 0
+                ? TextUtils.join(",", Build.SUPPORTED_ABIS)
+                : String.valueOf(Build.CPU_ABI);
+        String arch;
+        try {
+            arch = OpxRuntime.arch(context);
+        } catch (RuntimeException e) {
+            arch = "none in this APK";
+        }
+        return arch + " (device ABIs: " + device + ")";
+    }
+
     /** Human readable one-line description, used by the WiFi screen. */
     public static String describe(UsbDevice device) {
         if (device == null) return "";
@@ -320,8 +338,8 @@ public final class UsbHostBridge {
     public static String diagnose(Context context) {
         StringBuilder text = new StringBuilder();
         text.append("OPX USB diagnosis\n");
-        text.append("app: ").append(context.getPackageName()).append('
-');
+        text.append("app: ").append(context.getPackageName()).append('\n');
+        text.append("runtime: ").append(runtimeLine(context)).append('\n');
         text.append("bridge socket: ").append(SOCKET_NAME)
                 .append(" (").append(instance != null && instance.running ? "listening" : "not listening")
                 .append(")\n");
@@ -333,23 +351,19 @@ public final class UsbHostBridge {
             return text.toString();
         }
         java.util.List<UsbDevice> devices = new ArrayList<>(manager.getDeviceList().values());
-        text.append("USB devices attached: ").append(devices.size()).append('
-');
+        text.append("USB devices attached: ").append(devices.size()).append('\n');
         for (UsbDevice device : devices) {
             text.append("- ").append(device.getDeviceName())
                     .append("  product=").append(device.getProductId())
                     .append(" vendor=").append(device.getVendorId())
                     .append(" permission=").append(manager.hasPermission(device) ? "granted" : "not granted")
-                    .append('
-');
+                    .append('\n');
         }
         if (devices.isEmpty()) {
             text.append("  (none — plug an OTG Wi-Fi adapter in and accept the permission prompt)\n");
         }
-        text.append("runtime prefix: ").append(OpxRuntime.PREFIX_GUEST).append('
-');
-        text.append("installed: ").append(OpxRuntime.isInstalled(context)).append('
-');
+        text.append("runtime prefix: ").append(OpxRuntime.PREFIX_GUEST).append('\n');
+        text.append("installed: ").append(OpxRuntime.isInstalled(context)).append('\n');
         AppLog.info(TAG, text.toString().replace('\n', " | "));
         return text.toString();
     }
