@@ -18,8 +18,13 @@ import sys
 
 # The only variables that are fork-safe per properties.sh's own comments. LNAME/UNAME and the
 # app display names are derived from TERMUX__NAME, so changing it changes those too.
+#
+# TERMUX__NAME must not contain whitespace: packages/termux-core/build.sh passes it (and
+# TERMUX_APP__NAME) to make unquoted, so "OPX OSS" splits into two make targets and the
+# build dies with "No rule to make target 'OSS'". The hyphenated name is what gets compiled
+# in; the app's visible name comes from the APK's own resources.
 REPLACES = [
-    ('TERMUX__NAME="Termux"', 'TERMUX__NAME="OPX OSS"'),
+    ('TERMUX__NAME="Termux"', 'TERMUX__NAME="OPX-OSS"'),
     ('TERMUX_APP__PACKAGE_NAME="com.termux"', 'TERMUX_APP__PACKAGE_NAME="com.opx.oss"'),
     ('TERMUX_API_APP__PACKAGE_NAME="com.termux.api"', 'TERMUX_API_APP__PACKAGE_NAME="com.opx.oss.api"'),
     ('TERMUX_APP__NAMESPACE="com.termux"', 'TERMUX_APP__NAMESPACE="com.opx.oss"'),
@@ -59,6 +64,19 @@ def main() -> int:
         print("properties.sh does not contain the expected fork points:", file=sys.stderr)
         for one in missing:
             print("  " + one, file=sys.stderr)
+        return 1
+
+    # No whitespace in the identity names: termux-core hands both to make unquoted.
+    spaced = [
+        line.strip() for line in text.splitlines()
+        if __import__("re").match(
+            r'(TERMUX__NAME|TERMUX_APP__NAME)="[^"]*\s[^"]*"', line.strip())
+    ]
+    if spaced:
+        print("properties.sh assigns a name with whitespace (termux-core passes it unquoted "
+              "to make):", file=sys.stderr)
+        for line in spaced:
+            print("  " + line, file=sys.stderr)
         return 1
 
     # The file documents the defaults in comments (wiki links, "Default value: com.termux");
