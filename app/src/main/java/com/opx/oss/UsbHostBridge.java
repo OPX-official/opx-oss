@@ -11,7 +11,6 @@ import android.hardware.usb.UsbManager;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
 import android.os.ParcelFileDescriptor;
-import android.system.Os;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -162,8 +161,10 @@ public final class UsbHostBridge {
                 write(socket, response);
                 return;
             }
-            int duplicated = Os.dup(connection.getFileDescriptor());
-            ParcelFileDescriptor descriptor = ParcelFileDescriptor.adoptFd(duplicated);
+            // Duplicate, so the kernel keeps the connection usable after SCM_RIGHTS hands a copy
+            // to the engine.
+            ParcelFileDescriptor descriptor = ParcelFileDescriptor
+                    .dup(connection.getFileDescriptor());
             response.put("ok", true);
             try {
                 setFileDescriptorsForSend(socket,
