@@ -27,7 +27,7 @@ concurrency:
 env:
   WIFI4_REPO: https://github.com/OPX-official/opx-wifi4.git
   # Pinned: the engine is built from this exact commit, never from a moving branch.
-  WIFI4_COMMIT: 0654049669dfb8c2af8d70f27c766eaadc1d8c28
+  WIFI4_COMMIT: 0654049fba6d53ea5fd5cddd541cbc4f860125e7
   PACKAGES_REPO: OPX-official/opx-packages
 
 jobs:

@@ -11,3 +11,8 @@ captures/
 *.keystore
 *.jks
 !app/testkey.jks
+
+# Python byte-code from the packaging scripts
+__pycache__/
+*.pyc
+build/packages/
