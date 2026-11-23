@@ -9,14 +9,16 @@
 #   app/src/main/assets/index.json                       the catalogue that was used
 #
 # Environment:
-#   ARCHES      ABIs to fetch (default: all four)
+#   ARCHES      ABIs to fetch (default: the two phone ABIs; set all four for emulators)
 #   PACKAGES_BASE_URL   archive root (default: the gh-pages raw URL)
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ASSETS="$ROOT/app/src/main/assets"
-ARCHES="${ARCHES:-aarch64 arm i686 x86_64}"
+# Every phone OPX OSS targets is arm; x86/i686 only matter for emulators, where the adapter path
+# cannot work anyway. The archive still carries all four (set ARCHES to add them to the APK).
+ARCHES="${ARCHES:-aarch64 arm}"
 PACKAGES_BASE_URL="${PACKAGES_BASE_URL:-https://raw.githubusercontent.com/OPX-official/opx-packages/gh-pages}"
 INDEX_URL="$PACKAGES_BASE_URL/index.json"
 
