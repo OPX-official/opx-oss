@@ -10,6 +10,7 @@ import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
@@ -244,9 +245,17 @@ public final class UsbHostBridge {
         };
         context.registerReceiver(receiver, new IntentFilter(ACTION_PERMISSION));
         try {
+            // Android fills the answer into this PendingIntent's extras (EXTRA_DEVICE and
+            // EXTRA_PERMISSION_GRANTED); an immutable intent cannot receive those fill-ins,
+            // so this uses FLAG_MUTABLE like Termux:API does. The grant itself is still read
+            // back with hasPermission(), so the extras are only belt and braces.
+            int pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                pendingFlags |= PendingIntent.FLAG_MUTABLE;
+            }
             PendingIntent pending = PendingIntent.getBroadcast(context, 0,
                     new Intent(ACTION_PERMISSION).setPackage(context.getPackageName()),
-                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                    pendingFlags);
             usbManager.requestPermission(device, pending);
             boolean answeredInTime = answered.await(120, TimeUnit.SECONDS);
             if (!answeredInTime) {

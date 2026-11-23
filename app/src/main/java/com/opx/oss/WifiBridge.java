@@ -91,6 +91,8 @@ public final class WifiBridge {
         // The engine reaches the adapter through the in-app USB bridge, so it must be listening
         // before the process asks for its first device.
         UsbHostBridge.start(context);
+        // pyusb needs the prefix's libusb visible; the shim must exist before python starts.
+        OpxRuntime.ensureSiteShim(context);
 
         List<String> command = OpxRuntime.engineCommand(context);
         ProcessBuilder builder = new ProcessBuilder(command);

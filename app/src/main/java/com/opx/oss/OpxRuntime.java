@@ -123,6 +123,7 @@ public final class OpxRuntime {
         AppLog.info("OpxRuntime", "bootstrap in place");
 
         extractPayloads(context, arch, prefix);
+        ensureSiteShim(context);
 
         ensureDirectory(homeDir(context));
         ensureDirectory(tmpDir(context));
@@ -135,6 +136,28 @@ public final class OpxRuntime {
         setupStorage(context);
 
         AppLog.info("OpxRuntime", "install finished");
+    }
+
+    /**
+     * pyusb loads libusb with {@code ctypes.util.find_library}, which asks ldconfig, gcc and ld
+     * — none of which exist inside an app runtime — so it reports "No backend available" even
+     * though the prefix ships libusb. The shim lives in the PYTHONPATH directory the app sets,
+     * and CPython's {@code site} module imports it before any user code runs.
+     */
+    static void ensureSiteShim(Context context) {
+        File pythonDir = pythonDir(context);
+        if (!pythonDir.isDirectory() && !pythonDir.mkdirs()) return;
+        File target = new File(pythonDir, "sitecustomize.py");
+        try (InputStream in = context.getAssets().open("python/sitecustomize.py");
+             FileOutputStream out = new FileOutputStream(target)) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = in.read(buffer)) > 0) {
+                out.write(buffer, 0, count);
+            }
+        } catch (IOException e) {
+            AppLog.info("OpxRuntime", "cannot write the python site shim: " + e.getMessage());
+        }
     }
 
     /**
