@@ -67,22 +67,25 @@ asset_name() {
 
 # The APK may only ship a runtime compiled for this app's prefix. An archive built before the
 # native switch still carries the other app's paths; fail here instead of shipping it.
-assert_native() { # destination
-  local destination="$1"
-  case "$destination" in
+assert_native() { # final-name file-to-scan
+  local name="$1" scan="$2"
+  local found=0
+  case "$name" in
     *.targz|*.tar.gz)
-      if tar -xzOf "$destination" 2>/dev/null | grep -aq "com\.termux"; then
-        echo "foreign prefix in $destination: run the Packages workflow first" >&2
-        exit 1
-      fi
+      # Names AND file contents: a compiled binary only carries the prefix inside itself.
+      # "|| true" keeps a SIGPIPE from tar (grep -q stops early) out of the pipefail status.
+      if { tar -tzf "$scan" 2>/dev/null || true; tar -xzOf "$scan" 2>/dev/null || true; } \
+          | grep -aq "com\.termux"; then found=1; fi
       ;;
     *.zip)
-      if unzip -p "$destination" 2>/dev/null | grep -aq "com\.termux"; then
-        echo "foreign prefix in $destination: run the Packages workflow first" >&2
-        exit 1
-      fi
+      if { unzip -Z1 "$scan" 2>/dev/null || true; unzip -p "$scan" 2>/dev/null || true; } \
+          | grep -aq "com\.termux"; then found=1; fi
       ;;
   esac
+  if [ "$found" = "1" ]; then
+    echo "foreign prefix in $name: the archive predates the native runtime; run the Packages workflow" >&2
+    exit 1
+  fi
 }
 
 fetch_verified() { # url sha256 destination
@@ -99,7 +102,7 @@ fetch_verified() { # url sha256 destination
     echo "checksum mismatch for $url: expected $expected, got $actual" >&2
     exit 1
   fi
-  assert_native "$destination.tmp"
+  assert_native "$destination" "$destination.tmp"
   mv "$destination.tmp" "$destination"
   echo "  get     ${destination#"$ASSETS"/}"
 }

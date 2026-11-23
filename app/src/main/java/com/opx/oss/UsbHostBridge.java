@@ -292,18 +292,16 @@ public final class UsbHostBridge {
      */
     public static String diagnose(Context context) {
         StringBuilder text = new StringBuilder();
-        text.append("OPX USB diagnosis
-");
+        text.append("OPX USB diagnosis\n");
         text.append("app: ").append(context.getPackageName()).append('
 ');
         text.append("bridge socket: ").append(SOCKET_NAME)
-                .append(" (").append(instance != null && instance.running ? "listening" : "not listening").append(")
-");
+                .append(" (").append(instance != null && instance.running ? "listening" : "not listening")
+                .append(")\n");
 
         UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
         if (manager == null) {
-            text.append("UsbManager: unavailable
-");
+            text.append("UsbManager: unavailable\n");
             AppLog.info(TAG, text.toString().replace('\n', " | "));
             return text.toString();
         }
@@ -319,8 +317,7 @@ public final class UsbHostBridge {
 ');
         }
         if (devices.isEmpty()) {
-            text.append("  (none — plug an OTG Wi-Fi adapter in and accept the permission prompt)
-");
+            text.append("  (none — plug an OTG Wi-Fi adapter in and accept the permission prompt)\n");
         }
         text.append("runtime prefix: ").append(OpxRuntime.PREFIX_GUEST).append('
 ');
