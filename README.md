@@ -3,7 +3,7 @@
 > A wireless engine, its USB host bridge and a guided interface — one APK, no terminal.
 > Authorized testing only.
 
-**Package:** `com.opx.oss` · **Version:** 0.2.0-alpha.1 · **Min SDK:** 23 (Android 6.0) · **Licence:** GPL-3.0
+**Package:** `com.opx.oss` · **Version:** 0.2.0-alpha.2 · **Min SDK:** 23 (Android 6.0) · **Licence:** GPL-3.0
 
 ---
 

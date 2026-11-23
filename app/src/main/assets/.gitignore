@@ -1,3 +1,4 @@
-# Downloaded by tools/fetch-runtime.sh during the build - never committed.
+# Downloaded by tools/fetch-packages.sh during the build - never committed.
 /bootstrap/
-/proot/
+/payload/
+/index.json

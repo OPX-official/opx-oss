@@ -40,12 +40,22 @@ kind, arch = sys.argv[2], sys.argv[3]
 for entry in index.get("packages", []):
     if entry.get("kind") != kind:
         continue
-    if arch != "all" and entry.get("arch") not in (arch, "all"):
-        continue
-    if arch == "all" and entry.get("arch") != "all":
+    # Exact match: architecture-independent packages are fetched once, by the "all" pass.
+    if entry.get("arch") != arch:
         continue
     print(entry["url"], entry["sha256"], entry["path"])
 PY
+}
+
+# AAPT rewrites an asset whose name ends in .gz ("x.tar.gz" lands in the APK as "x.tar"),
+# so the packaged payloads use a suffix it leaves alone.
+asset_name() {
+  local name
+  name="$(basename "$1")"
+  case "$name" in
+    *.tar.gz) printf '%s.targz\n' "${name%.tar.gz}" ;;
+    *) printf '%s\n' "$name" ;;
+  esac
 }
 
 fetch_verified() { # url sha256 destination
@@ -76,14 +86,14 @@ for arch in $ARCHES; do
   echo "== $arch payloads"
   while read -r url checksum path; do
     [ -z "${url:-}" ] && continue
-    fetch_verified "$url" "$checksum" "$ASSETS/payload/$arch/$(basename "$path")"
+    fetch_verified "$url" "$checksum" "$ASSETS/payload/$arch/$(asset_name "$path")"
   done < <(artifact_url payload "$arch")
 done
 
 echo "== $arch-independent payloads"
 while read -r url checksum path; do
   [ -z "${url:-}" ] && continue
-  fetch_verified "$url" "$checksum" "$ASSETS/payload/all/$(basename "$path")"
+  fetch_verified "$url" "$checksum" "$ASSETS/payload/all/$(asset_name "$path")"
 done < <(artifact_url payload all)
 
 cp "$WORK/index.json" "$ASSETS/index.json"

@@ -153,7 +153,9 @@ public final class OpxRuntime {
             List<String> sorted = new ArrayList<>(Arrays.asList(names));
             Collections.sort(sorted);
             for (String name : sorted) {
-                if (!name.endsWith(".tar.gz")) continue;
+                // fetch-packages.sh renames .tar.gz to .targz: AAPT strips a trailing .gz from
+                // asset names, which would leave the packager looking for files that do not exist.
+                if (!name.endsWith(".targz") && !name.endsWith(".tar.gz")) continue;
                 extractTarGz(new File(context.getCacheDir(), "opx-" + name),
                         context.getAssets().open("payload/" + dir + "/" + name),
                         context.getFilesDir());

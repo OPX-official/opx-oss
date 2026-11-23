@@ -67,7 +67,7 @@ def collect(out: pathlib.Path, base_url: str) -> list[dict]:
         relative = path.relative_to(out).as_posix()
         if relative.startswith(("dists/", "index.json")):
             continue
-        if path.name.endswith((".sha256", ".tmp")):
+        if path.name.endswith((".sha256", ".tmp")) or path.name == "base-lock.json":
             continue
         if relative.startswith("pool/"):
             kind = "deb"
