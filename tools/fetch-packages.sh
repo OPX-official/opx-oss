@@ -33,6 +33,27 @@ sha256() {
 echo "== index $INDEX_URL"
 curl -fsSL --retry 3 -o "$WORK/index.json" "$INDEX_URL"
 
+# Drop assets for ABIs this build does not ship. The cache restores the previous run's tree, so
+# without this an x86 payload from an earlier run would still end up in the APK.
+for dir in "$ASSETS"/payload/*/; do
+  [ -d "$dir" ] || continue
+  arch="$(basename "$dir")"
+  [ "$arch" = "all" ] && continue
+  case " $ARCHES " in
+    *" $arch "*) ;;
+    *) echo "  prune   payload/$arch"; rm -rf "$dir" ;;
+  esac
+done
+for file in "$ASSETS"/bootstrap/*.zip; do
+  [ -f "$file" ] || continue
+  arch="$(basename "$file" .zip)"
+  arch="${arch#bootstrap-}"
+  case " $ARCHES " in
+    *" $arch "*) ;;
+    *) echo "  prune   bootstrap/$arch"; rm -f "$file" ;;
+  esac
+done
+
 # artifact_url <kind> <arch>  -> one URL per line
 artifact_url() {
   python3 - "$WORK/index.json" "$1" "$2" <<'PY'
