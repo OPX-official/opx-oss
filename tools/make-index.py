@@ -80,6 +80,11 @@ def collect(out: pathlib.Path, base_url: str) -> list[dict]:
         else:
             continue
         name, version, arch = split_name(path)
+        if kind == "bootstrap":
+            # "bootstrap-aarch64.zip" carries neither a version nor an underscore, so the arch
+            # has to come from the file name itself.
+            name, version = "bootstrap", "base"
+            arch = path.stem[len("bootstrap-"):] if path.stem.startswith("bootstrap-") else "all"
         entry = {
             "name": name,
             "version": version,
