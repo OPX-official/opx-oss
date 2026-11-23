@@ -28,7 +28,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${OUT:-$ROOT/build/packages}"
 WIFI4_SRC="${WIFI4_SRC:-$ROOT/../references/opx-wifi4}"
 ARCHES="${ARCHES:-aarch64 arm i686 x86_64}"
-WITH_BASE="${WITH_BASE:-1}"
+# Accept the GitHub Actions boolean ("true"/"false") as well as 1/0/yes/no.
+case "${WITH_BASE:-1}" in
+  1|true|TRUE|True|yes|YES) WITH_BASE=1 ;;
+  *) WITH_BASE=0 ;;
+esac
 VERSION="${VERSION:-$(date -u +%Y.%m.%d)}"
 
 PREFIX_REL="data/data/com.termux/files/usr"
