@@ -75,6 +75,10 @@
     <string name="wifi_usb_copy">Copy</string>
     <string name="wifi_usb_diagnosed">Diagnosis updated</string>
     <string name="wifi_usb_copied">Copied</string>
+    <string name="cmd_dialog_usb_title">USB adapter</string>
+    <string name="cmd_hint_usb">$ifc is the interface, $ch is the channel. Android grants USB access when the adapter is attached — accept the permission dialog, then the adapter comes up.</string>
+    <string name="cmd_cancel">Close</string>
+    <string name="wifi_usb_grant">Scan</string>
     <string name="nav_logs">Logs</string>
     <string name="logs_title">Logs</string>
     <string name="logs_subtitle">Everything the app logged — copy it into a bug report</string>

@@ -201,9 +201,13 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         bridge.scan(25);
     }
 
+    /** Stryker-style pop-up: the descriptor identity first, then the full diagnosis on the card. */
     private void diagnose() {
-        usbDiag.setText(UsbHostBridge.diagnose(requireContext()));
-        Snackbar.make(requireView(), R.string.wifi_usb_diagnosed, Snackbar.LENGTH_SHORT).show();
+        String text = UsbHostBridge.diagnose(requireContext());
+        usbDiag.setText(text);
+        new UsbDialog(getString(R.string.cmd_dialog_usb_title), text,
+                getString(R.string.wifi_usb_grant), this::scan)
+                .show(getParentFragmentManager(), "usb_dialog");
     }
 
     @Override

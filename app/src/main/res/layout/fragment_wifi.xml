@@ -4,7 +4,8 @@
     android:id="@+id/refresh"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/light_contrast">
+    android:background="@color/light_contrast"
+    android:layoutAnimation="@anim/layout_stagger_up">
 
     <androidx.core.widget.NestedScrollView
         android:layout_width="match_parent"
@@ -444,6 +445,7 @@
 
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/wifilist"
+                    android:layoutAnimation="@anim/layout_stagger_up"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:clipToPadding="false"

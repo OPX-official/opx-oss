@@ -138,8 +138,11 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         } else {
             target = new HomeFragment();
         }
+        // Stryker's screen transition: fade + settle, both directions.
         getSupportFragmentManager()
                 .beginTransaction()
+                .setCustomAnimations(R.anim.nav_fade_enter, R.anim.nav_fade_exit,
+                        R.anim.nav_fade_enter, R.anim.nav_fade_exit)
                 .replace(R.id.content_frame, target)
                 .commit();
 
