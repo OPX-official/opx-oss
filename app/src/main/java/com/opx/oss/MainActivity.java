@@ -18,6 +18,8 @@ import androidx.fragment.app.Fragment;
  */
 public class MainActivity extends AppCompatActivity implements OpxService.Listener {
 
+    private static final int REQUEST_STORAGE = 3;
+
     private DrawerLayout drawer;
     private int currentItem = -1;
     private TextView runtimeStatus;
@@ -70,6 +72,7 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         // The engine starts with the app, not with a screen: the runtime is installed and kept
         // warm so the USB bridge and the WiFi engine are usable from any tab.
         OpxService.start(this);
+        requestStorageOnce();
 
         if (savedInstanceState == null) {
             open(R.id.nav_home);
@@ -147,6 +150,24 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         drawer.closeDrawer(GravityCompat.START);
     }
 
+    /** targetSdk 28: storage is an ordinary runtime permission, needed for {@code ~/storage}. */
+    private void requestStorageOnce() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) return;
+        if (OpxRuntime.hasStoragePermission(this)) return;
+        requestPermissions(new String[]{android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_STORAGE);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQUEST_STORAGE) return;
+        if (OpxRuntime.hasStoragePermission(this)) {
+            new Thread(() -> OpxRuntime.setupStorage(this), "opx-storage").start();
+        }
+    }
+
     @Override
     public void onBackPressed() {
         if (drawer.isDrawerOpen(GravityCompat.START)) {
@@ -165,6 +186,6 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
 
     @Override
     public void onEngineExited() {
-        runOnUiThread(() -> runtimeStatus.setText(R.string.wifi_state_no_adapter));
+        runOnUiThread(() -> runtimeStatus.setText(R.string.engine_stopped));
     }
 }

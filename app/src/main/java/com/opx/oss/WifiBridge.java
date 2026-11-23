@@ -56,6 +56,7 @@ public final class WifiBridge {
     private volatile boolean running;
     private volatile boolean userStopped;
     private int restarts;
+    private long restartWindowStart;
 
     private WifiBridge(Context context) {
         this.context = context.getApplicationContext();
@@ -168,9 +169,21 @@ public final class WifiBridge {
         }
     }
 
-    /** One restart after an unexpected exit, so a flaky engine run self-heals. */
+    /**
+     * Restarts an engine that died unexpectedly, at most three times per ten minutes so a
+     * crash loop cannot spin forever.
+     */
     private void maybeRestart() {
-        if (userStopped || restarts >= 1) return;
+        if (userStopped) return;
+        long now = System.currentTimeMillis();
+        if (restartWindowStart == 0 || now - restartWindowStart > 10 * 60 * 1000L) {
+            restartWindowStart = now;
+            restarts = 0;
+        }
+        if (restarts >= 3) {
+            AppLog.info(TAG, "not restarting the engine again: three restarts in ten minutes");
+            return;
+        }
         restarts++;
         OpxService service = OpxService.get();
         if (service == null || service.getState() != OpxService.STATE_READY) return;
@@ -230,8 +243,9 @@ public final class WifiBridge {
         send(command);
     }
 
+    /** Cancels a running scan and keeps the adapter alive; {@link #stop()} ends the process. */
     public void stopScan() {
-        send(json("cmd", "stop"));
+        send(json("cmd", "stop_scan"));
     }
 
     private static JSONObject json(String key, String value) {

@@ -65,7 +65,8 @@ public class LogsFragment extends Fragment {
         String text = AppLog.snapshot();
         if (text.isEmpty()) text = AppLog.readFile(requireContext());
         logView.setText(text.isEmpty() ? getString(R.string.logs_empty) : text);
-        countView.setText(getString(R.string.logs_count, AppLog.size()));
+        int lines = text.isEmpty() ? 0 : text.split("\n").length;
+        countView.setText(getString(R.string.logs_count, lines));
         scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
     }
 

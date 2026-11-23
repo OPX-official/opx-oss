@@ -86,15 +86,16 @@ public final class UsbHostBridge {
         running = true;
         acceptThread = new Thread(() -> {
             while (running) {
-                try (LocalSocket socket = server.accept()) {
-                    if (socket.getPeerCredentials().getUid() != android.os.Process.myUid()) {
-                        Log.w(TAG, "rejected a request from another uid");
-                        continue;
-                    }
-                    handle(socket);
+                try {
+                    LocalSocket accepted = server.accept();
+                    // One request per thread: a permission dialog can block a request for up
+                    // to two minutes, and the device poller must not queue behind it.
+                    Thread worker = new Thread(() -> serve(accepted), "opx-usb-request");
+                    worker.setDaemon(true);
+                    worker.start();
                 } catch (Exception e) {
                     if (running) {
-                        Log.w(TAG, "USB bridge request failed", e);
+                        Log.w(TAG, "USB bridge accept failed", e);
                         AppLog.error(TAG, e);
                     }
                 }
@@ -103,6 +104,23 @@ public final class UsbHostBridge {
         acceptThread.setDaemon(true);
         acceptThread.start();
         Log.i(TAG, "USB bridge listening on " + SOCKET_NAME);
+    }
+
+    /** One request: only this app's own processes may use the bridge. */
+    private void serve(LocalSocket socket) {
+        try (LocalSocket open = socket) {
+            if (Build.VERSION.SDK_INT >= 24
+                    && open.getPeerCredentials().getUid() != android.os.Process.myUid()) {
+                Log.w(TAG, "rejected a request from another uid");
+                return;
+            }
+            handle(open);
+        } catch (Exception e) {
+            if (running) {
+                Log.w(TAG, "USB bridge request failed", e);
+                AppLog.error(TAG, e);
+            }
+        }
     }
 
     private void shutdown() {

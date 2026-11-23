@@ -101,8 +101,12 @@ public final class OpxRuntime {
         }
     }
 
+    /** Written last by {@link #install(Context)}: a half-extracted prefix is not "installed". */
+    private static final String INSTALL_MARKER = ".opx-installed";
+
     public static boolean isInstalled(Context context) {
-        return new File(prefixDir(context), "bin/bash").isFile();
+        File prefix = prefixDir(context);
+        return new File(prefix, INSTALL_MARKER).isFile() && new File(prefix, "bin/bash").isFile();
     }
 
     /** Extracts the bootstrap and every payload into the app's own prefix. Blocking. */
@@ -134,6 +138,17 @@ public final class OpxRuntime {
         ensureDirectory(new File(prefix, "var/lib/apt/lists/partial"));
         ensureDirectory(new File(prefix, "var/cache/apt/archives/partial"));
         setupStorage(context);
+
+        String version;
+        try {
+            version = context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            version = "unknown";
+        }
+        try (FileOutputStream marker = new FileOutputStream(new File(prefix, INSTALL_MARKER))) {
+            marker.write((version + "\n").getBytes("UTF-8"));
+        }
 
         AppLog.info("OpxRuntime", "install finished");
     }

@@ -3,7 +3,6 @@
     <string name="app_name">OPX OSS</string>
     <string name="drawer_open">Open menu</string>
     <string name="drawer_close">Close menu</string>
-    <string name="nav_header_tagline">Wireless engine, one app</string>
 
     <string name="nav_wifi">WiFi</string>
     <string name="nav_home">Home</string>
@@ -43,6 +42,7 @@
     <string name="wifi_scan_done_short">%1$d networks found</string>
     <string name="wifi_retry">Scan again</string>
     <string name="wifi4_missing">wifi4 unavailable: %1$s</string>
+    <string name="engine_stopped">Engine stopped</string>
     <string name="wifi_chip_wps">WPS</string>
     <string name="wifi_chip_lock">LOCK</string>
     <string name="wifi_chip_5g">5G</string>

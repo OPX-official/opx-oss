@@ -28,7 +28,7 @@ import sys
 import time
 import traceback
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 def emit(event, **fields):
@@ -279,6 +279,17 @@ class Engine:
 
         self.scan_task.add_done_callback(finished)
 
+    async def stop_scan(self):
+        """Cancels a running scan but keeps the adapter (and the process) alive."""
+        self.scanning = False
+        if self.scan_task is not None and not self.scan_task.done():
+            self.scan_task.cancel()
+            try:
+                await self.scan_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        emit("scan_done", count=0, cancelled=True)
+
     async def stop(self):
         self.scanning = False
         if self.scan_task is not None and not self.scan_task.done():
@@ -325,6 +336,8 @@ async def main():
                 await engine.status()
             elif name == "scan":
                 await engine.scan(command.get("seconds"))
+            elif name == "stop_scan":
+                await engine.stop_scan()
             elif name == "stop":
                 await engine.stop()
                 return 0

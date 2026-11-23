@@ -85,6 +85,39 @@ for arch in $ARCHES; do
     echo "no bootstrap-$arch.zip produced" >&2; tail -50 "$WORK/build-$arch.log"; exit 1
   fi
 
+  # The upstream bootstrap ships apt sources pointing at Termux's own archive. Rewrite them to
+  # the OPX archive so apt/pkg inside this app can only ever install OPX-built packages.
+  OUR_REPO="${OUR_REPO:-https://raw.githubusercontent.com/OPX-official/opx-packages/gh-pages/}"
+  python3 - "$boot" "$OUR_REPO" <<'PYAPT'
+import pathlib, sys, zipfile
+
+boot = pathlib.Path(sys.argv[1])
+repo = sys.argv[2].rstrip("/") + "/"
+content = ("# OPX OSS package archive, built by this repository's Packages workflow.\n"
+           f"deb [trusted=yes] {repo} stable main\n")
+target = "etc/apt/sources.list"
+
+tmp = boot.with_suffix(".rewrite")
+with zipfile.ZipFile(boot) as src, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
+    if target not in src.namelist():
+        sys.exit(f"{boot}: no {target} to rewrite")
+    for info in src.infolist():
+        data = src.read(info.filename)
+        if info.filename == target:
+            data = content.encode("utf-8")
+        dst.writestr(info, data)
+tmp.replace(boot)
+
+with zipfile.ZipFile(boot) as check:
+    for name in check.namelist():
+        if not name.endswith((".list", ".conf", ".sources")) and name != target:
+            continue
+        text = check.read(name).decode("utf-8", "replace")
+        if "termux.dev" in text or "termux-main" in text:
+            sys.exit(f"{boot}:{name} still points at the other package archive")
+print(f"  sources.list -> {repo}")
+PYAPT
+
   # Merge the built .debs for this arch into one payload tar: that is what the app installs.
   merge="$WORK/merge-$arch"
   mkdir -p "$merge"
