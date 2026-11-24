@@ -1,6 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OPX OSS</string>
+
+    <!-- First-run welcome, Stryker's intro with this app's four steps. -->
+    <string name="intro_welcome_title">Welcome to OPX OSS</string>
+    <string name="intro_welcome_body">The wireless engine, its USB host bridge and the guided interface in one app — no terminal and no companion app.</string>
+    <string name="intro_permissions_title">One permission</string>
+    <string name="intro_permissions_body">Storage access lets the bundled runtime unpack into the app and keeps its logs available to share.</string>
+    <string name="intro_engine_title">The engine installs itself</string>
+    <string name="intro_engine_body">On first launch the app unpacks proot, python and wifi4 into its own private directory. Watch the progress on the Home screen.</string>
+    <string name="intro_ready_title">Ready to scan</string>
+    <string name="intro_ready_body">The engine stays warm in the background, so every screen sees the same state — and WiFi works the moment you open it.</string>
+    <string name="intro_next">Continue</string>
+    <string name="intro_skip">Skip</string>
+    <string name="intro_start">Get started</string>
     <string name="drawer_open">Open menu</string>
     <string name="drawer_close">Close menu</string>
 
@@ -15,14 +28,15 @@
     <string name="home_title">OPX OSS</string>
     <string name="home_subtitle">All-in-one wireless toolkit. No terminal, no second app: the engine runs inside OPX OSS.</string>
     <string name="home_runtime_title">Runtime</string>
-    <string name="home_section_runtime">RUNTIME</string>
+    <string name="home_section_runtime">Runtime</string>
     <string name="home_runtime_ready">Native runtime</string>
     <string name="home_runtime_path">%1$s · python · libusb</string>
     <string name="home_module_logs_body">Every engine and USB line, with a copy button.</string>
     <string name="home_footer">The wireless engine and its USB bridge in one native app</string>
     <string name="home_runtime_value">Not installed yet</string>
     <string name="home_runtime_body">The bundled userland (proot, python, the wifi4 engine) installs on first launch.</string>
-    <string name="home_modules_title">MODULES</string>
+    <string name="home_modules_title">Quick access</string>
+    <string name="home_hero_scan">Scan WiFi networks</string>
     <string name="home_module_wifi">WiFi</string>
     <string name="home_module_wifi_body">Scan, capture and audit nearby networks.</string>
     <string name="home_module_soon">Soon</string>
@@ -141,5 +155,8 @@
     <string name="about_version_unknown">Version unknown</string>
     <string name="about_body">OPX OSS is one app: the wireless engine, its USB host bridge and the guided interface. Everything it needs is installed from within the app — there is no separate terminal and no companion app.</string>
     <string name="about_license">Licensed under the GNU GPL v3.0. wifi4 is based on wifit3 by derv82.</string>
+    <string name="about_section_what">What it is</string>
+    <string name="about_section_legal">Legal</string>
+    <string name="about_footer_oss">OPX OSS · open-source build · GNU GPL v3.0</string>
     <string name="about_disclaimer">Use only on networks and devices you own or are explicitly authorized to test.</string>
 </resources>

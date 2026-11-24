@@ -28,6 +28,43 @@
     <color name="tile_pink">#FCE4EC</color>
     <color name="tile_purple">#F3E5F5</color>
     <color name="tile_red">#FFEBEE</color>
+    <color name="tile_teal">#E0F2F1</color>
+
+    <!-- The rest of Stryker's palette, so every icon, tile, gradient and animation it ships
+         resolves to the same colour it does in the reference app. -->
+    <color name="welcome_ink">#3B82F6</color>
+    <color name="welcome_line_1">#A6C8FF</color>
+    <color name="welcome_line_2">#4A90E2</color>
+    <color name="welcome_line_3">#FFFFFF</color>
+    <color name="welcome_logo_tile">#EAF1FB</color>
+    <color name="welcome_logo_stroke">#D3E2F7</color>
+    <color name="intro_ink">#1565C0</color>
+    <color name="intro_line_1">#A6C8FF</color>
+    <color name="intro_line_2">#7FB3F0</color>
+    <color name="intro_line_3">#FFFFFF</color>
+    <color name="intro_chip_bg">#140A2540</color>
+    <color name="intro_dot">#33002E5C</color>
+    <color name="intro_dot_active">#1565C0</color>
+    <color name="intro_surface">#E6FFFFFF</color>
+    <color name="intro_outline">#2A0A2540</color>
+    <color name="thanks_text">#0B2B45</color>
+    <color name="thanks_text_dim">#42708F</color>
+    <color name="thanks_chip_fill">#14000000</color>
+    <color name="thanks_chip_stroke">#22105A8C</color>
+    <color name="dash_surface">#F4F4F7</color>
+    <color name="dash_surface_high">#EAEAEF</color>
+    <color name="dash_secondary">#757575</color>
+    <color name="accent_router">#2E7D32</color>
+    <color name="accent_nuclei">#3949AB</color>
+    <color name="accent_exploits">#EF6C00</color>
+    <color name="accent_metasploit">#C62828</color>
+    <color name="accent_vm">#1E88E5</color>
+    <color name="accent_chroot">#2E7D32</color>
+    <color name="accent_geomac">#00838F</color>
+    <color name="local_circle">#ffffff</color>
+    <color name="device_img">#757575</color>
+    <color name="itemcolor">#DBF3FD</color>
+    <color name="toolbar_darkness_color">#fff</color>
 
     <color name="accent_wifi">#1565C0</color>
     <color name="accent_local">#AB47BC</color>

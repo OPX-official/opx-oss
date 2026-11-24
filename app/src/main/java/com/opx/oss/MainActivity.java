@@ -1,5 +1,6 @@
 package com.opx.oss;
 
+import android.content.Intent;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.ImageView;
@@ -81,6 +82,12 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
 
         if (savedInstanceState == null) {
             open(R.id.nav_home);
+            // Stryker's intro, once per install; the app keeps working behind it.
+            if (!getSharedPreferences("opx", MODE_PRIVATE).getBoolean("intro_seen", false)) {
+                getSharedPreferences("opx", MODE_PRIVATE).edit()
+                        .putBoolean("intro_seen", true).apply();
+                startActivity(new Intent(this, IntroActivity.class));
+            }
         }
     }
 

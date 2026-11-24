@@ -34,7 +34,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="10dp"
                 android:layout_weight="1"
-                android:fontFamily="sans-serif"
+                android:fontFamily="@font/lato"
                 android:text="@string/app_name"
                 android:textColor="@color/night_contrast_2"
                 android:textSize="26sp"

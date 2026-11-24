@@ -41,6 +41,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Stryker's first-run welcome: four slides, each with its own animation. -->
+        <activity
+            android:name=".IntroActivity"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.Opx" />
+
         <!-- The engine: installs the packaged userland, owns the headless wifi4 process and the
              USB host bridge, and keeps the ongoing notification with Exit. -->
         <service

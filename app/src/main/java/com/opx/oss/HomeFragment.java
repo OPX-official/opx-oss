@@ -10,12 +10,16 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 
+import com.airbnb.lottie.LottieAnimationView;
+
 /** Dashboard: the runtime card plus module tiles, like Stryker's home screen. */
 public class HomeFragment extends Fragment implements OpxService.Listener {
 
     private TextView runtimeValue;
     private TextView runtimeBody;
     private TextView runtimeChip;
+    private LottieAnimationView engineAnim;
+    private int animRes = -1;
 
     @Nullable
     @Override
@@ -30,9 +34,13 @@ public class HomeFragment extends Fragment implements OpxService.Listener {
         runtimeValue = view.findViewById(R.id.home_runtime_value);
         runtimeBody = view.findViewById(R.id.home_runtime_body);
         runtimeChip = view.findViewById(R.id.home_runtime_chip);
+        engineAnim = view.findViewById(R.id.home_engine_anim);
 
+        view.findViewById(R.id.home_hero_scan).setOnClickListener(v -> open(R.id.nav_wifi));
         view.findViewById(R.id.home_module_wifi).setOnClickListener(v -> open(R.id.nav_wifi));
         view.findViewById(R.id.home_module_logs).setOnClickListener(v -> open(R.id.nav_logs));
+        view.findViewById(R.id.home_row_settings).setOnClickListener(v -> open(R.id.nav_settings));
+        view.findViewById(R.id.home_row_about).setOnClickListener(v -> open(R.id.nav_about));
         applyState();
     }
 
@@ -57,29 +65,47 @@ public class HomeFragment extends Fragment implements OpxService.Listener {
                 runtimeValue.setText(R.string.home_runtime_ready);
                 runtimeBody.setText(getString(R.string.home_runtime_path, OpxRuntime.PREFIX_GUEST));
                 runtimeChip.setText(R.string.wifi_state_ready);
+                showAnim(R.raw.hello);
                 break;
             case OpxService.STATE_FAILED:
                 runtimeValue.setText(R.string.wifi_state_failed);
                 runtimeBody.setText(getString(R.string.wifi_usb_error,
                         String.valueOf(OpxService.getError())));
                 runtimeChip.setText("!");
+                showAnim(R.raw.error);
                 break;
             case OpxService.STATE_INSTALLING:
                 runtimeValue.setText(R.string.notification_state_installing);
                 runtimeBody.setText(R.string.home_runtime_body);
                 runtimeChip.setText("…");
+                showAnim(R.raw.connection);
                 break;
             case OpxService.STATE_STOPPED:
                 runtimeValue.setText(R.string.engine_stopped);
                 runtimeBody.setText(R.string.home_runtime_body);
                 runtimeChip.setText("—");
+                showAnim(R.raw.nothing);
                 break;
             default:
                 runtimeValue.setText(R.string.notification_state_starting);
                 runtimeBody.setText(R.string.home_runtime_body);
                 runtimeChip.setText("…");
+                showAnim(R.raw.connection);
                 break;
         }
+    }
+
+    /**
+     * The state animation, exactly where Stryker puts its own: connection while the engine is
+     * coming up, the greeting once it is ready, error when it failed and the empty loop when it
+     * is stopped. Only swapped when the state really changed, so the loop is not restarted on
+     * every resume.
+     */
+    private void showAnim(int res) {
+        if (engineAnim == null || animRes == res) return;
+        animRes = res;
+        engineAnim.setAnimation(res);
+        engineAnim.playAnimation();
     }
 
     private void open(int itemId) {
