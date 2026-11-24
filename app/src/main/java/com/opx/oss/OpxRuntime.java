@@ -565,7 +565,7 @@ public final class OpxRuntime {
         } catch (IOException ignored) {
             // Diagnostics are best effort only.
         }
-        AppLog.info("OpxRuntime", "probe " + (ok ? "OK" : "FAILED") + ": " + log.replace('\n', " | "));
+        AppLog.info("OpxRuntime", "probe " + (ok ? "OK" : "FAILED") + ": " + log.replace("\n", " | "));
         return ok ? null : log;
     }
 

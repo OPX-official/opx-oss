@@ -203,8 +203,8 @@ public final class UsbHostBridge {
             // both stay usable and the wrapper must outlive the send (closed in shutdown()).
             // Hand a duplicate to the engine: the connection keeps owning its own fd, so the
             // two close paths (ParcelFileDescriptor / UsbDeviceConnection) never fight.
-            int duplicated = android.system.Os.dup(connection.getFileDescriptor());
-            ParcelFileDescriptor descriptor = ParcelFileDescriptor.adoptFd(duplicated);
+            ParcelFileDescriptor descriptor =
+                    ParcelFileDescriptor.dup(fileDescriptor(connection.getFileDescriptor()));
             response.put("ok", true);
             setFileDescriptorsForSend(socket, new FileDescriptor[]{descriptor.getFileDescriptor()});
             write(socket, response);
@@ -347,7 +347,7 @@ public final class UsbHostBridge {
         UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
         if (manager == null) {
             text.append("UsbManager: unavailable\n");
-            AppLog.info(TAG, text.toString().replace('\n', " | "));
+            AppLog.info(TAG, text.toString().replace("\n", " | "));
             return text.toString();
         }
         java.util.List<UsbDevice> devices = new ArrayList<>(manager.getDeviceList().values());
@@ -364,7 +364,20 @@ public final class UsbHostBridge {
         }
         text.append("runtime prefix: ").append(OpxRuntime.PREFIX_GUEST).append('\n');
         text.append("installed: ").append(OpxRuntime.isInstalled(context)).append('\n');
-        AppLog.info(TAG, text.toString().replace('\n', " | "));
+        AppLog.info(TAG, text.toString().replace("\n", " | "));
         return text.toString();
+    }
+
+    /** A FileDescriptor around a raw fd, only to hand it to ParcelFileDescriptor.dup(). */
+    private static FileDescriptor fileDescriptor(int raw) {
+        FileDescriptor descriptor = new FileDescriptor();
+        try {
+            java.lang.reflect.Field field = FileDescriptor.class.getDeclaredField("descriptor");
+            field.setAccessible(true);
+            field.setInt(descriptor, raw);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("cannot wrap fd " + raw, e);
+        }
+        return descriptor;
     }
 }
