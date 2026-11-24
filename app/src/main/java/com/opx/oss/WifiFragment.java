@@ -14,6 +14,8 @@ import android.content.pm.PackageManager;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -116,6 +118,21 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     private boolean scanning;
     private int adapters;
     private int lastChannel;
+    /**
+     * wifi4 acquires the USB descriptor on its own poller thread, so the first answer can be
+     * empty even with the card plugged in. Ask again while this screen is visible; the engine
+     * answers with whatever the poller has acquired by then.
+     */
+    private final Handler deviceRefreshHandler = new Handler(Looper.getMainLooper());
+    private final Runnable deviceRefresh = new Runnable() {
+        @Override
+        public void run() {
+            if (!isAdded() || !isResumed()) return;
+            WifiBridge bridge = WifiBridge.get(requireContext());
+            if (bridge.isRunning()) bridge.requestDevices();
+            deviceRefreshHandler.postDelayed(this, 5000);
+        }
+    };
 
     @Nullable
     @Override
@@ -225,11 +242,14 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         applyEngineState();
         requireContext().registerReceiver(scanReceiver,
                 new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION));
+        deviceRefreshHandler.removeCallbacks(deviceRefresh);
+        deviceRefreshHandler.postDelayed(deviceRefresh, 5000);
     }
 
     @Override
     public void onPause() {
         super.onPause();
+        deviceRefreshHandler.removeCallbacks(deviceRefresh);
         WifiBridge.get(requireContext()).removeListener(this);
         OpxService.removeListener(this);
         try {
@@ -275,6 +295,12 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             return;
         }
         if (scanning) return;
+        if (attackRunning) {
+            // Channel hopping for a scan would pull the radio off the campaign's target.
+            Snackbar.make(requireView(), R.string.wifi_scan_attack_running,
+                    Snackbar.LENGTH_LONG).show();
+            return;
+        }
         scanning = true;
         adapter.clear();
         bands.clear();
@@ -402,6 +428,19 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             ifaceValue.setText(R.string.wifi_state_no_adapter);
             ifaceMeta.setText("—");
             statusValue.setText(R.string.wifi_usb_unplugged);
+            // Everything on the list came from that radio; a stale row cannot be attacked.
+            adapter.clear();
+            bands.clear();
+            updateBand();
+            targets = null;
+            targetsReason = "";
+            lastChannel = 0;
+            channelValue.setText("—");
+            updateCount();
+            if (sheet != null) {
+                sheet.dismiss();
+                sheet = null;
+            }
             attackRunning = false;
             if (attackMonitor != null) {
                 attackMonitor.dismiss();

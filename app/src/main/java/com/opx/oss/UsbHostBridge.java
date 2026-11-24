@@ -264,7 +264,14 @@ public final class UsbHostBridge {
     private List<String> devicePaths() {
         List<String> paths = new ArrayList<>();
         if (usbManager == null) return paths;
-        for (String name : usbManager.getDeviceList().keySet()) paths.add(name);
+        // wifi4's poller requests a descriptor for everything this returns. Restrict it to the
+        // adapters (and ZeroCD stubs) its chip catalogue knows, so other USB hardware never
+        // triggers a permission dialog; UsbIds falls back to every device if its asset is
+        // missing, which keeps this from ever hiding the adapter entirely.
+        for (UsbDevice device : usbManager.getDeviceList().values()) {
+            if (!UsbIds.known(context, device)) continue;
+            paths.add(device.getDeviceName());
+        }
         return paths;
     }
 

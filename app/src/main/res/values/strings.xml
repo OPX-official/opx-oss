@@ -83,6 +83,7 @@
     <string name="wifi_scan">Scan with USB adapter</string>
     <string name="wifi_scan_builtin">Scan built-in radio</string>
     <string name="wifi_scanning">Scanning…</string>
+    <string name="wifi_scan_attack_running">An attack is running. Stop it before scanning again.</string>
     <string name="wifi_empty_title">No networks yet</string>
     <string name="wifi_empty_body">Plug in a supported USB Wi-Fi adapter and run a scan, or use the built-in radio.</string>
     <string name="wifi_networks">%1$d networks</string>

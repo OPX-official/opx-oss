@@ -45,7 +45,15 @@ import time
 import traceback
 from pathlib import Path
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
+
+# A cold start races wifi4's USB poller: its first reconcile still has to list the devices and
+# ask the app for a descriptor, so the very first `devices` answer is legitimately empty. Wait
+# for it instead of reporting "no adapter" and giving up, and keep a few retries after
+# usb_waiting so a permission dialog answered a second later still ends in usb_attached.
+ADAPTER_WAIT_SECONDS = 6.0
+DEVICES_WAIT_SECONDS = 1.5
+ATTACH_RETRY_DELAYS = (3.0, 8.0)
 
 # Campaign logs and status lines are rich markup ("[bold cyan]..[/]"); the app draws plain text.
 MARKUP = re.compile(r"\[[^\[\]]*\]")
@@ -297,6 +305,8 @@ class Engine:
         self.crack_task = None
         # One interface bring-up at a time: an attach can race a scan's first connect.
         self._connecting = None
+        # A bounded background retry after usb_waiting; cancelled by usb_lost/stop.
+        self._attach_retry = None
 
     async def ping(self):
         emit("ready", version=VERSION, native=bool(os.environ.get("PREFIX")),
@@ -309,7 +319,7 @@ class Engine:
             emit("error", message=f"cannot import the wifi4 USB layer: {type(exc).__name__}: {exc}")
             return
 
-        found = await asyncio.to_thread(list_devices)
+        found = await self._wait_for_devices(DEVICES_WAIT_SECONDS)
         devices = [
             {
                 "chipset": getattr(d, "chipset", None),
@@ -333,23 +343,34 @@ class Engine:
             pass
         emit("devices", **fields)
 
-    async def connect(self):
+    async def _wait_for_devices(self, timeout):
+        """wifi4's supported devices, waiting up to ``timeout`` for the USB poller's first fd."""
+        from wifi4.device.manager import devices as list_devices
+
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        found = await asyncio.to_thread(list_devices)
+        while not found and time.monotonic() < deadline:
+            await asyncio.sleep(0.5)
+            found = await asyncio.to_thread(list_devices)
+        return found
+
+    async def connect(self, wait=ADAPTER_WAIT_SECONDS):
         """Brings the first supported adapter up once, even if two callers ask together."""
         if self.iface is not None:
             return self.iface
         if self._connecting is not None:
             return await self._connecting
-        self._connecting = asyncio.create_task(self._connect())
+        self._connecting = asyncio.create_task(self._connect(wait))
         try:
             return await self._connecting
         finally:
             self._connecting = None
 
-    async def _connect(self):
-        from wifi4.device.manager import devices as list_devices, wlan_iface
+    async def _connect(self, wait=ADAPTER_WAIT_SECONDS):
+        from wifi4.device.manager import wlan_iface
         from wifi4.wlan.array import WlanArray
 
-        found = await asyncio.to_thread(list_devices)
+        found = await self._wait_for_devices(wait)
         if not found:
             raise RuntimeError(
                 "no supported USB Wi-Fi adapter found; plug one in through an OTG adapter"
@@ -366,26 +387,66 @@ class Engine:
         log(f"interface {iface.name} connected ({found[0].description})")
         return iface
 
+    def _announce_attached(self, iface, already=False):
+        emit("usb_attached", iface=iface.name,
+             chipset=getattr(iface, "chipset", None),
+             mac=getattr(iface, "mac_address", None), already=already)
+
+    def _cancel_attach_retry(self):
+        task = self._attach_retry
+        self._attach_retry = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _schedule_attach_retry(self):
+        if self._attach_retry is not None and not self._attach_retry.done():
+            return
+        self._attach_retry = asyncio.create_task(self._retry_attach())
+
+    async def _retry_attach(self):
+        """After usb_waiting, try again while the card is still plugged in.
+
+        The permission dialog can be answered after the first wait ends; without this the app
+        would sit on "waiting for adapter" until the user happened to press Scan.
+        """
+        try:
+            for delay in ATTACH_RETRY_DELAYS:
+                await asyncio.sleep(delay)
+                if self.iface is not None:
+                    return
+                try:
+                    iface = await self.connect(wait=1.5)
+                except Exception:  # noqa: BLE001 - no card/no permission is a normal state
+                    continue
+                self._announce_attached(iface)
+                return
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if self._attach_retry is asyncio.current_task():
+                self._attach_retry = None
+
     async def usb_attach(self):
         """The app already holds the adapter's permission: bring wifi4's interface up now.
 
         This is what makes plugging the card in enough: no scan, no WiFi screen, no terminal.
         """
         if self.iface is not None:
-            emit("usb_attached", iface=self.iface.name,
-                 chipset=getattr(self.iface, "chipset", None), already=True)
+            self._cancel_attach_retry()
+            self._announce_attached(self.iface, already=True)
             return
         try:
             iface = await self.connect()
         except Exception as exc:  # noqa: BLE001 - no card or no permission is a normal state
             emit("usb_waiting", message=f"{type(exc).__name__}: {exc}")
+            self._schedule_attach_retry()
             return
-        emit("usb_attached", iface=iface.name,
-             chipset=getattr(iface, "chipset", None),
-             mac=getattr(iface, "mac_address", None))
+        self._cancel_attach_retry()
+        self._announce_attached(iface)
 
     async def usb_lost(self):
         """The adapter was unplugged: park any campaign and drop the stale interface."""
+        self._cancel_attach_retry()
         campaign = self.campaign
         if campaign is not None and not campaign.done:
             try:
@@ -461,6 +522,10 @@ class Engine:
         """Runs the scan as a task so `devices`, `status` and `stop` stay responsive."""
         if self.scan_task is not None and not self.scan_task.done():
             emit("error", message="a scan is already running")
+            return
+        if self.campaign is not None and not self.campaign.done:
+            # Hopping the radio away would break the campaign's channel lock.
+            emit("error", message="an attack is running: stop it before scanning")
             return
         self.scan_task = asyncio.create_task(self._scan(float(seconds or 20)))
 
@@ -1095,6 +1160,7 @@ class Engine:
 
     async def stop(self):
         self.scanning = False
+        self._cancel_attach_retry()
         if self.campaign is not None and not self.campaign.done:
             self.campaign.request_stop()
         if self.crack_job is not None and self.crack_tool is not None:

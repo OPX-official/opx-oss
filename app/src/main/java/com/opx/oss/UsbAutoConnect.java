@@ -144,6 +144,9 @@ public final class UsbAutoConnect {
         if (devices == null || devices.isEmpty()) return;
         boolean any = false;
         for (UsbDevice device : devices.values()) {
+            // Only wifi4's own chips (and their ZeroCD stubs) get a Wi-Fi permission prompt;
+            // a keyboard or thumb drive on the same OTG hub is none of this app's business.
+            if (!UsbIds.known(context, device)) continue;
             if (manager.hasPermission(device)) {
                 any = true;
                 continue;
