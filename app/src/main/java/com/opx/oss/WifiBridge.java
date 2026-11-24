@@ -279,6 +279,40 @@ public final class WifiBridge {
         send(json("cmd", "stop_attack"));
     }
 
+    /** Asks for the saved handshake/PMKID list; the reply is a {@code captures} event. */
+    public void requestCaptures() {
+        send(json("cmd", "captures"));
+    }
+
+    /** Asks which cracking tools this runtime can actually start ({@code crack_tools}). */
+    public void requestCrackTools() {
+        send(json("cmd", "crack_tools"));
+    }
+
+    /**
+     * Runs one wifi4 cracking tool over one saved capture. {@code wordlists} are absolute paths
+     * the engine can read; the two boolean sources are wifi4's own default-password and
+     * SSID-derived password lists.
+     */
+    public void crack(String capture, String tool, List<String> wordlists,
+                      boolean defaultPasswords, boolean ssidPasswords) {
+        JSONObject command = json("cmd", "crack");
+        try {
+            command.put("capture", capture);
+            command.put("tool", tool);
+            command.put("wordlists", new org.json.JSONArray(wordlists));
+            command.put("default_passwords", defaultPasswords);
+            command.put("ssid_passwords", ssidPasswords);
+        } catch (JSONException ignored) {
+            // Every key above is a plain value, so this cannot fail.
+        }
+        send(command);
+    }
+
+    public void stopCrack() {
+        send(json("cmd", "stop_crack"));
+    }
+
     private static JSONObject json(String key, String value) {
         JSONObject object = new JSONObject();
         try {

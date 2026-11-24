@@ -28,6 +28,7 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
     private View rowHome;
     private View rowLogs;
     private View rowWifi;
+    private View rowHandshakes;
     private View rowAbout;
     private View rowSettings;
 
@@ -61,17 +62,20 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         rowHome = findViewById(R.id.dashboard_item);
         rowLogs = findViewById(R.id.logs_item);
         rowWifi = findViewById(R.id.wifi_item);
+        rowHandshakes = findViewById(R.id.handshakes_item);
         rowAbout = findViewById(R.id.about_item);
         rowSettings = findViewById(R.id.settings_item);
         decorate(rowHome, R.drawable.home, R.string.nav_home);
         decorate(rowLogs, R.drawable.terminal, R.string.nav_logs);
         decorate(rowWifi, R.drawable.wifi, R.string.nav_wifi);
+        decorate(rowHandshakes, R.drawable.handshake_interface, R.string.nav_handshakes);
         decorate(rowAbout, R.drawable.info_outlined, R.string.nav_about);
         decorate(rowSettings, R.drawable.settings, R.string.nav_settings);
 
         rowHome.setOnClickListener(v -> open(R.id.nav_home));
         rowLogs.setOnClickListener(v -> open(R.id.nav_logs));
         rowWifi.setOnClickListener(v -> open(R.id.nav_wifi));
+        rowHandshakes.setOnClickListener(v -> open(R.id.nav_handshakes));
         rowAbout.setOnClickListener(v -> open(R.id.nav_about));
         rowSettings.setOnClickListener(v -> open(R.id.nav_settings));
 
@@ -149,6 +153,8 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
             target = new AboutFragment();
         } else if (itemId == R.id.nav_wifi) {
             target = new WifiFragment();
+        } else if (itemId == R.id.nav_handshakes) {
+            target = new HandshakesFragment();
         } else if (itemId == R.id.nav_settings) {
             target = new SettingsFragment();
         } else {
@@ -165,6 +171,7 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         rowHome.setActivated(itemId == R.id.nav_home);
         rowLogs.setActivated(itemId == R.id.nav_logs);
         rowWifi.setActivated(itemId == R.id.nav_wifi);
+        rowHandshakes.setActivated(itemId == R.id.nav_handshakes);
         rowAbout.setActivated(itemId == R.id.nav_about);
         rowSettings.setActivated(itemId == R.id.nav_settings);
         drawer.closeDrawer(GravityCompat.START);

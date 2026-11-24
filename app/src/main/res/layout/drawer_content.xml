@@ -171,6 +171,10 @@
             android:id="@+id/wifi_item"
             layout="@layout/drawer_row" />
 
+        <include
+            android:id="@+id/handshakes_item"
+            layout="@layout/drawer_row" />
+
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

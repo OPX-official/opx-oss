@@ -15,6 +15,12 @@ Commands
                                         -> {"event": "attack_started"}, attack_log/attack_progress,
                                            then {"event": "attack_done", "ok": .., "summary": ..}
     {"cmd": "stop_attack"}              -> the running campaign stops; attack_done follows
+    {"cmd": "captures"}                 -> {"event": "captures", "captures": [...]}
+    {"cmd": "crack_tools"}              -> {"event": "crack_tools", "tools": [...]}
+    {"cmd": "crack", "capture": "..", "tool": "cpu_crack|hashcat"}
+                                        -> {"event": "crack_started"}, crack_progress,
+                                           then {"event": "crack_done", "ok": ..}
+    {"cmd": "stop_crack"}               -> the running crack stops; crack_done follows
     {"cmd": "stop"}                     -> {"event": "stopped"}
 
 A ``ready`` event is also emitted as soon as the process starts, without waiting for a ping:
@@ -31,12 +37,14 @@ import json
 import os
 import platform
 import re
+import shutil
 import struct
 import sys
 import time
 import traceback
+from pathlib import Path
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 # Campaign logs and status lines are rich markup ("[bold cyan]..[/]"); the app draws plain text.
 MARKUP = re.compile(r"\[[^\[\]]*\]")
@@ -59,6 +67,40 @@ def plain(text):
     if text is None:
         return ""
     return MARKUP.sub("", str(text)).strip()
+
+
+def captures_dir():
+    """Where wifi4's own capture saver writes: this runtime's private var directory.
+
+    The app lists and cracks these files through the engine, never by path, so the location
+    only has to be writable by the engine process.
+    """
+    prefix = os.environ.get("PREFIX") or "/tmp"
+    path = Path(os.environ.get("OPX_CAPTURES_DIR") or (Path(prefix) / "var" / "opx" / "captures"))
+    return path
+
+
+def configure_captures():
+    """Points wifi4's auto-save at our directory before anything can write a capture.
+
+    ``wifi4.persist.save`` reads ``Config.captures_dir`` on every save, so setting it once at
+    startup is enough - and it keeps the desktop default (a relative ``captures/`` inside the
+    process' working directory) out of the app.
+    """
+    try:
+        from wifi4.persist.config import Config
+    except Exception as exc:  # noqa: BLE001 - the engine still scans without capture saving
+        log(f"capture saving unavailable: {type(exc).__name__}: {exc}")
+        return
+    path = captures_dir()
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        log(f"cannot create the capture directory {path}: {exc}")
+        return
+    Config.captures_dir = str(path)
+    # One .hc22000 per AP is all the app needs; a duplicate .pcap doubles the disk use.
+    Config.save_pcap = False
 
 
 def runtime_info():
@@ -199,6 +241,11 @@ class Engine:
         self.campaign = None
         self.campaign_kind = None
         self.attack_task = None
+        # One cracking job at a time: wifi4's own CPU cracker or hashcat over a saved capture.
+        self.crack_tool = None
+        self.crack_job = None
+        self.crack_capture = ""
+        self.crack_task = None
 
     async def ping(self):
         emit("ready", version=VERSION, native=bool(os.environ.get("PREFIX")),
@@ -410,6 +457,8 @@ class Engine:
                 "channel": ap.channel,
                 "security": security_of(ap, getattr(ap, "encryption", None)),
                 "wifi4_encryption": getattr(ap, "encryption", None),
+                "wps": bool(getattr(ap, "wps", False)),
+                "wps_locked": bool(getattr(ap, "wps_locked", False)),
                 "clients": self.ap_clients(bssid),
                 "handshakes": len(getattr(ap, "handshakes", {}) or {}),
                 "attacks": attacks,
@@ -473,6 +522,26 @@ class Engine:
              bssid=ap.bssid, ssid=ap.ssid or "", channel=ap.channel)
         self.attack_task = asyncio.create_task(self._watch_campaign(campaign, kind))
 
+    def harvest(self, ap):
+        """Saves an AP's live handshakes/PMKIDs to disk, using wifi4's own deduped savers.
+
+        This is what turns an attack's result into a row in the Handshakes screen: the
+        campaign fills ``ap.handshakes``, and ``persist.save`` writes one .hc22000 per AP.
+        """
+        if ap is None or not getattr(ap, "ssid", None):
+            return
+        try:
+            from wifi4.persist.save import save_handshake, save_pmkid
+        except Exception as exc:  # noqa: BLE001
+            log(f"cannot import the capture savers: {type(exc).__name__}: {exc}")
+            return
+        for client in list((getattr(ap, "handshakes", {}) or {}).keys()):
+            for saver in (save_handshake, save_pmkid):
+                try:
+                    saver(ap, client)
+                except Exception as exc:  # noqa: BLE001 - one odd frame must not stop the attack
+                    log(f"{saver.__name__} failed: {type(exc).__name__}: {exc}")
+
     async def _watch_campaign(self, campaign, kind):
         """Ticks the campaign's own status lines to the app, then reports how it ended."""
         while not campaign.done:
@@ -485,9 +554,17 @@ class Engine:
             except Exception:  # noqa: BLE001
                 under = ""
             emit("attack_progress", kind=kind, lines=[line for line in lines if line], under=under)
+            try:
+                self.harvest(getattr(campaign, "ap", None))
+            except Exception:  # noqa: BLE001 - saving must never end the attack
+                pass
             await asyncio.sleep(1.0)
         if campaign.stopped:
             await asyncio.sleep(0.1)
+        try:
+            self.harvest(getattr(campaign, "ap", None))
+        except Exception:  # noqa: BLE001
+            pass
         emit("attack_done", kind=kind, stopped=bool(campaign.stopped),
              **self.campaign_outcome(campaign, kind))
 
@@ -523,6 +600,255 @@ class Engine:
             return {"ok": False, "summary": "WPS PIN not found", "detail": f"{tested} PINs tried"}
         return {"ok": False, "summary": "finished", "detail": ""}
 
+    # ------------------------------------------------------ captures and cracking
+
+    @staticmethod
+    def capture_path(name):
+        """The one capture file called ``name`` in the capture directory, or None.
+
+        A name, never a path: the app cannot ask the engine to read anything outside its own
+        captures directory.
+        """
+        if not name:
+            return None
+        candidate = captures_dir() / Path(str(name)).name
+        return candidate if candidate.is_file() else None
+
+    @staticmethod
+    def capture_keys(path):
+        """The PSKs already recovered for this capture file (one per line, ``.psk`` sidecar)."""
+        sidecar = Path(str(path) + ".psk")
+        try:
+            return [line.strip() for line in sidecar.read_text("utf-8").splitlines() if line.strip()]
+        except OSError:
+            return []
+
+    @staticmethod
+    def save_capture_keys(path, keys):
+        if not keys:
+            return
+        try:
+            Path(str(path) + ".psk").write_text("\n".join(dict.fromkeys(keys)) + "\n",
+                                                encoding="utf-8")
+        except OSError as exc:
+            log(f"cannot save the recovered key: {exc}")
+
+    def capture_entries(self):
+        """Every saved .hc22000 as the Handshakes screen draws it: hash type, AP, size, keys."""
+        from wifi4.crack.hc22000_format import read_hc22000
+
+        entries = []
+        root = captures_dir()
+        if not root.is_dir():
+            return entries
+        for path in sorted(root.glob("*.hc22000")):
+            try:
+                lines = read_hc22000(str(path))
+            except Exception as exc:  # noqa: BLE001 - one unreadable file must not blank the list
+                log(f"cannot read {path.name}: {type(exc).__name__}: {exc}")
+                continue
+            if not lines:
+                continue
+            first = lines[0][1]
+            ssid = ""
+            try:
+                ssid = bytes.fromhex(first.essid).decode("utf-8", "replace")
+            except (ValueError, AttributeError):
+                ssid = getattr(first, "ssid", "") or ""
+            pmkid = any(line.is_pmkid for _, line in lines)
+            try:
+                size = path.stat().st_size
+                when = int(path.stat().st_mtime)
+            except OSError:
+                size, when = 0, 0
+            keys = self.capture_keys(path)
+            entries.append({
+                "id": path.name,
+                "ssid": ssid,
+                "bssid": getattr(first, "bssid", "") or "",
+                "kind": "pmkid" if pmkid else "handshake",
+                "lines": len(lines),
+                "size": size,
+                "when": when,
+                "keys": keys,
+            })
+        entries.sort(key=lambda entry: entry["when"], reverse=True)
+        return entries
+
+    async def captures(self):
+        """Lists the saved handshakes/PMKIDs the Handshakes screen shows."""
+        try:
+            entries = await asyncio.to_thread(self.capture_entries)
+        except Exception as exc:  # noqa: BLE001
+            detail = traceback.format_exc()
+            log(detail)
+            emit("error", message=f"{type(exc).__name__}: {exc}", detail=detail.strip())
+            return
+        cracked = sum(1 for entry in entries if entry["keys"])
+        total_bytes = sum(entry["size"] for entry in entries)
+        emit("captures", captures=entries, count=len(entries), cracked=cracked,
+             bytes=total_bytes, directory=str(captures_dir()))
+
+    def crack_tools(self):
+        """Which wifi4 cracking tools this runtime can actually start.
+
+        CPU crack ships with wifi4 (pure Python) and always works. Hashcat needs its own
+        executable, which the app's runtime does not ship, so it is offered only when one is
+        on PATH or configured - never as a button that cannot run.
+        """
+        tools = [{
+            "tool": "cpu_crack",
+            "label": "CPU Crack",
+            "available": True,
+            "reason": "",
+            "description": "Built-in CPU cracker (WPA/WPA2/PMKID)",
+        }]
+        executable = ""
+        try:
+            from wifi4.persist.config import Config
+
+            executable = Config.hashcat.path or ""
+        except Exception:  # noqa: BLE001
+            executable = ""
+        if not executable:
+            executable = shutil.which("hashcat") or ""
+        tools.append({
+            "tool": "hashcat",
+            "label": "Hashcat (GPU)",
+            "available": bool(executable),
+            "reason": "" if executable else "hashcat is not installed in this runtime",
+            "description": "Advanced password recovery (WPA/WPA2/PMKID)",
+        })
+        return tools
+
+    async def tool_list(self):
+        emit("crack_tools", tools=self.crack_tools())
+
+    async def crack(self, name, tool="cpu_crack", wordlists=None, default_passwords=True,
+                    ssid_passwords=True):
+        """Runs one wifi4 cracking tool over one saved capture, streaming its own progress."""
+        if self.crack_task is not None and not self.crack_task.done():
+            emit("error", message="a crack is already running")
+            return
+        path = self.capture_path(name)
+        if path is None:
+            emit("error", message=f"capture not found: {name}")
+            return
+        from wifi4.crack.hc22000_format import read_hc22000
+        from wifi4.models import CaptureType, PersistedCapture
+        from wifi4.models.jobs import JobState, ToolName, ToolStatus
+
+        try:
+            lines = read_hc22000(str(path))
+        except Exception as exc:  # noqa: BLE001
+            emit("error", message=f"cannot read {name}: {type(exc).__name__}: {exc}")
+            return
+        if not lines:
+            emit("error", message=f"{name} holds no hashlines")
+            return
+        first = lines[0][1]
+        ssid = ""
+        try:
+            ssid = bytes.fromhex(first.essid).decode("utf-8", "replace")
+        except (ValueError, AttributeError):
+            ssid = getattr(first, "ssid", "") or ""
+        capture = PersistedCapture(
+            type=CaptureType.PMKID if any(line.is_pmkid for _, line in lines) else CaptureType.HS,
+            timestamp=int(path.stat().st_mtime), path=str(path),
+            bssid=getattr(first, "bssid", "") or "", ssid=ssid)
+
+        wordlists = [str(item) for item in (wordlists or []) if str(item)]
+        if tool == "hashcat":
+            from wifi4.vault.tools.hashcat import HashcatTool
+
+            executable = ""
+            try:
+                from wifi4.persist.config import Config
+
+                executable = Config.hashcat.path or ""
+            except Exception:  # noqa: BLE001
+                executable = ""
+            executable = executable or shutil.which("hashcat") or ""
+            if not executable:
+                emit("error", message="hashcat is not installed in this runtime")
+                return
+            cracker = HashcatTool()
+            config = {"hashcat_exe": executable, "wordlists": wordlists,
+                      "default_passwords": bool(default_passwords),
+                      "ap_ssid_passwords": bool(ssid_passwords)}
+            tool_name = ToolName.HASHCAT
+        else:
+            from wifi4.vault.tools.cpu_crack import CpuCrackTool
+
+            cracker = CpuCrackTool()
+            config = {"wordlists": wordlists, "default_passwords": bool(default_passwords),
+                      "ap_ssid_passwords": bool(ssid_passwords)}
+            tool_name = ToolName.CPU_CRACK
+
+        job_id = f"{tool_name}_{path.stem}_{int(time.time())}"
+        job = JobState(job_id=job_id, tool_name=tool_name, capture_path=str(path),
+                       hashlines_path=str(path), status=ToolStatus.QUEUED,
+                       progress_msg="Starting...", config=config)
+        try:
+            await asyncio.to_thread(cracker.launch, job, capture)
+        except Exception as exc:  # noqa: BLE001
+            detail = traceback.format_exc()
+            log(detail)
+            emit("error", message=f"{type(exc).__name__}: {exc}", detail=detail.strip())
+            return
+        self.crack_tool = cracker
+        self.crack_job = job
+        self.crack_capture = path.name
+        emit("crack_started", capture=path.name, tool=str(tool_name), ssid=ssid)
+        self.crack_task = asyncio.create_task(self._watch_crack())
+
+    async def _watch_crack(self):
+        """Polls the tool's own progress and reports how the crack ended."""
+        from wifi4.models.jobs import JobAction, ToolStatus
+
+        tool, job = self.crack_tool, self.crack_job
+        path = self.capture_path(self.crack_capture)
+        result = None
+        while True:
+            try:
+                result = await asyncio.to_thread(tool.poll_status, job)
+            except Exception as exc:  # noqa: BLE001
+                detail = traceback.format_exc()
+                log(detail)
+                emit("crack_done", capture=self.crack_capture, ok=False, keys=[],
+                     message=f"{type(exc).__name__}: {exc}", detail=detail.strip())
+                return
+            keys = list(getattr(result, "keys", ()) or ())
+            percent = getattr(result, "percent", None)
+            emit("crack_progress", capture=self.crack_capture, percent=percent,
+                 message=plain(result.value or ""), detail=plain(getattr(result, "detail", "")),
+                 keys=keys, stoppable=bool(getattr(result, "actions", JobAction.NONE) & JobAction.STOP))
+            if result.status is not ToolStatus.RUNNING:
+                break
+            await asyncio.sleep(1.0)
+        keys = list(getattr(result, "keys", ()) or ())
+        if path is not None:
+            self.save_capture_keys(path, keys)
+        emit("crack_done", capture=self.crack_capture,
+             ok=bool(keys) or result.status is ToolStatus.SUCCESS,
+             status=str(getattr(result.status, "value", result.status)), keys=keys,
+             message=plain(result.value or ""), detail=plain(getattr(result, "detail", "")))
+        if path is not None:
+            await self.captures()
+
+    async def stop_crack(self):
+        """Stops the running crack through the tool's own stop action."""
+        from wifi4.models.jobs import JobAction
+
+        if self.crack_job is None or self.crack_tool is None:
+            emit("crack_stopped")
+            return
+        try:
+            self.crack_tool.apply(JobAction.STOP, self.crack_job)
+            emit("crack_stopping", capture=self.crack_capture)
+        except Exception as exc:  # noqa: BLE001
+            emit("error", message=f"cannot stop the crack: {type(exc).__name__}: {exc}")
+
     async def stop_attack(self):
         """Cooperative stop: the campaign's own teardown still runs, then attack_done lands."""
         campaign = self.campaign
@@ -536,6 +862,13 @@ class Engine:
         self.scanning = False
         if self.campaign is not None and not self.campaign.done:
             self.campaign.request_stop()
+        if self.crack_job is not None and self.crack_tool is not None:
+            try:
+                from wifi4.models.jobs import JobAction
+
+                self.crack_tool.apply(JobAction.STOP, self.crack_job)
+            except Exception:  # noqa: BLE001
+                pass
         if self.scan_task is not None and not self.scan_task.done():
             self.scan_task.cancel()
             try:
@@ -552,6 +885,7 @@ class Engine:
 
 
 async def main():
+    configure_captures()
     engine = Engine()
     # Announce readiness immediately: the app logs the whole line, so a broken runtime is
     # visible before the first command comes in.
@@ -588,6 +922,19 @@ async def main():
                 await engine.attack(command.get("kind"), command.get("bssid"))
             elif name == "stop_attack":
                 await engine.stop_attack()
+            elif name == "captures":
+                await engine.captures()
+            elif name == "crack_tools":
+                await engine.tool_list()
+            elif name == "crack":
+                await engine.crack(
+                    command.get("capture"), command.get("tool") or "cpu_crack",
+                    command.get("wordlists") or [],
+                    command.get("default_passwords", True),
+                    command.get("ssid_passwords", True),
+                )
+            elif name == "stop_crack":
+                await engine.stop_crack()
             elif name == "stop":
                 await engine.stop()
                 return 0

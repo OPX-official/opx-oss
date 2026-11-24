@@ -174,6 +174,63 @@
     <string name="wifi_attack_wep">ARP replay</string>
     <string name="wifi_attack_wep_desc">Fake-auth, replay ARP, then crack the WEP key</string>
 
+    <string name="nav_handshakes">Handshakes</string>
+
+    <string name="wifi_target_wps_locked">WPS LOCKED</string>
+    <string name="wifi_target_close">Close</string>
+    <string name="wifi_attack_running">RUNNING</string>
+    <string name="wifi_attack_pill_ok">DONE</string>
+    <string name="wifi_attack_pill_failed">FAILED</string>
+    <string name="wifi_attack_tab_progress">Progress</string>
+    <string name="wifi_attack_tab_terminal">Terminal</string>
+    <string name="wifi_attack_copy_log">Copy log</string>
+
+    <string name="hs_title">Handshakes</string>
+    <string name="hs_subtitle">Every handshake and PMKID the engine saved, ready to crack.</string>
+    <string name="hs_section_storage">STORAGE</string>
+    <string name="hs_section_files">CAPTURES</string>
+    <string name="hs_status_empty">No captures yet</string>
+    <string name="hs_status_count">%1$d captures · %2$d cracked</string>
+    <string name="hs_storage_path">the engine's capture directory</string>
+    <string name="hs_action_refresh">Refresh</string>
+    <string name="hs_meta_total">TOTAL</string>
+    <string name="hs_meta_cracked">CRACKED</string>
+    <string name="hs_meta_size">SIZE</string>
+    <string name="hs_empty_title">Nothing captured yet</string>
+    <string name="hs_empty_body">Run Deauth, PMKID or WPS from the WiFi screen. The engine saves every handshake it captures here, and you crack it from this list.</string>
+    <string name="hs_kind_handshake">HANDSHAKE</string>
+    <string name="hs_kind_pmkid">PMKID</string>
+    <string name="hs_state_cracked">CRACKED</string>
+    <string name="hs_action_crack">Crack</string>
+    <string name="hs_action_more">More</string>
+    <string name="hs_password">Password: %1$s</string>
+    <string name="hs_password_copy">Copy password</string>
+    <string name="hs_password_copied">Password copied</string>
+
+    <string name="hc_title">Crack handshake</string>
+    <string name="hc_subtitle">wifi4's own cracker: CPU crack, or hashcat when a GPU build is installed</string>
+    <string name="hc_tool">TOOL</string>
+    <string name="hc_tool_cpu">CPU Crack</string>
+    <string name="hc_tool_gpu">Hashcat (GPU)</string>
+    <string name="hc_sources">PASSWORDS</string>
+    <string name="hc_default_passwords">Built-in default passwords</string>
+    <string name="hc_ssid_passwords">Passwords derived from the SSID</string>
+    <string name="hc_pick_wordlist">Pick a wordlist</string>
+    <string name="hc_run">Crack</string>
+    <string name="hc_stop">Stop</string>
+    <string name="hc_stopping">Stopping…</string>
+    <string name="hc_close">Close</string>
+    <string name="hc_copy">Copy</string>
+    <string name="hc_copied">Copied</string>
+    <string name="hc_running">Cracking…</string>
+    <string name="hc_starting">Starting the crack…</string>
+    <string name="hc_no_source">Choose a wordlist or one of the password sources first.</string>
+    <string name="hc_no_picker">No file picker is available on this device.</string>
+    <string name="hc_wordlist_failed">Could not copy that wordlist.</string>
+    <string name="hc_done_ok">Cracked</string>
+    <string name="hc_done_fail">Not found</string>
+    <string name="hc_already_cracked">Already cracked</string>
+
     <string name="about_title">About</string>
     <string name="about_version_value">Version %1$s</string>
     <string name="about_version_unknown">Version unknown</string>
