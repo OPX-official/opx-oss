@@ -18,7 +18,8 @@ Commands
     {"cmd": "stop_attack"}              -> the running campaign stops; attack_done follows
     {"cmd": "captures"}                 -> {"event": "captures", "captures": [...]}
     {"cmd": "crack_tools"}              -> {"event": "crack_tools", "tools": [...]}
-    {"cmd": "crack", "capture": "..", "tool": "cpu_crack|hashcat"}
+    {"cmd": "crack", "capture": "..", "tool": "cpu_crack|hashcat",
+     "default_passwords": true, "ssid_passwords": true, "probed_ssids": false}
                                         -> {"event": "crack_started"}, crack_progress,
                                            then {"event": "crack_done", "ok": ..}
     {"cmd": "stop_crack"}               -> the running crack stops; crack_done follows
@@ -45,7 +46,7 @@ import time
 import traceback
 from pathlib import Path
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 
 # A cold start races wifi4's USB poller: its first reconcile still has to list the devices and
 # ask the app for a descriptor, so the very first `devices` answer is legitimately empty. Wait
@@ -118,6 +119,23 @@ def prepare_opencl():
         return f"vendor OpenCL from {source}"
     except OSError as exc:
         return f"cannot prepare vendor OpenCL: {type(exc).__name__}: {exc}"
+
+
+def default_passwords_info():
+    """The built-in common-password list wifi4 ships, as the crack dialog shows it.
+
+    The file is package data (``wifi4/crack/assets/default_passwords.txt``), so it is present
+    in every runtime this repository builds. Reading it here lets the app say how many
+    passwords the switch covers instead of hiding the source behind an opaque toggle.
+    """
+    from wifi4.crack.passwords import DEFAULT_PASSWORDS_PATH
+
+    try:
+        count = sum(1 for line in DEFAULT_PASSWORDS_PATH.read_text(
+            encoding="utf-8", errors="ignore").splitlines() if line.strip())
+    except OSError:
+        return {"available": False, "count": 0}
+    return {"available": count > 0, "count": count}
 
 
 def captures_dir():
@@ -980,16 +998,19 @@ class Engine:
     def crack_tools(self):
         """Which wifi4 cracking tools this runtime can actually start.
 
-        CPU crack ships with wifi4 (pure Python) and always works. Hashcat needs its own
-        executable, which the app's runtime does not ship, so it is offered only when one is
-        on PATH or configured - never as a button that cannot run.
+        CPU crack ships with wifi4 (pure Python) and always works. Hashcat is optional: it is
+        offered only when an executable is configured or on the runtime's PATH, never as a
+        button that cannot run. ``default_passwords`` reports the package-data list the switch
+        covers, so a runtime built without it is visible instead of silently weaker.
         """
+        default_list = default_passwords_info()
         tools = [{
             "tool": "cpu_crack",
             "label": "CPU Crack",
             "available": True,
             "reason": "",
             "description": "Built-in CPU cracker (WPA/WPA2/PMKID)",
+            "default_passwords": default_list,
         }]
         executable = ""
         try:
@@ -1006,6 +1027,7 @@ class Engine:
             "available": bool(executable),
             "reason": "" if executable else "hashcat is not installed in this runtime",
             "description": "Advanced password recovery (WPA/WPA2/PMKID)",
+            "default_passwords": default_list,
         })
         return tools
 
@@ -1013,7 +1035,7 @@ class Engine:
         emit("crack_tools", tools=self.crack_tools())
 
     async def crack(self, name, tool="cpu_crack", wordlists=None, default_passwords=True,
-                    ssid_passwords=True):
+                    ssid_passwords=True, probed_ssids=False):
         """Runs one wifi4 cracking tool over one saved capture, streaming its own progress."""
         if self.crack_task is not None and not self.crack_task.done():
             emit("error", message="a crack is already running")
@@ -1046,6 +1068,9 @@ class Engine:
             bssid=getattr(first, "bssid", "") or "", ssid=ssid)
 
         wordlists = [str(item) for item in (wordlists or []) if str(item)]
+        extra_passwords = []
+        if probed_ssids and self.array is not None:
+            extra_passwords = sorted(getattr(self.array, "probed_ssids", set()) or ())
         if tool == "hashcat":
             from wifi4.vault.tools.hashcat import HashcatTool
 
@@ -1063,14 +1088,18 @@ class Engine:
             cracker = HashcatTool()
             config = {"hashcat_exe": executable, "wordlists": wordlists,
                       "default_passwords": bool(default_passwords),
-                      "ap_ssid_passwords": bool(ssid_passwords)}
+                      "ap_ssid_passwords": bool(ssid_passwords),
+                      "probed_ssid_passwords": bool(probed_ssids),
+                      "extra_passwords": extra_passwords}
             tool_name = ToolName.HASHCAT
         else:
             from wifi4.vault.tools.cpu_crack import CpuCrackTool
 
             cracker = CpuCrackTool()
             config = {"wordlists": wordlists, "default_passwords": bool(default_passwords),
-                      "ap_ssid_passwords": bool(ssid_passwords)}
+                      "ap_ssid_passwords": bool(ssid_passwords),
+                      "probed_ssid_passwords": bool(probed_ssids),
+                      "extra_passwords": extra_passwords}
             tool_name = ToolName.CPU_CRACK
 
         job_id = f"{tool_name}_{path.stem}_{int(time.time())}"
@@ -1243,6 +1272,7 @@ async def main():
                     command.get("wordlists") or [],
                     command.get("default_passwords", True),
                     command.get("ssid_passwords", True),
+                    command.get("probed_ssids", False),
                 )
             elif name == "stop_crack":
                 await engine.stop_crack()

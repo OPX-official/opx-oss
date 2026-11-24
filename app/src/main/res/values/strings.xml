@@ -245,7 +245,9 @@
     <string name="hc_tool_gpu">Hashcat (GPU)</string>
     <string name="hc_sources">PASSWORDS</string>
     <string name="hc_default_passwords">Built-in default passwords</string>
+    <string name="hc_default_passwords_count">Built-in default passwords (%1$d)</string>
     <string name="hc_ssid_passwords">Passwords derived from the SSID</string>
+    <string name="hc_probed_ssids">SSIDs probed by nearby clients</string>
     <string name="hc_pick_wordlist">Pick a wordlist</string>
     <string name="hc_run">Crack</string>
     <string name="hc_stop">Stop</string>

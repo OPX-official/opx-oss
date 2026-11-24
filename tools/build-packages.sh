@@ -139,6 +139,15 @@ build_opx_wifi4() { # $1 = arch label for the payload ("all")
   # fails if anything still imports the TUI or names the foreign prefix.
   python3 "$ROOT/tools/patch-wifi4.py" "$py"
 
+  # The headless patch must never take wifi4's package data with it: the crack dialog's
+  # default-password source is this file, and shipping without it silently weakens every
+  # CPU/Hashcat job that leaves the switch on.
+  local defaults="$py/wifi4/crack/assets/default_passwords.txt"
+  if [ ! -s "$defaults" ] || [ "$(wc -l < "$defaults")" -lt 1000 ]; then
+    echo "wifi4 default password list missing or truncated: $defaults" >&2
+    exit 1
+  fi
+
   # Pure-Python runtime dependencies, vendored so the device needs no pip and no network.
   python3 -m pip install --quiet --disable-pip-version-check --no-compile --target "$py" \
     pyusb platformdirs rich

@@ -296,11 +296,11 @@ public final class WifiBridge {
 
     /**
      * Runs one wifi4 cracking tool over one saved capture. {@code wordlists} are absolute paths
-     * the engine can read; the two boolean sources are wifi4's own default-password and
-     * SSID-derived password lists.
+     * the engine can read; the booleans select wifi4's default-password list, the AP's
+     * SSID-derived candidates and the SSIDs nearby clients probed for this session.
      */
     public void crack(String capture, String tool, List<String> wordlists,
-                      boolean defaultPasswords, boolean ssidPasswords) {
+                      boolean defaultPasswords, boolean ssidPasswords, boolean probedSsids) {
         JSONObject command = json("cmd", "crack");
         try {
             command.put("capture", capture);
@@ -308,6 +308,7 @@ public final class WifiBridge {
             command.put("wordlists", new org.json.JSONArray(wordlists));
             command.put("default_passwords", defaultPasswords);
             command.put("ssid_passwords", ssidPasswords);
+            command.put("probed_ssids", probedSsids);
         } catch (JSONException ignored) {
             // Every key above is a plain value, so this cannot fail.
         }

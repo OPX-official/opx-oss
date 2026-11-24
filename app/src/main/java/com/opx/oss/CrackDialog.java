@@ -57,6 +57,7 @@ final class CrackDialog {
     private final TextView hashcatDesc;
     private final MaterialSwitch defaultPasswords;
     private final MaterialSwitch ssidPasswords;
+    private final MaterialSwitch probedPasswords;
     private final TextView wordlistName;
     private final TextView wordlistMeta;
     private final LinearProgressIndicator progress;
@@ -94,6 +95,7 @@ final class CrackDialog {
         hashcatDesc = content.findViewById(R.id.hc_tool_hashcat_desc);
         defaultPasswords = content.findViewById(R.id.hc_default_passwords);
         ssidPasswords = content.findViewById(R.id.hc_ssid_passwords);
+        probedPasswords = content.findViewById(R.id.hc_probed_passwords);
         wordlistName = content.findViewById(R.id.hc_wordlist_name);
         wordlistMeta = content.findViewById(R.id.hc_wordlist_meta);
         progress = content.findViewById(R.id.hc_progress);
@@ -184,7 +186,8 @@ final class CrackDialog {
         if (running) return;
         List<String> wordlists = new ArrayList<>();
         if (!wordlistPath.isEmpty()) wordlists.add(wordlistPath);
-        if (!defaultPasswords.isChecked() && !ssidPasswords.isChecked() && wordlists.isEmpty()) {
+        if (!defaultPasswords.isChecked() && !ssidPasswords.isChecked()
+                && !probedPasswords.isChecked() && wordlists.isEmpty()) {
             Toast.makeText(context, R.string.hc_no_source, Toast.LENGTH_LONG).show();
             return;
         }
@@ -197,7 +200,8 @@ final class CrackDialog {
         stop.setText(R.string.hc_stop);
         run.setEnabled(false);
         WifiBridge.get(context).crack(capture.optString("id"), tool, wordlists,
-                defaultPasswords.isChecked(), ssidPasswords.isChecked());
+                defaultPasswords.isChecked(), ssidPasswords.isChecked(),
+                probedPasswords.isChecked());
     }
 
     /** Every engine event while this dialog is open. */
@@ -218,6 +222,16 @@ final class CrackDialog {
                     hashcatCard.setAlpha(hashcatAvailable ? 1f : 0.45f);
                 } else if ("cpu_crack".equals(id)) {
                     cpuDesc.setText(description);
+                }
+                JSONObject defaults = entry.optJSONObject("default_passwords");
+                if (defaults != null) {
+                    boolean available = defaults.optBoolean("available");
+                    int count = defaults.optInt("count");
+                    defaultPasswords.setEnabled(available);
+                    if (!available) defaultPasswords.setChecked(false);
+                    defaultPasswords.setText(available && count > 0
+                            ? context.getString(R.string.hc_default_passwords_count, count)
+                            : context.getString(R.string.hc_default_passwords));
                 }
             }
         } else if ("crack_started".equals(name)) {
