@@ -134,6 +134,45 @@ def write_index(out: pathlib.Path, index: dict, entries: list[dict]) -> None:
     print(f"  index.json: {len(entries)} artifacts {kinds}")
 
 
+def seal_page(page: pathlib.Path) -> int:
+    """Makes the catalogue on the checkout describe the files that are about to be committed.
+
+    The publish step writes ``index.json`` into the checkout, then commits the whole tree. If
+    anything between the build and the checkout leaves the catalogue describing another run's
+    bytes, the branch would advertise checksums no download can match. Sealing reads the files
+    in the checkout itself, so the committed catalogue and the committed artifacts agree by
+    construction. Entries stored as release assets are left alone; they are not in the tree.
+    """
+    path = page / "index.json"
+    if not path.is_file():
+        print(f"no catalogue at {path}", file=sys.stderr)
+        return 1
+    index = json.loads(path.read_text(encoding="utf-8"))
+    changed = 0
+    missing = []
+    for entry in index.get("packages", []):
+        target = page / entry.get("path", "")
+        if not target.is_file():
+            if entry.get("storage") != "release":
+                missing.append(entry.get("path", "?"))
+            continue
+        digest = make_index.sha256(target)
+        size = target.stat().st_size
+        if entry.get("sha256") != digest or entry.get("size") != size:
+            entry["sha256"] = digest
+            entry["size"] = size
+            changed += 1
+    if missing:
+        print("catalogue lists branch files that are not in the checkout: "
+              + ", ".join(missing), file=sys.stderr)
+        return 1
+    index["generated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    path.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+    make_index.write_apt_index(page, index["packages"])
+    print(f"  sealed {changed} checksum(s) against the checkout")
+    return 0
+
+
 def prune_page(page: pathlib.Path, index: dict) -> None:
     """Deletes files on the checkout that the catalogue no longer lists."""
     keep = {entry["path"] for entry in index.get("packages", [])}
@@ -153,12 +192,19 @@ def prune_page(page: pathlib.Path, index: dict) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", required=True, type=pathlib.Path)
+    parser.add_argument("--out", type=pathlib.Path)
     parser.add_argument("--published", help="path or URL of the catalogue already published")
     parser.add_argument("--scope", choices=("all", "extras"), default="all")
     parser.add_argument("--prune-page", type=pathlib.Path,
                         help="prune this gh-pages checkout against --out/index.json")
+    parser.add_argument("--seal-page", type=pathlib.Path,
+                        help="reseal this gh-pages checkout's catalogue from its own files")
     args = parser.parse_args()
+
+    if args.seal_page is not None:
+        return seal_page(args.seal_page.resolve())
+    if args.out is None:
+        parser.error("--out is required unless --seal-page is given")
 
     out = args.out.resolve()
     index_path = out / "index.json"

@@ -253,6 +253,8 @@ jobs:
             rm -f "$work/page/$relative"
           done < "$big"
           python3 tools/merge-index.py --out out --prune-page "$work/page"
+          # Last word on the catalogue: it describes the bytes in the checkout being committed.
+          python3 tools/merge-index.py --seal-page "$work/page"
           {
             echo "# OPX package archive"
             echo
