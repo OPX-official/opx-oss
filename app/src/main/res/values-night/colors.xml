@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Stryker's night palette: the same color names, the values it swaps in for dark mode.
+         Every screen already styles itself with these names, so the whole app follows the
+         system theme without a single layout change. -->
+    <color name="dialog_background_color">#2C2C2C</color>
+    <color name="stryker_accent">#1E88E5</color>
+    <color name="stryker_accent_contrast">#1565C0</color>
+    <color name="stryker_logo_accent">#FFFFFF</color>
+
+    <color name="yellow">#F9A825</color>
+    <color name="red">#C62828</color>
+    <color name="green">#2E7D32</color>
+
+    <color name="light_contrast">#121212</color>
+    <color name="light_lite_contrast">#303030</color>
+    <color name="night_contrast">#FFFFFF</color>
+    <color name="night_contrast_2">#D9FFFFFF</color>
+    <color name="grey">#BCBCBC</color>
+    <color name="toolbar_color">#2D2D2D</color>
+    <color name="console">#FFFFFF</color>
+    <color name="row_locked">#61BCBCBC</color>
+
+    <color name="icon_tile_neutral">#2A2E35</color>
+    <color name="tile_blue">#332196F3</color>
+    <color name="tile_cyan">#3300BCD4</color>
+    <color name="tile_green">#334CAF50</color>
+    <color name="tile_indigo">#333F51B5</color>
+    <color name="tile_orange">#33FF9800</color>
+    <color name="tile_pink">#33E91E63</color>
+    <color name="tile_purple">#339C27B0</color>
+    <color name="tile_red">#33F44336</color>
+
+    <color name="accent_wifi">#42A5F5</color>
+    <color name="accent_local">#CE93D8</color>
+    <color name="accent_handshakes">#4DB6AC</color>
+    <color name="accent_utilities">#9575CD</color>
+    <color name="status_booting">#FFCA28</color>
+    <color name="status_offline">#757575</color>
+
+    <color name="ic_launcher_background">#1565C0</color>
+</resources>

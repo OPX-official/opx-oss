@@ -24,6 +24,12 @@
         <item name="android:fontFamily">@font/lato</item>
         <item name="android:buttonStyle">@style/Widget.Opx.Button</item>
         <item name="materialCardViewStyle">@style/Widget.Opx.CardView</item>
+        <item name="materialAlertDialogTheme">@style/Widget.Opx.AlertDialog</item>
+    </style>
+
+    <!-- Stryker's Widget.Stryker.AlertDialog -->
+    <style name="Widget.Opx.AlertDialog" parent="@style/ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="android:background">@color/light_contrast</item>
     </style>
 
     <!-- Stryker's Widget.Stryker.CardView -->
@@ -33,13 +39,13 @@
 
     <!-- Stryker's Widget.Stryker.Button -->
     <style name="Widget.Opx.Button" parent="Widget.Material3.Button">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/lato</item>
         <item name="android:textColor">@android:color/white</item>
     </style>
 
     <!-- Stryker's Widget.Stryker.TextView -->
     <style name="Widget.Opx.TextView" parent="android:TextAppearance.Material.Widget.TextView">
-        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:fontFamily">@font/lato</item>
     </style>
 
     <!-- The visible card in every screen: white, 20dp, hairline stroke, no shadow. -->
@@ -49,6 +55,22 @@
         <item name="cardElevation">0dp</item>
         <item name="strokeColor">@color/light_lite_contrast</item>
         <item name="strokeWidth">1dp</item>
+    </style>
+
+    <!-- Stryker's section rows: a 44dp icon tile with the title and its body underneath. -->
+    <style name="OpxRow">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:background">?attr/selectableItemBackground</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:minHeight">64dp</item>
+        <item name="android:orientation">horizontal</item>
+        <item name="android:paddingStart">14dp</item>
+        <item name="android:paddingTop">12dp</item>
+        <item name="android:paddingEnd">14dp</item>
+        <item name="android:paddingBottom">12dp</item>
     </style>
 
     <style name="OpxSectionLabel" parent="TextAppearance.Material3.LabelSmall">

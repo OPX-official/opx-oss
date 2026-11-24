@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Stryker's night theme: the same Theme.Opx, on a dark Material 3 parent. -->
+    <style name="Theme.Opx" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/stryker_accent</item>
+        <item name="colorPrimaryDark">@color/toolbar_color</item>
+        <item name="colorPrimaryVariant">@color/stryker_accent</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorSecondary">@color/stryker_accent</item>
+        <item name="colorSecondaryVariant">@color/stryker_accent_contrast</item>
+        <item name="colorOnSecondary">@color/stryker_accent_contrast</item>
+        <item name="colorSurface">@color/light_contrast</item>
+        <item name="colorSurfaceVariant">@color/light_lite_contrast</item>
+        <item name="colorOnSurface">@color/night_contrast_2</item>
+        <item name="colorOnSurfaceVariant">@color/grey</item>
+        <item name="colorOutline">@color/light_lite_contrast</item>
+        <item name="android:colorBackground">@color/light_contrast</item>
+        <item name="android:statusBarColor">@color/toolbar_color</item>
+        <item name="android:navigationBarColor">@color/toolbar_color</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:textColorPrimary">@color/night_contrast_2</item>
+        <item name="android:textViewStyle">@style/Widget.Opx.TextView</item>
+        <item name="android:fontFamily">@font/lato</item>
+        <item name="android:buttonStyle">@style/Widget.Opx.Button</item>
+        <item name="materialCardViewStyle">@style/Widget.Opx.CardView</item>
+        <item name="materialAlertDialogTheme">@style/Widget.Opx.AlertDialog</item>
+    </style>
+
+</resources>

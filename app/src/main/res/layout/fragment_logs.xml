@@ -99,16 +99,34 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content">
 
-            <TextView
-                android:id="@+id/logs_text"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
-                android:lineSpacingExtra="2dp"
-                android:padding="14dp"
-                android:textColor="@color/night_contrast"
-                android:textIsSelectable="true"
-                android:textSize="11sp" />
+                android:orientation="vertical">
+
+                <!-- Stryker's empty-state animation, shown instead of an empty console. -->
+                <com.airbnb.lottie.LottieAnimationView
+                    android:id="@+id/logs_empty_anim"
+                    android:layout_width="150dp"
+                    android:layout_height="150dp"
+                    android:layout_gravity="center_horizontal"
+                    android:paddingTop="14dp"
+                    android:visibility="gone"
+                    app:lottie_autoPlay="true"
+                    app:lottie_loop="true"
+                    app:lottie_rawRes="@raw/nothing" />
+
+                <TextView
+                    android:id="@+id/logs_text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:lineSpacingExtra="2dp"
+                    android:padding="14dp"
+                    android:textColor="@color/night_contrast"
+                    android:textIsSelectable="true"
+                    android:textSize="11sp" />
+            </LinearLayout>
 
         </com.google.android.material.card.MaterialCardView>
     </ScrollView>
