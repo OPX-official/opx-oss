@@ -100,6 +100,42 @@
     <string name="notification_state_ready">Engine ready</string>
     <string name="notification_action_exit">Exit</string>
 
+    <string name="nav_settings">Settings</string>
+    <string name="settings_title">Settings</string>
+    <string name="settings_subtitle">Runtime, engine and log controls for this install</string>
+    <string name="settings_section_runtime">RUNTIME</string>
+    <string name="settings_section_engine">ENGINE</string>
+    <string name="settings_section_storage">STORAGE</string>
+    <string name="settings_section_diagnostics">DIAGNOSTICS</string>
+    <string name="settings_prefix">Prefix</string>
+    <string name="settings_arch">Architecture</string>
+    <string name="settings_state">Engine state</string>
+    <string name="settings_version">App version</string>
+    <string name="settings_restart">Restart engine</string>
+    <string name="settings_restart_body">Stops the engine process and starts a fresh one</string>
+    <string name="settings_restarted">Restarting the engine…</string>
+    <string name="settings_storage">Storage access</string>
+    <string name="settings_storage_body">Links shared storage into the runtime home</string>
+    <string name="settings_storage_granted">Granted</string>
+    <string name="settings_storage_missing">Not granted</string>
+    <string name="settings_storage_ready">Storage links rebuilt</string>
+    <string name="settings_storage_denied">Storage permission denied</string>
+    <string name="settings_log_level">Log level</string>
+    <string name="settings_log_level_body">How much the app writes to its log</string>
+    <string name="settings_log_verbose">Verbose — every engine line</string>
+    <string name="settings_log_normal">Normal — state changes</string>
+    <string name="settings_log_errors">Errors only</string>
+    <string name="settings_copy">Copy diagnosis</string>
+    <string name="settings_copy_body">Version, runtime state and the last log lines</string>
+    <string name="settings_copied">Diagnosis copied</string>
+
+    <string name="wifi_error_title">Engine error</string>
+    <string name="wifi_error_copy">Copy error</string>
+    <string name="wifi_error_copied">Error copied</string>
+    <string name="wifi_error_show">Show full traceback</string>
+    <string name="wifi_error_hide">Hide traceback</string>
+    <string name="wifi_error_retry">Scan again</string>
+
     <string name="about_title">About</string>
     <string name="about_version_value">Version %1$s</string>
     <string name="about_version_unknown">Version unknown</string>

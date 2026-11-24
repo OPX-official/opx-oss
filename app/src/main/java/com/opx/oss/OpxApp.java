@@ -15,6 +15,8 @@ public class OpxApp extends Application {
     public void onCreate() {
         super.onCreate();
         instance = this;
+        // The Settings screen offers a log level; it has to be in effect before anything logs.
+        AppLog.load(this);
 
         // The engine belongs to the app, not to the terminal screen. Starting it here means any
         // entry point that creates the process (launcher, shortcut, notification, restored task)

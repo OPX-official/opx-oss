@@ -10,10 +10,13 @@ name: Packages
 on:
   workflow_dispatch:
     inputs:
-      skip_base:
-        description: "Skip building the base runtime from source (packaging-only check)"
-        type: boolean
-        default: false
+      scope:
+        description: "all = base runtime + OPX packages, extras = only the OPX packages (the fast lane for an engine fix)"
+        type: choice
+        options:
+          - all
+          - extras
+        default: all
   push:
     branches: [main]
     paths:
@@ -57,7 +60,7 @@ jobs:
 
       - name: Build packages
         env:
-          SKIP_BASE: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_base || false }}
+          SCOPE: ${{ inputs.scope || 'all' }}
           OUT: ${{ github.workspace }}/out
           WIFI4_SRC: ${{ github.workspace }}/references/opx-wifi4
         run: |
@@ -82,6 +85,7 @@ jobs:
         # the locally-built packages in out/ are available for the APK workflow.
         env:
           PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+          SCOPE: ${{ inputs.scope || 'all' }}
         run: |
           set -euo pipefail
           if [ -z "${PACKAGES_TOKEN:-}" ]; then
@@ -112,6 +116,31 @@ jobs:
               --title "OPX package archive" --notes-file "$notes"
           fi
 
+          # The page is cloned before anything is uploaded: in `extras` scope the catalogue and
+          # the base artifacts this run does not rebuild are already on it, and the merge below
+          # keeps them.
+          remote="https://x-access-token:${PACKAGES_TOKEN}@github.com/${PACKAGES_REPO}.git"
+          work="$(mktemp -d)"
+          published=""
+          if git clone --depth 1 --branch gh-pages "$remote" "$work/page" 2>/dev/null; then
+            echo "publishing over the existing gh-pages branch"
+            published="$work/page/index.json"
+          else
+            mkdir -p "$work/page"
+            git -C "$work/page" init --quiet
+            git -C "$work/page" checkout --quiet -b gh-pages
+            git -C "$work/page" remote add origin "$remote"
+          fi
+
+          # `extras` (an engine or shim fix) publishes on top of the archive; `all` replaces the
+          # catalogue. Either way index.json is complete afterwards, so the APK build never has
+          # to know which kind of run wrote it.
+          if [ -n "$published" ]; then
+            python3 tools/merge-index.py --out out --published "$published" --scope "${SCOPE:-all}"
+          else
+            python3 tools/merge-index.py --out out --scope "${SCOPE:-all}"
+          fi
+
           stage="$(mktemp -d)"
           while IFS= read -r relative; do
             [ -z "$relative" ] && continue
@@ -120,32 +149,34 @@ jobs:
           if compgen -G "$stage/*" > /dev/null; then
             gh release upload packages "$stage"/* -R "$PACKAGES_REPO" --clobber
           fi
-          # Drop assets an earlier build produced that this one did not, so a version bump does
-          # not pile up old bootstraps in the release.
-          ls "$stage" > "$notes.current" 2>/dev/null || true
+          # Prune the release against the merged catalogue, not against this run: an `extras`
+          # build rebuilt no base payload, and the bootstrap and base tarballs it did not touch
+          # must stay where they are.
+          keep="$(mktemp)"
+          python3 - "$keep" <<'PY'
+          import json, sys
+          index = json.load(open("out/index.json", encoding="utf-8"))
+          with open(sys.argv[1], "w") as handle:
+              for entry in index["packages"]:
+                  if entry.get("storage") == "release":
+                      handle.write(entry["path"].replace("/", "__") + "\n")
+          PY
           gh release view packages -R "$PACKAGES_REPO" --json assets \
             -q '.assets[].name' | while IFS= read -r asset; do
               [ -z "$asset" ] && continue
-              grep -qxF "$asset" "$notes.current" \
+              grep -qxF "$asset" "$keep" \
                 || gh release delete-asset packages "$asset" -R "$PACKAGES_REPO" --yes || true
             done
 
-          remote="https://x-access-token:${PACKAGES_TOKEN}@github.com/${PACKAGES_REPO}.git"
-          work="$(mktemp -d)"
-          if git clone --depth 1 --branch gh-pages "$remote" "$work/page" 2>/dev/null; then
-            echo "publishing over the existing gh-pages branch"
-          else
-            mkdir -p "$work/page"
-            git -C "$work/page" init --quiet
-            git -C "$work/page" checkout --quiet -b gh-pages
-            git -C "$work/page" remote add origin "$remote"
-          fi
-          rsync -a --delete --exclude .git out/ "$work/page/"
+          # No --delete: a file this run did not build is one the catalogue still lists. The
+          # prune below removes only what the merged catalogue dropped (an old version).
+          rsync -a --exclude .git out/ "$work/page/"
           # The oversized files are release assets; a branch push would be rejected.
           while IFS= read -r relative; do
             [ -z "$relative" ] && continue
             rm -f "$work/page/$relative"
           done < "$big"
+          python3 tools/merge-index.py --out out --prune-page "$work/page"
           {
             echo "# OPX package archive"
             echo

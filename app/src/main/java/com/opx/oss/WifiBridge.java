@@ -147,7 +147,7 @@ public final class WifiBridge {
                 if (payload.isEmpty()) continue;
                 try {
                     final JSONObject event = new JSONObject(payload);
-                    AppLog.info(TAG, "event: " + payload);
+                    AppLog.verbose(TAG, "event: " + payload);
                     main.post(() -> deliver(event));
                 } catch (JSONException e) {
                     AppLog.info(TAG, "non-JSON engine output: " + payload);
@@ -172,7 +172,7 @@ public final class WifiBridge {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(started.getErrorStream(), StandardCharsets.UTF_8))) {
             String line;
-            while ((line = reader.readLine()) != null) AppLog.info(TAG, "stderr: " + line);
+            while ((line = reader.readLine()) != null) AppLog.verbose(TAG, "stderr: " + line);
         } catch (IOException ignored) {
             // The process is gone; the stdout thread reports it.
         }
@@ -225,7 +225,7 @@ public final class WifiBridge {
     /** Sends one command. Ignored when the engine is not running. */
     public synchronized void send(JSONObject command) {
         if (!running || stdin == null) return;
-        AppLog.info(TAG, "send: " + command);
+        AppLog.verbose(TAG, "send: " + command);
         try {
             stdin.write(command.toString());
             stdin.write('\n');

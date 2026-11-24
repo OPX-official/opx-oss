@@ -28,6 +28,7 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
     private View rowLogs;
     private View rowWifi;
     private View rowAbout;
+    private View rowSettings;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -38,7 +39,7 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         runtimeStatus = findViewById(R.id.drawer_runtime_status);
 
         findViewById(R.id.menu_img).setOnClickListener(v -> drawer.openDrawer(GravityCompat.START));
-        findViewById(R.id.settings_icon).setOnClickListener(v -> open(R.id.nav_logs));
+        findViewById(R.id.settings_icon).setOnClickListener(v -> open(R.id.nav_settings));
         findViewById(R.id.menu_close_drawer).setOnClickListener(v -> drawer.closeDrawer(GravityCompat.START));
 
         TextView version = findViewById(R.id.drawer_version);
@@ -60,15 +61,18 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         rowLogs = findViewById(R.id.logs_item);
         rowWifi = findViewById(R.id.wifi_item);
         rowAbout = findViewById(R.id.about_item);
+        rowSettings = findViewById(R.id.settings_item);
         decorate(rowHome, R.drawable.home, R.string.nav_home);
         decorate(rowLogs, R.drawable.terminal, R.string.nav_logs);
         decorate(rowWifi, R.drawable.wifi, R.string.nav_wifi);
         decorate(rowAbout, R.drawable.info_outlined, R.string.nav_about);
+        decorate(rowSettings, R.drawable.settings, R.string.nav_settings);
 
         rowHome.setOnClickListener(v -> open(R.id.nav_home));
         rowLogs.setOnClickListener(v -> open(R.id.nav_logs));
         rowWifi.setOnClickListener(v -> open(R.id.nav_wifi));
         rowAbout.setOnClickListener(v -> open(R.id.nav_about));
+        rowSettings.setOnClickListener(v -> open(R.id.nav_settings));
 
         // The engine starts with the app, not with a screen: the runtime is installed and kept
         // warm so the USB bridge and the WiFi engine are usable from any tab.
@@ -136,6 +140,8 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
             target = new AboutFragment();
         } else if (itemId == R.id.nav_wifi) {
             target = new WifiFragment();
+        } else if (itemId == R.id.nav_settings) {
+            target = new SettingsFragment();
         } else {
             target = new HomeFragment();
         }
@@ -151,6 +157,7 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         rowLogs.setActivated(itemId == R.id.nav_logs);
         rowWifi.setActivated(itemId == R.id.nav_wifi);
         rowAbout.setActivated(itemId == R.id.nav_about);
+        rowSettings.setActivated(itemId == R.id.nav_settings);
         drawer.closeDrawer(GravityCompat.START);
     }
 

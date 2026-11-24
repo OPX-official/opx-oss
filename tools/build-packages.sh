@@ -20,7 +20,11 @@
 #   WIFI4_SRC   path to the opx-wifi4 checkout        (default ../references/opx-wifi4)
 #   OUT         output directory                      (default build/packages)
 #   ARCHES      space separated ABIs                  (default aarch64 arm)
-#   SKIP_BASE   1 = skip building the base runtime    (default 0)
+#   SCOPE       all    = base runtime + OPX packages  (default)
+#               extras = only the OPX packages, published on top of the archive that is
+#                        already there (an engine or shim fix, about four minutes instead
+#                        of the base runtime's two hours)
+#   SKIP_BASE   1 = same as SCOPE=extras               (kept for old invocations)
 #   VERSION     package version                       (default UTC date)
 
 set -euo pipefail
@@ -30,6 +34,7 @@ OUT="${OUT:-$ROOT/build/packages}"
 WIFI4_SRC="${WIFI4_SRC:-$ROOT/../references/opx-wifi4}"
 ARCHES="${ARCHES:-aarch64 arm}"
 SKIP_BASE="${SKIP_BASE:-0}"
+SCOPE="${SCOPE:-all}"
 VERSION="${VERSION:-$(date -u +%Y.%m.%d)}"
 
 PREFIX_REL="data/data/com.opx.oss/files/usr"
@@ -173,8 +178,10 @@ build_opx_usb() { # $1 = arch label
 # --------------------------------------------------------------- base runtime
 
 build_base() {
-  if [ "$SKIP_BASE" = "1" ]; then
-    log "base build skipped (SKIP_BASE=1)"
+  if [ "$SCOPE" = "extras" ] || [ "$SKIP_BASE" = "1" ]; then
+    # The archive already carries the base runtime; only the OPX packages are rebuilt, and
+    # tools/merge-index.py puts the rest of the catalogue back at publish time.
+    log "base build skipped (scope=$SCOPE)"
     return
   fi
   log "base runtime (built from source for /data/data/com.opx.oss/files/usr)"

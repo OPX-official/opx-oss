@@ -150,6 +150,10 @@
             android:id="@+id/logs_item"
             layout="@layout/drawer_row" />
 
+        <include
+            android:id="@+id/settings_item"
+            layout="@layout/drawer_row" />
+
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

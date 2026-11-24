@@ -26,6 +26,19 @@ public final class AppLog {
     private static final String TAG = "OpxLog";
     private static final int MAX_ENTRIES = 500;
 
+    /** Errors only: the state changes are dropped, the failures stay. */
+    public static final int LEVEL_ERROR = 0;
+    /** State changes and failures, without the raw engine stream. */
+    public static final int LEVEL_INFO = 1;
+    /** Everything, including every command sent to the engine and every line it returns. */
+    public static final int LEVEL_VERBOSE = 2;
+
+    private static final String PREFS = "opx-settings";
+    private static final String KEY_LEVEL = "log_level";
+    private static final int DEFAULT_LEVEL = LEVEL_VERBOSE;
+
+    private static volatile int level = DEFAULT_LEVEL;
+
     private static final Object LOCK = new Object();
     private static final Deque<String> ENTRIES = new ArrayDeque<>();
 
@@ -47,12 +60,41 @@ public final class AppLog {
         appendToFile(line);
     }
 
+    /** A state change: kept at {@link #LEVEL_INFO} and above. */
     public static void info(String tag, String message) {
+        if (level < LEVEL_INFO) return;
         log(tag, message);
     }
 
+    /** The raw engine stream: kept at {@link #LEVEL_VERBOSE} only. */
+    public static void verbose(String tag, String message) {
+        if (level < LEVEL_VERBOSE) return;
+        log(tag, message);
+    }
+
+    /** A failure: always kept, whatever the level is. */
     public static void error(String tag, Throwable throwable) {
         if (throwable != null) log(tag, String.valueOf(throwable));
+    }
+
+    /** Reads the saved level; called once from {@link OpxApp#onCreate()}. */
+    public static void load(Context context) {
+        if (context == null) return;
+        level = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getInt(KEY_LEVEL, DEFAULT_LEVEL);
+    }
+
+    public static int level() {
+        return level;
+    }
+
+    public static void setLevel(Context context, int newLevel) {
+        int clamped = Math.max(LEVEL_ERROR, Math.min(LEVEL_VERBOSE, newLevel));
+        level = clamped;
+        if (context != null) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putInt(KEY_LEVEL, clamped).apply();
+        }
     }
 
     /** Every buffered line, oldest first, ready to copy/paste. */

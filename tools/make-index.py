@@ -208,6 +208,10 @@ def collect(out: pathlib.Path, base_url: str,
             entry["arch"] = control.get("Architecture", arch)
             entry["depends"] = control.get("Depends", "")
             entry["description"] = control.get("Description", "")
+            # Carried in the catalogue so an `extras` build can write the apt index for a
+            # package whose .deb this runner never built (the whole base runtime).
+            entry["maintainer"] = control.get("Maintainer", "OPX OSS <opx@opx.dev>")
+            entry["installed_size"] = control.get("Installed-Size", "0")
         entries.append(entry)
     return entries
 
@@ -220,13 +224,19 @@ def write_apt_index(out: pathlib.Path, entries: list[dict]) -> None:
         stanzas = []
         for entry in debs:
             path = out / entry["path"]
-            control = deb_control(path)
+            # An `extras` build has no base .deb on disk: its fields come from the merged
+            # catalogue instead of re-reading a file that is not here.
+            control = deb_control(path) if path.is_file() else {}
+            maintainer = entry.get("maintainer") or control.get("Maintainer",
+                                                                 "OPX OSS <opx@opx.dev>")
+            installed_size = entry.get("installed_size") or control.get("Installed-Size", "0")
+            description = entry.get("description") or control.get("Description", entry["name"])
             lines = [
                 f"Package: {entry['name']}",
                 f"Version: {entry['version']}",
                 f"Architecture: {entry['arch']}",
-                f"Maintainer: {control.get('Maintainer', 'OPX OSS <opx@opx.dev>')}",
-                f"Installed-Size: {control.get('Installed-Size', '0')}",
+                f"Maintainer: {maintainer}",
+                f"Installed-Size: {installed_size}",
                 "Section: utils",
                 "Priority: optional",
             ]
@@ -236,7 +246,7 @@ def write_apt_index(out: pathlib.Path, entries: list[dict]) -> None:
                 f"Filename: {entry['path']}",
                 f"Size: {entry['size']}",
                 f"SHA256: {entry['sha256']}",
-                f"Description: {control.get('Description', entry['name'])}",
+                f"Description: {description}",
             ]
             stanzas.append("\n".join(lines))
         body = "\n\n".join(stanzas) + "\n"

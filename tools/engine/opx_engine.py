@@ -290,9 +290,14 @@ class Engine:
             error = task.exception()
             if error is not None:
                 # The whole traceback, not just the message: a scan that dies inside wifi4 is
-                # undebuggable from a device log otherwise.
-                log("".join(traceback.format_exception(type(error), error, error.__traceback__)).strip())
-                emit("error", message=f"{type(error).__name__}: {error}")
+                # undebuggable from a device log otherwise. It goes to stderr *and* into the
+                # error event, so the app can show it on the WiFi screen instead of only
+                # printing a one-line reason.
+                detail = "".join(
+                    traceback.format_exception(type(error), error, error.__traceback__)
+                ).strip()
+                log(detail)
+                emit("error", message=f"{type(error).__name__}: {error}", detail=detail)
                 emit("scan_done", count=0, seconds=0)
 
         self.scan_task.add_done_callback(finished)
@@ -362,8 +367,9 @@ async def main():
             else:
                 emit("error", message=f"unknown command: {name}")
         except Exception as exc:  # noqa: BLE001
-            log(traceback.format_exc())
-            emit("error", message=f"{type(exc).__name__}: {exc}")
+            detail = traceback.format_exc()
+            log(detail)
+            emit("error", message=f"{type(exc).__name__}: {exc}", detail=detail.strip())
     await engine.stop()
     return 0
 

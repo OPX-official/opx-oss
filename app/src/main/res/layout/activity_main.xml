@@ -45,7 +45,7 @@
                 android:layout_width="30dp"
                 android:layout_height="30dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="@string/nav_logs"
+                android:contentDescription="@string/nav_settings"
                 android:src="@drawable/settings"
                 app:tint="@color/night_contrast" />
 

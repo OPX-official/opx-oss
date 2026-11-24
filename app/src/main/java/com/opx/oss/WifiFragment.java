@@ -66,6 +66,11 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     private LinearProgressIndicator progress;
     private SwipeRefreshLayout refresh;
     private RecyclerView list;
+    private View errorCard;
+    private TextView errorToggle;
+    private TextView errorMessage;
+    private TextView errorDetail;
+    private String lastError = "";
 
     private WifiManager wifiManager;
     private BroadcastReceiver scanReceiver;
@@ -99,6 +104,10 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         progress = view.findViewById(R.id.wifi_scan_progress);
         refresh = view.findViewById(R.id.refresh);
         list = view.findViewById(R.id.wifilist);
+        errorCard = view.findViewById(R.id.wifi_error_card);
+        errorToggle = view.findViewById(R.id.wifi_error_toggle);
+        errorMessage = view.findViewById(R.id.wifi_error_message);
+        errorDetail = view.findViewById(R.id.wifi_error_detail);
 
         list.setLayoutManager(new LinearLayoutManager(requireContext()));
         list.setAdapter(adapter);
@@ -115,6 +124,10 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         view.findViewById(R.id.wifi_usb_diagnose).setOnClickListener(v -> diagnose());
         view.findViewById(R.id.wifi_usb_copy).setOnClickListener(v ->
                 copy(usbDiag.getText().toString(), R.string.wifi_usb_copied));
+        view.findViewById(R.id.wifi_error_copy).setOnClickListener(v ->
+                copy(lastError, R.string.wifi_error_copied));
+        view.findViewById(R.id.wifi_error_retry).setOnClickListener(v -> scan());
+        errorToggle.setOnClickListener(v -> toggleErrorDetails());
 
         wifiManager = (WifiManager) requireContext().getApplicationContext()
                 .getSystemService(Context.WIFI_SERVICE);
@@ -195,6 +208,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         scanText.setText(R.string.wifi_scanning);
         scanSubtext.setText(R.string.wifi_usb_scanning);
         tryAgain.setVisibility(View.GONE);
+        hideError();
         statusValue.setText(R.string.wifi_usb_scanning);
         WifiBridge bridge = WifiBridge.get(requireContext());
         bridge.start();
@@ -302,9 +316,9 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         } else if ("error".equals(name)) {
             scanning = false;
             progress.setVisibility(View.GONE);
-            String message = event.optString("message");
-            statusValue.setText(getString(R.string.wifi_engine_error, message));
-            usbDiag.setText(getString(R.string.wifi_usb_error, message));
+            // The card carries the reason and the traceback; the header only says that the
+            // scan failed instead of pushing a raw "TypeError: ..." into the status line.
+            showError(event.optString("message"), event.optString("detail"));
             updateCount();
         }
     }
@@ -428,6 +442,36 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             clipboard.setPrimaryClip(ClipData.newPlainText("OPX OSS", text));
             Snackbar.make(requireView(), messageRes, Snackbar.LENGTH_SHORT).show();
         }
+    }
+
+    // ------------------------------------------------------------- engine error
+
+    /**
+     * A failed scan gets its own card: the one-line reason, the traceback the engine sends in
+     * the error event, and a copy button — so a report does not have to start with a screenshot
+     * of the Logs screen.
+     */
+    private void showError(String message, String detail) {
+        if (message == null) message = "";
+        if (detail == null || "null".equals(detail)) detail = "";
+        lastError = detail.isEmpty() ? message : message + "\n\n" + detail;
+        errorMessage.setText(message.isEmpty() ? getString(R.string.wifi_state_failed) : message);
+        errorDetail.setText(detail);
+        errorDetail.setVisibility(View.GONE);
+        errorToggle.setText(R.string.wifi_error_show);
+        errorToggle.setVisibility(detail.isEmpty() ? View.GONE : View.VISIBLE);
+        errorCard.setVisibility(View.VISIBLE);
+        statusValue.setText(R.string.wifi_state_failed);
+    }
+
+    private void toggleErrorDetails() {
+        boolean shown = errorDetail.getVisibility() == View.VISIBLE;
+        errorDetail.setVisibility(shown ? View.GONE : View.VISIBLE);
+        errorToggle.setText(shown ? R.string.wifi_error_show : R.string.wifi_error_hide);
+    }
+
+    private void hideError() {
+        if (errorCard != null) errorCard.setVisibility(View.GONE);
     }
 
     // --------------------------------------------------------- OpxService.Listener
