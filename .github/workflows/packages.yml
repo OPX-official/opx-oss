@@ -6,17 +6,25 @@ name: Packages
 #
 # If PACKAGES_TOKEN is not set, the publish step is skipped but the package archive
 # is still built locally (in out/) for the APK workflow to use as a fallback.
+#
+# `scope` decides how much is rebuilt:
+#   auto    (default) look at the files that changed; an engine/shim-only change takes the
+#           four-minute extras lane, anything else (base runtime, bootstrap, build scripts,
+#           an unknown file) rebuilds everything, so a base change can never be skipped
+#   all     base runtime + OPX packages (about two hours)
+#   extras  only the OPX packages, merged on top of the published archive (about four minutes)
 
 on:
   workflow_dispatch:
     inputs:
       scope:
-        description: "all = base runtime + OPX packages, extras = only the OPX packages (the fast lane for an engine fix)"
+        description: "auto = decide from the changed files, all = base runtime + OPX packages (2h), extras = only the OPX packages (fast lane, ~4 min)"
         type: choice
         options:
+          - auto
           - all
           - extras
-        default: all
+        default: auto
   push:
     branches: [main]
     paths:
@@ -25,6 +33,8 @@ on:
 
 permissions:
   contents: read
+  # The auto scope asks for the commit of the last successful Packages run.
+  actions: read
 
 concurrency:
   group: packages
@@ -53,6 +63,72 @@ jobs:
           git -C references/opx-wifi4 checkout "$WIFI4_COMMIT"
           git -C references/opx-wifi4 log -1 --format='wifi4 %h %s'
 
+      - name: Resolve scope
+        # Turns `auto` into `all` or `extras` by looking at what changed. Only the engine and
+        # the USB shim live in the extras packages, so only they can take the fast lane;
+        # every other file — the base runtime, the bootstrap, a build script, this workflow,
+        # or something nobody classified yet — falls back to a full rebuild.
+        id: scope
+        env:
+          SCOPE_INPUT: ${{ inputs.scope || 'auto' }}
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [ "$SCOPE_INPUT" != "auto" ]; then
+            echo "scope=$SCOPE_INPUT (chosen by hand)"
+            echo "scope=$SCOPE_INPUT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A push run knows exactly which commits it covers. A manual run has no diff of its
+          # own, so it compares with the commit of the last Packages run that succeeded.
+          base=""
+          if [ "$EVENT_NAME" = "push" ] && [ -n "${BEFORE_SHA:-}" ] \
+             && [ "${BEFORE_SHA//0/}" != "" ]; then
+            base="$BEFORE_SHA"
+          fi
+          if [ -z "$base" ]; then
+            base="$(gh run list -R "${REPO:-}" --workflow packages.yml \
+              --status success --limit 1 --json headSha -q '.[0].headSha' 2>/dev/null || true)"
+          fi
+
+          changed=""
+          if [ -n "$base" ]; then
+            git fetch --quiet --depth 1 origin "$base" 2>/dev/null || true
+            if git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              changed="$(git diff --name-only "$base" HEAD || true)"
+              echo "comparing $base..HEAD"
+            else
+              echo "cannot read $base, so the changed files are unknown"
+            fi
+          else
+            echo "no earlier run to compare with, so the changed files are unknown"
+          fi
+
+          if [ -z "$changed" ]; then
+            echo "nothing to classify, so the whole archive is rebuilt (scope=all)"
+            echo "scope=all" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "--- changed files ---"
+          echo "$changed"
+          only_extras=1
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            case "$file" in
+              tools/engine/*|tools/usb/*|tools/patch-wifi4.py) ;;
+              *) only_extras=0; echo "rebuilds the base too: $file" ;;
+            esac
+          done <<< "$changed"
+          if [ "$only_extras" = "1" ]; then scope=extras; else scope=all; fi
+          echo "scope=$scope (auto)"
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -60,7 +136,7 @@ jobs:
 
       - name: Build packages
         env:
-          SCOPE: ${{ inputs.scope || 'all' }}
+          SCOPE: ${{ steps.scope.outputs.scope }}
           OUT: ${{ github.workspace }}/out
           WIFI4_SRC: ${{ github.workspace }}/references/opx-wifi4
         run: |
@@ -85,7 +161,7 @@ jobs:
         # the locally-built packages in out/ are available for the APK workflow.
         env:
           PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
-          SCOPE: ${{ inputs.scope || 'all' }}
+          SCOPE: ${{ steps.scope.outputs.scope }}
         run: |
           set -euo pipefail
           if [ -z "${PACKAGES_TOKEN:-}" ]; then
@@ -200,6 +276,8 @@ jobs:
           set -euo pipefail
           {
             echo "### OPX packages"
+            echo
+            echo "Scope: \`${{ steps.scope.outputs.scope }}\` (requested: \`${{ inputs.scope || 'auto' }}\`)"
             echo
             du -sh out/* 2>/dev/null || true
           } >> "$GITHUB_STEP_SUMMARY"
