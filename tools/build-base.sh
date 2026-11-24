@@ -245,6 +245,12 @@ PYAPT
   [ -e "$merge/$PREFIX_REL/lib/libusb-1.0.so" ] || missing="$missing lib/libusb-1.0.so"
   if [ -n "$HASHCAT_DEB" ] && [ -f "$HASHCAT_DEB" ]; then
     [ -x "$merge/$PREFIX_REL/bin/hashcat" ] || missing="$missing bin/hashcat"
+    # hashcat bakes INSTALL_FOLDER/SHARED_FOLDER in at compile time. Prove the binary points
+    # at this app's prefix and not at a build-machine default, and that the OpenCL kernels it
+    # needs at startup were packaged next to it.
+    grep -aqF "/$PREFIX_REL/share/hashcat" "$merge/$PREFIX_REL/bin/hashcat" \
+      || missing="$missing hashcat-prefix"
+    [ -d "$merge/$PREFIX_REL/share/hashcat/OpenCL" ] || missing="$missing share/hashcat/OpenCL"
   fi
   if [ -n "$missing" ]; then
     echo "the $arch runtime is incomplete, missing:$missing" >&2
