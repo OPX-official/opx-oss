@@ -41,7 +41,9 @@ FOREIGN="com.termux"
 PREFIX_REL="data/data/com.opx.oss/files/usr"
 # Packages the engine needs: python (the engine), libusb (the adapter), bash+coreutils (the
 # shell the app runs everything through).
-BASE_PACKAGES="bash,coreutils,python,libusb"
+# hashcat (the GPU cracker) is built separately below: it is optional, so a failure there
+# leaves the runtime working with the CPU cracker instead of breaking the whole base build.
+BASE_PACKAGES="bash,coreutils,python,libusb,ocl-icd,opencl-vendor-driver"
 
 log() { printf '\n== %s\n' "$*"; }
 
@@ -84,6 +86,11 @@ chmod a+rwx "$TP_SRC/output" 2>/dev/null || true
 
 python3 "$ROOT/tools/patch-properties.py" "$TP_SRC"
 python3 "$ROOT/tools/patch-bootstraps.py" "$TP_SRC" "$BASE_PACKAGES"
+
+# Our own recipe for hashcat: Termux's tree does not carry it, and the GPU crack option must
+# have a real binary to start instead of a disabled card.
+mkdir -p "$TP_SRC/packages/hashcat"
+cp "$ROOT/tools/termux/hashcat/build.sh" "$TP_SRC/packages/hashcat/build.sh"
 
 # --------------------------------------------------------------- build per arch
 
@@ -178,6 +185,27 @@ with zipfile.ZipFile(boot) as check:
 print(f"  sources.list -> {repo}")
 PYAPT
 
+  # hashcat is the one optional package: built after the bootstrap so a compile failure there
+  # cannot cost the run, and merged into the payload only when it produced a binary. 32-bit ARM
+  # keeps the CPU cracker; the GPU card says why when the binary is absent.
+  HASHCAT_DEB=""
+  if [ "$arch" = "aarch64" ]; then
+    log "hashcat for $arch (optional, GPU crack)"
+    if ( cd "$TP_SRC" && ./scripts/run-docker.sh ./build-package.sh -a "$arch" hashcat ) \
+        > "$WORK/hashcat-$arch.log" 2>&1; then
+      HASHCAT_DEB="$(ls "$TP_SRC/output/hashcat_"*"_${arch}.deb" 2>/dev/null | head -1 || true)"
+      if [ -n "$HASHCAT_DEB" ]; then
+        printf '  hashcat %s\n' "$(basename "$HASHCAT_DEB")"
+      else
+        echo "WARN: hashcat built but no deb was produced; GPU crack stays disabled" >&2
+      fi
+    else
+      echo "WARN: hashcat did not build; the base runtime continues without GPU crack" >&2
+      grep -nE "error:|Error|No such|not found|failed" "$WORK/hashcat-$arch.log" | tail -10 >&2 || true
+      tail -20 "$WORK/hashcat-$arch.log" >&2 || true
+    fi
+  fi
+
   # Merge the debs of the base packages' runtime closure into one payload tar: that is what
   # the app installs. output/ also holds everything the build touched on the way — each
   # package's build-time dependencies (perl for openssl, doxygen, ...) and every -dev and
@@ -194,6 +222,10 @@ PYAPT
     debian_count=$((debian_count + 1))
     dpkg-deb --fsys-tarfile "$deb" | tar -xf - -C "$merge"
   done < "$deb_list"
+  if [ -n "$HASHCAT_DEB" ] && [ -f "$HASHCAT_DEB" ]; then
+    dpkg-deb --fsys-tarfile "$HASHCAT_DEB" | tar -xf - -C "$merge"
+    debian_count=$((debian_count + 1))
+  fi
   if [ "$debian_count" -eq 0 ]; then
     echo "no $arch debs resolved for $BASE_PACKAGES" >&2
     echo "output: $(ls -ld "$TP_SRC/output" 2>&1), $(ls "$TP_SRC/output" 2>/dev/null | wc -l) entries" >&2
@@ -211,6 +243,9 @@ PYAPT
   compgen -G "$merge/$PREFIX_REL/bin/python3*" > /dev/null || missing="$missing bin/python3"
   compgen -G "$merge/$PREFIX_REL/lib/libpython3*" > /dev/null || missing="$missing lib/libpython3"
   [ -e "$merge/$PREFIX_REL/lib/libusb-1.0.so" ] || missing="$missing lib/libusb-1.0.so"
+  if [ -n "$HASHCAT_DEB" ] && [ -f "$HASHCAT_DEB" ]; then
+    [ -x "$merge/$PREFIX_REL/bin/hashcat" ] || missing="$missing bin/hashcat"
+  fi
   if [ -n "$missing" ]; then
     echo "the $arch runtime is incomplete, missing:$missing" >&2
     echo "merged: $(sed 's|.*/||' "$deb_list" | tr '\n' ' ')" >&2

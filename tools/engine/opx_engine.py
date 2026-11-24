@@ -70,6 +70,48 @@ def plain(text):
     return MARKUP.sub("", str(text)).strip()
 
 
+def prepare_opencl():
+    """Give hashcat a chance at the phone's GPU: point the ICD loader at the vendor library.
+
+    The app's runtime is not installed by dpkg, so opencl-vendor-driver's post-install script
+    never runs here. This does its essential step: copy the vendor libOpenCL (or the Mali
+    driver, which is itself an ICD) into the prefix and write the ICD file ocl-icd reads.
+    Devices without such a library keep the CPU cracker; the GPU card says so when hashcat
+    reports no device.
+    """
+    prefix = os.environ.get("PREFIX") or ""
+    if not prefix:
+        return "no PREFIX"
+    vendor_dirs = (
+        "/vendor/lib64", "/system/vendor/lib64",
+        "/vendor/lib", "/system/vendor/lib",
+    )
+    candidates = ("libOpenCL.so", "libGLES_mali.so", "libPVROCL.so")
+    source = None
+    for directory in vendor_dirs:
+        for name in candidates:
+            candidate = Path(directory) / name
+            if candidate.exists():
+                source = candidate
+                break
+        if source is not None:
+            break
+    if source is None:
+        return "no vendor OpenCL library on this device"
+    target_dir = Path(prefix) / "opt" / "vendor" / "lib"
+    icd_dir = Path(prefix) / "etc" / "OpenCL" / "vendors"
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        icd_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / "libOpenCL.so"
+        shutil.copyfile(source, target)
+        target.chmod(0o755)
+        (icd_dir / "vendor.icd").write_text(str(target) + "\n", encoding="utf-8")
+        return f"vendor OpenCL from {source}"
+    except OSError as exc:
+        return f"cannot prepare vendor OpenCL: {type(exc).__name__}: {exc}"
+
+
 def captures_dir():
     """Where wifi4's own capture saver writes: this runtime's private var directory.
 
@@ -1079,6 +1121,10 @@ class Engine:
 
 async def main():
     configure_captures()
+    try:
+        log(f"opencl: {prepare_opencl()}")
+    except Exception as exc:  # noqa: BLE001 - the GPU is optional, the runtime is not
+        log(f"opencl: {type(exc).__name__}: {exc}")
     engine = Engine()
     # Announce readiness immediately: the app logs the whole line, so a broken runtime is
     # visible before the first command comes in.

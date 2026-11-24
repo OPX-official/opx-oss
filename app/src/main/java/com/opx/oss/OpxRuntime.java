@@ -597,8 +597,10 @@ public final class OpxRuntime {
                 // apt upgrade of python cannot orphan them.
                 "PYTHONPATH=" + pythonPath,
                 "PYTHONUNBUFFERED=1",
-                // Native binaries find the runtime's own libraries first.
-                "LD_LIBRARY_PATH=" + lib.getAbsolutePath() + ":" + PREFIX_GUEST + "/lib",
+                // Native binaries find the runtime's own libraries first, then the vendor
+                // OpenCL library harness that the engine stages for hashcat.
+                "LD_LIBRARY_PATH=" + lib.getAbsolutePath() + ":" + PREFIX_GUEST + "/lib"
+                        + ":" + PREFIX_GUEST + "/opt/vendor/lib",
         };
     }
 
