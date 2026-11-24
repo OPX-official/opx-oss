@@ -18,6 +18,10 @@ public class OpxApp extends Application {
         // The Settings screen offers a log level; it has to be in effect before anything logs.
         AppLog.load(this);
 
+        // Plugging the adapter in asks for its permission and brings the interface up from any
+        // screen (and from none): the WiFi screen is not the entry point for that any more.
+        UsbAutoConnect.start(this);
+
         // The engine belongs to the app, not to the terminal screen. Starting it here means any
         // entry point that creates the process (launcher, shortcut, notification, restored task)
         // warms the bundled userland immediately, so no feature ever depends on the terminal

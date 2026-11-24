@@ -383,6 +383,31 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             usbDiag.setText(text.toString());
             ifaceValue.setText(adapters == 0
                     ? getString(R.string.wifi_state_no_adapter) : "wlan0");
+        } else if ("usb_attached".equals(name)) {
+            // Plugging the card in anywhere in the app lands here: the interface is already up.
+            String iface = event.optString("iface", "wlan0");
+            ifaceValue.setText(iface);
+            ifaceMeta.setText(iface);
+            String chipset = event.optString("chipset", "");
+            String label = chipset.isEmpty() || "null".equals(chipset) ? iface : chipset;
+            statusValue.setText(getString(R.string.wifi_usb_auto_ready, label));
+            WifiBridge.get(requireContext()).requestDevices();
+        } else if ("usb_waiting".equals(name)) {
+            String message = event.optString("message", "");
+            if (!message.isEmpty() && !"null".equals(message)) {
+                usbDiag.setText(message);
+                statusValue.setText(R.string.wifi_state_no_adapter);
+            }
+        } else if ("usb_detached".equals(name)) {
+            ifaceValue.setText(R.string.wifi_state_no_adapter);
+            ifaceMeta.setText("—");
+            statusValue.setText(R.string.wifi_usb_unplugged);
+            attackRunning = false;
+            if (attackMonitor != null) {
+                attackMonitor.dismiss();
+                attackMonitor = null;
+            }
+            if (attackCard != null) attackCard.setVisibility(View.GONE);
         } else if ("status".equals(name)) {
             boolean connected = event.optBoolean("connected");
             String iface = event.optString("iface", "");

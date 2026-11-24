@@ -48,6 +48,17 @@
             android:label="@string/app_name"
             android:theme="@style/Theme.Opx" />
 
+        <!-- The adapter doorbell: an attach is seen even when the process was not alive, and
+             the USB permission answer comes back to the same class. -->
+        <receiver
+            android:name=".UsbAttachReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+                <action android:name="android.hardware.usb.action.USB_DEVICE_DETACHED" />
+            </intent-filter>
+        </receiver>
+
         <!-- The engine: installs the packaged userland, owns the headless wifi4 process and the
              USB host bridge, and keeps the ongoing notification with Exit. -->
         <service

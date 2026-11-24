@@ -91,6 +91,8 @@
     <string name="wifi_engine_error">Engine error: %1$s</string>
     <string name="wifi_builtin_unavailable">The built-in radio is not reporting any networks.</string>
     <string name="wifi_usb_title">USB ADAPTER</string>
+    <string name="wifi_usb_auto_ready">%1$s connected — the adapter is ready, no scan needed</string>
+    <string name="wifi_usb_unplugged">Adapter unplugged — plug it back in and the app reconnects</string>
     <string name="wifi_usb_waiting">Waiting for the engine and the USB adapter list…</string>
     <string name="wifi_usb_scanning">Scanning with the USB adapter…</string>
     <string name="wifi_usb_scan_done">Scan finished: %1$d from the engine, %2$d in the list.</string>

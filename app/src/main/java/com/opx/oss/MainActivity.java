@@ -108,6 +108,9 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         // Registered even when the service does not exist yet: the state is process-wide, so the
         // drawer follows the engine to "ready" exactly like the notification does.
         OpxService.addListener(this);
+        // Back from the intro (or any other screen): if an adapter is plugged in without its
+        // permission, this is where the prompt appears — no WiFi screen needed.
+        UsbAutoConnect.resume(this);
         applyRuntimeState();
     }
 

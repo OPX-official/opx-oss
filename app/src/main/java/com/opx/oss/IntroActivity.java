@@ -46,6 +46,27 @@ public class IntroActivity extends AppCompatActivity {
     private static final int[] DOTS = {R.id.dot_0, R.id.dot_1, R.id.dot_2, R.id.dot_3};
 
     private int index;
+    private static volatile boolean showing;
+
+    /**
+     * The USB prompt waits until the intro is out of the way: the first launch belongs to these
+     * slides, and an adapter plugged in behind them is picked up the moment the app is back.
+     */
+    public static boolean isShowing() {
+        return showing;
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        showing = true;
+    }
+
+    @Override
+    protected void onPause() {
+        showing = false;
+        super.onPause();
+    }
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {

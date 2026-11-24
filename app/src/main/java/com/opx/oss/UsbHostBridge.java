@@ -124,6 +124,35 @@ public final class UsbHostBridge {
         }
     }
 
+    /**
+     * The card went away: close the app's copies of its descriptors now, so a replug gets a
+     * fresh connection instead of piling up fds behind a dead device. The bridge socket itself
+     * keeps listening and the engine is told separately.
+     */
+    public static synchronized void onDeviceDetached() {
+        if (instance == null) return;
+        synchronized (instance.openDescriptors) {
+            for (ParcelFileDescriptor descriptor : instance.openDescriptors) {
+                try {
+                    descriptor.close();
+                } catch (Exception ignored) {
+                    // Already closed with its connection.
+                }
+            }
+            instance.openDescriptors.clear();
+        }
+        synchronized (instance.openConnections) {
+            for (UsbDeviceConnection connection : instance.openConnections) {
+                try {
+                    connection.close();
+                } catch (RuntimeException ignored) {
+                    // The kernel closed it when the device went away.
+                }
+            }
+            instance.openConnections.clear();
+        }
+    }
+
     private void shutdown() {
         running = false;
         try {

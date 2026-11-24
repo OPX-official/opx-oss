@@ -8,7 +8,9 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 
 import androidx.core.app.NotificationCompat;
 
@@ -224,6 +226,34 @@ public class OpxService extends Service {
             if (state == STATE_FAILED || state == STATE_STOPPED) return;
         }
         action.run();
+    }
+
+    /**
+     * The same queue, callable before Android has constructed the service. USB attach arrives on
+     * an arbitrary screen, often while the runtime is still installing, so the action is kept
+     * until the engine is ready instead of being dropped.
+     */
+    public static void runWhenReady(Context context, Runnable action) {
+        if (context == null || action == null) return;
+        start(context);
+        OpxService service = get();
+        if (service != null) {
+            service.whenReady(action);
+            return;
+        }
+        final Handler handler = new Handler(Looper.getMainLooper());
+        final int[] tries = {0};
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                OpxService ready = get();
+                if (ready != null) {
+                    ready.whenReady(action);
+                } else if (tries[0]++ < 300) {
+                    handler.postDelayed(this, 100);
+                }
+            }
+        }, 100);
     }
 
     /**

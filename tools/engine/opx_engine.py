@@ -253,6 +253,8 @@ class Engine:
         self.crack_job = None
         self.crack_capture = ""
         self.crack_task = None
+        # One interface bring-up at a time: an attach can race a scan's first connect.
+        self._connecting = None
 
     async def ping(self):
         emit("ready", version=VERSION, native=bool(os.environ.get("PREFIX")),
@@ -290,8 +292,18 @@ class Engine:
         emit("devices", **fields)
 
     async def connect(self):
+        """Brings the first supported adapter up once, even if two callers ask together."""
         if self.iface is not None:
             return self.iface
+        if self._connecting is not None:
+            return await self._connecting
+        self._connecting = asyncio.create_task(self._connect())
+        try:
+            return await self._connecting
+        finally:
+            self._connecting = None
+
+    async def _connect(self):
         from wifi4.device.manager import devices as list_devices, wlan_iface
         from wifi4.wlan.array import WlanArray
 
@@ -312,6 +324,55 @@ class Engine:
         log(f"interface {iface.name} connected ({found[0].description})")
         return iface
 
+    async def usb_attach(self):
+        """The app already holds the adapter's permission: bring wifi4's interface up now.
+
+        This is what makes plugging the card in enough: no scan, no WiFi screen, no terminal.
+        """
+        if self.iface is not None:
+            emit("usb_attached", iface=self.iface.name,
+                 chipset=getattr(self.iface, "chipset", None), already=True)
+            return
+        try:
+            iface = await self.connect()
+        except Exception as exc:  # noqa: BLE001 - no card or no permission is a normal state
+            emit("usb_waiting", message=f"{type(exc).__name__}: {exc}")
+            return
+        emit("usb_attached", iface=iface.name,
+             chipset=getattr(iface, "chipset", None),
+             mac=getattr(iface, "mac_address", None))
+
+    async def usb_lost(self):
+        """The adapter was unplugged: park any campaign and drop the stale interface."""
+        campaign = self.campaign
+        if campaign is not None and not campaign.done:
+            try:
+                campaign.request_stop()
+                for _ in range(20):
+                    if campaign.done:
+                        break
+                    await asyncio.sleep(0.1)
+            except Exception:  # noqa: BLE001
+                pass
+        self.scanning = False
+        if self.scan_task is not None and not self.scan_task.done():
+            self.scan_task.cancel()
+            try:
+                await self.scan_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        array, iface = self.array, self.iface
+        self.array = None
+        self.iface = None
+        for resource in (array, iface):
+            if resource is None:
+                continue
+            try:
+                await resource.close()
+            except Exception:  # noqa: BLE001 - the descriptor is already gone
+                pass
+        emit("usb_detached")
+
     async def status(self):
         if self.iface is None:
             emit("status", connected=False, iface=None, access_points=0, band=None,
@@ -330,14 +391,16 @@ class Engine:
         )
 
     async def _scan(self, seconds):
-        await self.connect()
+        # Hold the array locally: an unplug during the scan drops self.array, and the finally
+        # block must still stop hopping on the object it started with.
+        array = await self.connect()
         self.scanning = True
         seen = {}
         try:
-            await self.array.start_hopping()
+            await array.start_hopping()
             deadline = time.monotonic() + seconds
             while time.monotonic() < deadline and self.scanning:
-                for bssid, ap in pool_access_points(self.array).items():
+                for bssid, ap in pool_access_points(array).items():
                     fields = ap_fields(ap)
                     key = fields["bssid"] or bssid
                     if seen.get(key) != fields:
@@ -347,7 +410,7 @@ class Engine:
         finally:
             self.scanning = False
             try:
-                await self.array.stop_hopping()
+                await array.stop_hopping()
             except Exception:  # noqa: BLE001
                 pass
         emit("scan_done", count=len(seen), seconds=seconds)
@@ -1040,6 +1103,10 @@ async def main():
                 await engine.ping()
             elif name == "devices":
                 await engine.devices()
+            elif name == "usb_attach":
+                await engine.usb_attach()
+            elif name == "usb_lost":
+                await engine.usb_lost()
             elif name == "status":
                 await engine.status()
             elif name == "scan":
