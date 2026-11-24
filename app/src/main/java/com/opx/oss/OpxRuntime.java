@@ -15,12 +15,14 @@ import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 
 import java.io.BufferedReader;
 import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -179,6 +181,7 @@ public final class OpxRuntime {
 
         extractPayloads(context, arch, prefix);
         ensureSiteShim(context);
+        ensureUsbShim(context);
 
         ensureDirectory(homeDir(context));
         ensureDirectory(tmpDir(context));
@@ -223,6 +226,52 @@ public final class OpxRuntime {
             }
         } catch (IOException e) {
             AppLog.info("OpxRuntime", "cannot write the python site shim: " + e.getMessage());
+        }
+    }
+
+    /**
+     * wifi4 runs the USB shim by exec'ing {@code $PREFIX/bin/opx-usb}, so its first line is an
+     * interpreter path the kernel has to resolve. Android has no {@code /usr/bin/env}, and a
+     * prefix installed from an older payload still carries {@code #!/usr/bin/env python3}:
+     * execve then fails with ENOENT, wifi4 swallows it as "opx-usb is unavailable", and the
+     * USB adapter looks like a permission problem while nothing ever reaches the bridge.
+     * <p>
+     * Rewriting that one line to this prefix's own python repairs an installed prefix in place,
+     * so the fix does not wait for a full runtime reinstall.
+     */
+    static void ensureUsbShim(Context context) {
+        File script = new File(prefixDir(context), "bin/opx-usb");
+        if (!script.isFile()) {
+            AppLog.info("OpxRuntime", "no bin/opx-usb in the prefix; reinstall the runtime for USB");
+            return;
+        }
+        String wanted = "#!" + PREFIX_GUEST + "/bin/python3";
+        try {
+            byte[] body;
+            try (InputStream in = new FileInputStream(script);
+                 ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
+                byte[] chunk = new byte[4096];
+                int count;
+                while ((count = in.read(chunk)) > 0) buffer.write(chunk, 0, count);
+                body = buffer.toByteArray();
+            }
+            String text = new String(body, StandardCharsets.UTF_8);
+            int newline = text.indexOf('\n');
+            String firstLine = (newline < 0 ? text : text.substring(0, newline)).trim();
+            if (!wanted.equals(firstLine)) {
+                String repaired = wanted + "\n" + (newline < 0 ? "" : text.substring(newline + 1));
+                try (FileOutputStream out = new FileOutputStream(script)) {
+                    out.write(repaired.getBytes(StandardCharsets.UTF_8));
+                }
+                AppLog.info("OpxRuntime", "opx-usb entry point: " + firstLine + " -> " + wanted);
+            }
+            try {
+                Os.chmod(script.getAbsolutePath(), 0755);
+            } catch (ErrnoException e) {
+                AppLog.info("OpxRuntime", "cannot make opx-usb executable: " + e.getMessage());
+            }
+        } catch (IOException e) {
+            AppLog.info("OpxRuntime", "cannot repair bin/opx-usb: " + e.getMessage());
         }
     }
 

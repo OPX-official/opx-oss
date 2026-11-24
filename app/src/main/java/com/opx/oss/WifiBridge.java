@@ -93,7 +93,9 @@ public final class WifiBridge {
         }
 
         // The engine reaches the adapter through the in-app USB bridge, so it must be listening
-        // before the process asks for its first device.
+        // before the process asks for its first device. The shim it execs is repaired first:
+        // an installed prefix can still carry a #!/usr/bin/env line, which Android cannot exec.
+        OpxRuntime.ensureUsbShim(context);
         UsbHostBridge.start(context);
         acquireWakeLock();
         // pyusb needs the prefix's libusb visible; the shim must exist before python starts.

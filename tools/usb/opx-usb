@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/data/data/com.opx.oss/files/usr/bin/python3
+# The line above must be an absolute interpreter path: wifi4 execs this file directly, and
+# Android has no /usr/bin/env, so a "#!/usr/bin/env python3" line makes execve fail with ENOENT
+# and wifi4 reports "opx-usb is unavailable" as if the USB permission were missing. This is the
+# prefix's own python (OpxRuntime.PREFIX_GUEST), the same interpreter that runs the engine.
 """``opx-usb`` for OPX OSS: the command the engine runs, with no second app.
 
 wifi4 shells out to ``opx-usb -l`` and ``opx-usb -r |-E -e <callback> <device>``.
