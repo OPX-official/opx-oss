@@ -25,6 +25,11 @@ import java.util.Map;
  */
 public class WifiAdapter extends RecyclerView.Adapter<WifiAdapter.Holder> {
 
+    /** A row was tapped: the screen opens the target sheet for that network. */
+    public interface OnNetworkClick {
+        void onNetworkClick(Network network);
+    }
+
     private static final int LOCKED_BG = Color.parseColor("#FFD7DA");
     private static final int LOCKED_FG = Color.parseColor("#B71C1C");
     private static final int ENHANCED_OPEN_BG = Color.parseColor("#FFF3CD");
@@ -81,6 +86,11 @@ public class WifiAdapter extends RecyclerView.Adapter<WifiAdapter.Holder> {
     }
 
     private final Map<String, Network> items = new LinkedHashMap<>();
+    private OnNetworkClick onNetworkClick;
+
+    public void setOnNetworkClick(OnNetworkClick listener) {
+        this.onNetworkClick = listener;
+    }
 
     public void clear() {
         items.clear();
@@ -123,6 +133,11 @@ public class WifiAdapter extends RecyclerView.Adapter<WifiAdapter.Holder> {
         holder.five.setVisibility(network.isFiveGhz() ? View.VISIBLE : View.GONE);
 
         holder.divider.setVisibility(position == items.size() - 1 ? View.GONE : View.VISIBLE);
+
+        // Without this a row is just text: tapping a network has to open its attacks.
+        holder.item.setOnClickListener(v -> {
+            if (onNetworkClick != null) onNetworkClick.onNetworkClick(network);
+        });
     }
 
     private static void pill(TextView view, String label) {
@@ -144,6 +159,7 @@ public class WifiAdapter extends RecyclerView.Adapter<WifiAdapter.Holder> {
     }
 
     static final class Holder extends RecyclerView.ViewHolder {
+        final View item;
         final TextView name;
         final TextView bssid;
         final TextView model;
@@ -156,6 +172,7 @@ public class WifiAdapter extends RecyclerView.Adapter<WifiAdapter.Holder> {
 
         Holder(@NonNull View itemView) {
             super(itemView);
+            item = itemView.findViewById(R.id.item);
             name = itemView.findViewById(R.id.wifi_name);
             bssid = itemView.findViewById(R.id.wifi_bssid);
             model = itemView.findViewById(R.id.wifi_model);

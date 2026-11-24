@@ -10,6 +10,11 @@ Commands
     {"cmd": "devices"}                  -> {"event": "devices", "devices": [...]}
     {"cmd": "status"}                   -> {"event": "status", "iface": ..., "connected": ...}
     {"cmd": "scan", "seconds": 15}      -> {"event": "network", ...} ... {"event": "scan_done"}
+    {"cmd": "targets"}                  -> {"event": "targets", "targets": [{...,"attacks":[...]}]}
+    {"cmd": "attack", "kind": "deauth|pmkid|wps", "bssid": ".."}
+                                        -> {"event": "attack_started"}, attack_log/attack_progress,
+                                           then {"event": "attack_done", "ok": .., "summary": ..}
+    {"cmd": "stop_attack"}              -> the running campaign stops; attack_done follows
     {"cmd": "stop"}                     -> {"event": "stopped"}
 
 A ``ready`` event is also emitted as soon as the process starts, without waiting for a ping:
@@ -21,15 +26,20 @@ bad command, so the app can keep the process warm across screens.
 """
 
 import asyncio
+import importlib
 import json
 import os
 import platform
+import re
 import struct
 import sys
 import time
 import traceback
 
 VERSION = "0.3.0"
+
+# Campaign logs and status lines are rich markup ("[bold cyan]..[/]"); the app draws plain text.
+MARKUP = re.compile(r"\[[^\[\]]*\]")
 
 
 def emit(event, **fields):
@@ -42,6 +52,13 @@ def emit(event, **fields):
 def log(message):
     sys.stderr.write(f"opx-engine: {message}\n")
     sys.stderr.flush()
+
+
+def plain(text):
+    """A campaign's rich-markup line as the plain text the app's rows and log draw."""
+    if text is None:
+        return ""
+    return MARKUP.sub("", str(text)).strip()
 
 
 def runtime_info():
@@ -178,6 +195,10 @@ class Engine:
         self.array = None
         self.scanning = False
         self.scan_task = None
+        # One radio, one campaign: wifi4's Campaign.active is the mutex; these are the app's copy.
+        self.campaign = None
+        self.campaign_kind = None
+        self.attack_task = None
 
     async def ping(self):
         emit("ready", version=VERSION, native=bool(os.environ.get("PREFIX")),
@@ -313,8 +334,208 @@ class Engine:
                 pass
         emit("scan_done", count=0, cancelled=True)
 
+    # ------------------------------------------------------------------ attacks
+
+    def campaign_classes(self):
+        """wifi4's own campaign registry: the app never hardcodes attack names or eligibility.
+
+        Imported one module at a time: the shipped runtime drops the legacy WEP campaign
+        (``campaigns/wep`` is removed by tools/patch-wifi4.py), and one absent module must not
+        hide the campaigns that are there.
+        """
+        registry = {}
+        for kind, module, name in (
+            ("deauth", "wifi4.campaigns.deauth", "DeauthCampaign"),
+            ("pmkid", "wifi4.campaigns.pmkid", "PmkidHarvestAttack"),
+            ("wps", "wifi4.campaigns.pin", "WpsCampaign"),
+        ):
+            try:
+                registry[kind] = getattr(importlib.import_module(module), name)
+            except Exception as exc:  # noqa: BLE001 - reported per campaign, never fatal
+                log(f"attack {kind} unavailable: {type(exc).__name__}: {exc}")
+        return registry
+
+    def ap_for(self, bssid):
+        if self.array is None:
+            return None
+        return pool_access_points(self.array).get(str(bssid or "").lower())
+
+    def ap_clients(self, bssid):
+        """Clients the sink has seen talking to one BSSID (what deauth can aim at)."""
+        if self.array is None:
+            return 0
+        target = str(bssid or "").lower()
+        return sum(
+            1 for client in self.array.clients.values()
+            if (getattr(client, "bssid", "") or "").lower() == target
+        )
+
+    async def targets(self):
+        """The target sheet's contents: every AP plus the attacks wifi4 offers for it.
+
+        Eligibility comes from the campaign classes themselves (``visible`` for the encryption
+        family, ``ineligible_reason`` for hidden SSID / WPS lock / unconfirmed RSN), so the app
+        shows exactly what the engine can actually run.
+        """
+        classes = self.campaign_classes()
+        if not classes:
+            emit("error", message="the wifi4 attack layer is missing from this runtime")
+            return
+        if self.array is None:
+            emit("targets", count=0, targets=[],
+                 reason="no adapter: plug in a USB Wi-Fi card, scan, then tap the network")
+            return
+
+        targets = []
+        for bssid, ap in pool_access_points(self.array).items():
+            attacks = []
+            for kind, campaign_cls in classes.items():
+                try:
+                    if not campaign_cls.visible(ap):
+                        continue
+                    reason = campaign_cls.ineligible_reason(ap)
+                    label = campaign_cls.button_label(ap)
+                except Exception:  # noqa: BLE001 - one odd AP must not blank the whole list
+                    continue
+                attacks.append({
+                    "kind": kind,
+                    "label": plain(label or campaign_cls.idle_label),
+                    "enabled": reason is None,
+                    "reason": plain(reason or ""),
+                })
+            targets.append({
+                "bssid": bssid,
+                "ssid": ap.ssid or "",
+                "hidden": bool(ap.is_hidden),
+                "channel": ap.channel,
+                "security": security_of(ap, getattr(ap, "encryption", None)),
+                "wifi4_encryption": getattr(ap, "encryption", None),
+                "clients": self.ap_clients(bssid),
+                "handshakes": len(getattr(ap, "handshakes", {}) or {}),
+                "attacks": attacks,
+            })
+        emit("targets", count=len(targets), targets=targets)
+
+    async def attack(self, kind, bssid):
+        """Runs one wifi4 campaign against one AP, streaming its own status to the app."""
+        if self.campaign is not None and not self.campaign.done:
+            emit("error", message="an attack is already running")
+            return
+        classes = self.campaign_classes()
+        if not classes:
+            emit("error", message="the wifi4 attack layer is missing from this runtime")
+            return
+        campaign_cls = classes.get(str(kind or ""))
+        if campaign_cls is None:
+            emit("error", message=f"unknown attack: {kind}")
+            return
+
+        # A scan would hop the radio away mid-campaign: park it on the target first.
+        if self.scan_task is not None and not self.scan_task.done():
+            await self.stop_scan()
+        await self.connect()
+        ap = self.ap_for(bssid)
+        if ap is None:
+            emit("error", message="that network is not in the current scan: scan again, then attack")
+            return
+        try:
+            if not campaign_cls.visible(ap):
+                emit("error", message=f"{campaign_cls.idle_label} does not apply to this network")
+                return
+            reason = campaign_cls.ineligible_reason(ap)
+        except Exception as exc:  # noqa: BLE001
+            emit("error", message=f"{type(exc).__name__}: {exc}")
+            return
+        if reason:
+            emit("error", message=f"{campaign_cls.idle_label}: {reason}")
+            return
+
+        def campaign_log(line):
+            text = plain(line)
+            if text:
+                emit("attack_log", kind=kind, line=text)
+
+        try:
+            campaign = campaign_cls(self.array, ap, log=campaign_log)
+            started = campaign.run()
+        except Exception as exc:  # noqa: BLE001
+            detail = traceback.format_exc()
+            log(detail)
+            emit("error", message=f"{type(exc).__name__}: {exc}", detail=detail.strip())
+            return
+        if not started:
+            emit("error", message="the radio is already busy with another attack")
+            return
+
+        self.campaign = campaign
+        self.campaign_kind = kind
+        emit("attack_started", kind=kind, label=plain(campaign_cls.button_label(ap)),
+             bssid=ap.bssid, ssid=ap.ssid or "", channel=ap.channel)
+        self.attack_task = asyncio.create_task(self._watch_campaign(campaign, kind))
+
+    async def _watch_campaign(self, campaign, kind):
+        """Ticks the campaign's own status lines to the app, then reports how it ended."""
+        while not campaign.done:
+            try:
+                lines = [plain(line) for line in (campaign.status_headlines(None) or [])]
+            except Exception:  # noqa: BLE001 - a status getter must not kill the attack
+                lines = []
+            try:
+                under = plain(campaign.status_under_card() or "")
+            except Exception:  # noqa: BLE001
+                under = ""
+            emit("attack_progress", kind=kind, lines=[line for line in lines if line], under=under)
+            await asyncio.sleep(1.0)
+        if campaign.stopped:
+            await asyncio.sleep(0.1)
+        emit("attack_done", kind=kind, stopped=bool(campaign.stopped),
+             **self.campaign_outcome(campaign, kind))
+
+    @staticmethod
+    def campaign_outcome(campaign, kind):
+        """What the card says when a campaign ends: one summary, one detail line."""
+        if kind == "deauth":
+            captured = bool(getattr(campaign, "captured", False))
+            sent = getattr(campaign, "client_sent", 0) or 0
+            acked = getattr(campaign, "client_acks", 0) or 0
+            broadcast = getattr(campaign, "bcast_sent", 0) or 0
+            return {
+                "ok": captured,
+                "summary": "handshake captured" if captured else "no new handshake captured",
+                "detail": f"deauth {acked}/{sent} acked, {broadcast} broadcast",
+            }
+        if kind == "pmkid":
+            pmkid = getattr(campaign, "pmkid", None)
+            if pmkid:
+                return {"ok": True, "summary": "PMKID captured", "detail": pmkid.hex()}
+            fail_reason = getattr(campaign, "fail_reason", None)
+            return {
+                "ok": False,
+                "summary": "no PMKID",
+                "detail": str(getattr(fail_reason, "value", None) or "the AP sent no PMKID"),
+            }
+        if kind == "wps":
+            state = getattr(campaign, "state", None)
+            pin = getattr(state, "found_pin", None)
+            if pin:
+                return {"ok": True, "summary": "WPS PIN found", "detail": str(pin)}
+            tested = getattr(state, "tested", None)
+            return {"ok": False, "summary": "WPS PIN not found", "detail": f"{tested} PINs tried"}
+        return {"ok": False, "summary": "finished", "detail": ""}
+
+    async def stop_attack(self):
+        """Cooperative stop: the campaign's own teardown still runs, then attack_done lands."""
+        campaign = self.campaign
+        if campaign is None or campaign.done:
+            emit("attack_stopped", kind=self.campaign_kind)
+            return
+        emit("attack_stopping", kind=self.campaign_kind)
+        campaign.request_stop()
+
     async def stop(self):
         self.scanning = False
+        if self.campaign is not None and not self.campaign.done:
+            self.campaign.request_stop()
         if self.scan_task is not None and not self.scan_task.done():
             self.scan_task.cancel()
             try:
@@ -361,6 +582,12 @@ async def main():
                 await engine.scan(command.get("seconds"))
             elif name == "stop_scan":
                 await engine.stop_scan()
+            elif name == "targets":
+                await engine.targets()
+            elif name == "attack":
+                await engine.attack(command.get("kind"), command.get("bssid"))
+            elif name == "stop_attack":
+                await engine.stop_attack()
             elif name == "stop":
                 await engine.stop()
                 return 0

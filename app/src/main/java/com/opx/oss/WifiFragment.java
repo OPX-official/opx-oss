@@ -14,6 +14,8 @@ import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -25,6 +27,8 @@ import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.airbnb.lottie.LottieAnimationView;
+import com.google.android.material.bottomsheet.BottomSheetDialog;
+import com.google.android.material.button.MaterialButton;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.google.android.material.snackbar.Snackbar;
 
@@ -74,6 +78,27 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     private TextView errorDetail;
     private String lastError = "";
 
+    // The target sheet: one row per attack the engine says it can run against this AP.
+    private BottomSheetDialog sheet;
+    private WifiAdapter.Network sheetTarget;
+    private LinearLayout sheetAttacks;
+    private TextView sheetClients;
+    private TextView sheetNote;
+    private JSONObject targets;
+    private String targetsReason = "";
+
+    // The running-attack card.
+    private View attackCard;
+    private LottieAnimationView attackAnim;
+    private TextView attackTitle;
+    private TextView attackSub;
+    private TextView attackLines;
+    private TextView attackResult;
+    private MaterialButton attackStop;
+    private boolean attackRunning;
+    private String attackProgress = "";
+    private final StringBuilder attackLog = new StringBuilder();
+
     private WifiManager wifiManager;
     private BroadcastReceiver scanReceiver;
     private boolean scanning;
@@ -114,6 +139,23 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
 
         list.setLayoutManager(new LinearLayoutManager(requireContext()));
         list.setAdapter(adapter);
+        adapter.setOnNetworkClick(this::openTarget);
+
+        attackCard = view.findViewById(R.id.wifi_attack_card);
+        attackAnim = view.findViewById(R.id.wifi_attack_anim);
+        attackTitle = view.findViewById(R.id.wifi_attack_title);
+        attackSub = view.findViewById(R.id.wifi_attack_sub);
+        attackLines = view.findViewById(R.id.wifi_attack_lines);
+        attackResult = view.findViewById(R.id.wifi_attack_result);
+        attackStop = view.findViewById(R.id.wifi_attack_stop);
+        attackStop.setOnClickListener(v -> {
+            if (attackRunning) {
+                attackStop.setText(R.string.wifi_attack_stopping);
+                WifiBridge.get(requireContext()).stopAttack();
+            } else {
+                attackCard.setVisibility(View.GONE);
+            }
+        });
 
         refresh.setOnRefreshListener(() -> {
             refresh.setRefreshing(false);
@@ -179,6 +221,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 WifiBridge bridge = WifiBridge.get(requireContext());
                 bridge.start();
                 bridge.requestDevices();
+                bridge.requestTargets();
                 break;
             case OpxService.STATE_FAILED:
                 statusValue.setText(getString(R.string.wifi_usb_error,
@@ -273,9 +316,15 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         } else if ("scan_done".equals(name)) {
             scanning = false;
             progress.setVisibility(View.GONE);
+            if (event.optBoolean("cancelled")) {
+                // An attack parks the radio by cancelling the scan; the row list is still valid.
+                return;
+            }
             int found = event.optInt("count");
             statusValue.setText(getString(R.string.wifi_scan_done_short, found));
             updateCount();
+            // The sink now holds the APs with their real AKM/PMF/WPS state: ask for the attacks.
+            WifiBridge.get(requireContext()).requestTargets();
         } else if ("devices".equals(name)) {
             JSONArray devices = event.optJSONArray("devices");
             adapters = devices == null ? 0 : devices.length();
@@ -316,6 +365,58 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             }
             String band = event.optString("band", "");
             if (!band.isEmpty() && !"null".equals(band)) bandValue.setText(band);
+        } else if ("targets".equals(name)) {
+            JSONArray list = event.optJSONArray("targets");
+            targetsReason = event.optString("reason", "");
+            JSONObject map = new JSONObject();
+            if (list != null) {
+                for (int i = 0; i < list.length(); i++) {
+                    JSONObject target = list.optJSONObject(i);
+                    if (target == null) continue;
+                    String bssid = target.optString("bssid").toLowerCase(Locale.US);
+                    if (bssid.isEmpty()) continue;
+                    try {
+                        map.put(bssid, target);
+                    } catch (org.json.JSONException ignored) {
+                        // A duplicate BSSID only replaces the older entry.
+                    }
+                }
+            }
+            targets = map;
+            if (sheet != null && sheet.isShowing()) renderTargetAttacks();
+        } else if ("attack_started".equals(name)) {
+            attackRunning = true;
+            showAttackCard(event.optString("kind"), event.optString("ssid"),
+                    event.optString("bssid"));
+        } else if ("attack_log".equals(name)) {
+            if (!attackRunning) return;
+            String line = event.optString("line");
+            if (line.isEmpty()) return;
+            attackLog.append(line).append('\n');
+            String[] parts = attackLog.toString().split("\n");
+            if (parts.length > 6) {
+                StringBuilder trimmed = new StringBuilder();
+                for (int i = parts.length - 6; i < parts.length; i++) trimmed.append(parts[i]).append('\n');
+                attackLog.setLength(0);
+                attackLog.append(trimmed);
+            }
+            renderAttackLines();
+        } else if ("attack_progress".equals(name)) {
+            if (!attackRunning) return;
+            JSONArray lines = event.optJSONArray("lines");
+            StringBuilder text = new StringBuilder();
+            if (lines != null) {
+                for (int i = 0; i < lines.length(); i++) {
+                    String line = lines.optString(i);
+                    if (line.isEmpty()) continue;
+                    if (text.length() > 0) text.append('\n');
+                    text.append(line);
+                }
+            }
+            attackProgress = text.toString();
+            renderAttackLines();
+        } else if ("attack_done".equals(name)) {
+            onAttackDone(event);
         } else if ("error".equals(name)) {
             scanning = false;
             progress.setVisibility(View.GONE);
@@ -449,6 +550,222 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         if (clipboard != null) {
             clipboard.setPrimaryClip(ClipData.newPlainText("OPX OSS", text));
             Snackbar.make(requireView(), messageRes, Snackbar.LENGTH_SHORT).show();
+        }
+    }
+
+    // ----------------------------------------------------------- target sheet
+
+    /** Tapping a network opens its attacks; the engine supplies what applies to that AP. */
+    private void openTarget(WifiAdapter.Network network) {
+        if (network == null || !isAdded()) return;
+        WifiBridge.get(requireContext()).requestTargets();
+        sheetTarget = network;
+
+        View content = LayoutInflater.from(requireContext())
+                .inflate(R.layout.sheet_wifi_target, null);
+        TextView name = content.findViewById(R.id.target_ssid);
+        TextView meta = content.findViewById(R.id.target_meta);
+        sheetClients = content.findViewById(R.id.target_clients);
+        sheetAttacks = content.findViewById(R.id.target_attacks);
+        sheetNote = content.findViewById(R.id.target_note);
+
+        name.setText(network.ssid == null || network.ssid.isEmpty()
+                ? getString(R.string.wifi_hidden_ssid) : network.ssid);
+        String security = network.securityLabel();
+        if (security == null) security = network.privacy == null ? "" : network.privacy;
+        meta.setText(String.format(Locale.US, "%s · CH %d · %s",
+                network.bssid, network.channel, security));
+        renderTargetAttacks();
+
+        sheet = new BottomSheetDialog(requireContext());
+        sheet.setContentView(content);
+        sheet.setOnDismissListener(dialog -> {
+            if (sheet == dialog) {
+                sheet = null;
+                sheetTarget = null;
+                sheetAttacks = null;
+                sheetNote = null;
+                sheetClients = null;
+            }
+        });
+        sheet.show();
+    }
+
+    private void renderTargetAttacks() {
+        if (sheetAttacks == null || sheetNote == null || sheetTarget == null) return;
+        sheetAttacks.removeAllViews();
+        JSONObject target = targetFor(sheetTarget.bssid);
+        if (target == null) {
+            // No target data yet (or a built-in-radio row, which the engine cannot inject on).
+            boolean usb = "usb".equals(sheetTarget.source);
+            sheetNote.setText(usb ? R.string.wifi_attack_loading : R.string.wifi_attack_usb_only);
+            return;
+        }
+
+        JSONArray attacks = target.optJSONArray("attacks");
+        if (attacks == null || attacks.length() == 0) {
+            sheetNote.setText(targetsReason.isEmpty()
+                    ? getString(R.string.wifi_attack_none) : targetsReason);
+            return;
+        }
+        for (int i = 0; i < attacks.length(); i++) {
+            JSONObject attack = attacks.optJSONObject(i);
+            if (attack == null) continue;
+            addAttackRow(attack.optString("kind"), attack.optBoolean("enabled"),
+                    attack.optString("reason", ""));
+        }
+        if (sheetClients != null) {
+            sheetClients.setText(getString(R.string.wifi_attack_clients,
+                    target.optInt("clients"), target.optInt("handshakes")));
+            sheetClients.setVisibility(View.VISIBLE);
+        }
+        sheetNote.setText(R.string.wifi_attack_hint);
+    }
+
+    private void addAttackRow(String kind, boolean enabled, String reason) {
+        if (sheetAttacks == null) return;
+        View row = LayoutInflater.from(requireContext())
+                .inflate(R.layout.item_attack, sheetAttacks, false);
+        ((TextView) row.findViewById(R.id.attack_title)).setText(attackTitleRes(kind));
+        TextView desc = row.findViewById(R.id.attack_desc);
+        desc.setText(enabled || reason.isEmpty() ? attackDescRes(kind) : reason);
+        ((ImageView) row.findViewById(R.id.attack_icon)).setImageResource(attackIconRes(kind));
+        row.findViewById(R.id.attack_chevron).setVisibility(enabled ? View.VISIBLE : View.GONE);
+        row.setAlpha(enabled ? 1f : 0.45f);
+        row.setOnClickListener(v -> {
+            if (enabled) {
+                startAttack(kind);
+            } else if (!reason.isEmpty()) {
+                Snackbar.make(requireView(), reason, Snackbar.LENGTH_SHORT).show();
+            }
+        });
+        sheetAttacks.addView(row);
+    }
+
+    private void startAttack(String kind) {
+        WifiAdapter.Network target = sheetTarget;
+        if (target == null) return;
+        if (OpxService.getState() != OpxService.STATE_READY) {
+            Snackbar.make(requireView(), R.string.wifi_engine_pending, Snackbar.LENGTH_LONG).show();
+            return;
+        }
+        if (sheet != null) sheet.dismiss();
+        WifiBridge bridge = WifiBridge.get(requireContext());
+        bridge.start();
+        bridge.attack(kind, target.bssid);
+    }
+
+    private JSONObject targetFor(String bssid) {
+        if (targets == null || bssid == null || bssid.isEmpty()) return null;
+        return targets.optJSONObject(bssid.toLowerCase(Locale.US));
+    }
+
+    // ------------------------------------------------------- running attack
+
+    private void showAttackCard(String kind, String ssid, String bssid) {
+        if (attackCard == null) return;
+        attackProgress = "";
+        attackLog.setLength(0);
+        attackTitle.setText(attackTitleRes(kind));
+        String name = ssid == null || ssid.isEmpty() ? getString(R.string.wifi_hidden_ssid) : ssid;
+        attackSub.setText(String.format("%s · %s", name, bssid));
+        attackLines.setVisibility(View.GONE);
+        attackResult.setVisibility(View.GONE);
+        attackStop.setText(R.string.wifi_attack_stop);
+        attackStop.setTextColor(ContextCompat.getColor(requireContext(), R.color.red));
+        if (attackAnim != null) {
+            attackAnim.setRepeatCount(-1);
+            attackAnim.setAnimation(attackAnimRes(kind));
+            attackAnim.playAnimation();
+        }
+        attackCard.setVisibility(View.VISIBLE);
+    }
+
+    private void renderAttackLines() {
+        if (attackLines == null) return;
+        String text = attackProgress;
+        if (attackLog.length() > 0) text = text.isEmpty() ? attackLog.toString() : text + "\n" + attackLog;
+        text = text.trim();
+        if (text.isEmpty()) {
+            attackLines.setVisibility(View.GONE);
+            return;
+        }
+        attackLines.setText(text);
+        attackLines.setVisibility(View.VISIBLE);
+    }
+
+    private void onAttackDone(JSONObject event) {
+        attackRunning = false;
+        boolean ok = event.optBoolean("ok");
+        String summary = event.optString("summary", "");
+        String detail = event.optString("detail", "");
+        if (attackAnim != null) attackAnim.pauseAnimation();
+        if (attackStop != null) {
+            attackStop.setText(R.string.wifi_attack_dismiss);
+            attackStop.setTextColor(ContextCompat.getColor(requireContext(), R.color.stryker_accent));
+        }
+        if (attackResult == null) return;
+        String text = getString(ok ? R.string.wifi_attack_done_ok : R.string.wifi_attack_done_fail,
+                summary);
+        if (event.optBoolean("stopped")) text = text + " · " + getString(R.string.wifi_attack_stopped);
+        if (!detail.isEmpty() && !"null".equals(detail)) text = text + "\n" + detail;
+        attackResult.setText(text);
+        attackResult.setTextColor(ContextCompat.getColor(requireContext(),
+                ok ? R.color.green : R.color.red));
+        attackResult.setVisibility(View.VISIBLE);
+        // The engine holds the captures; the sheet's counts come back fresh from it.
+        WifiBridge.get(requireContext()).requestTargets();
+    }
+
+    private static int attackTitleRes(String kind) {
+        switch (kind) {
+            case "pmkid":
+                return R.string.wifi_attack_pmkid;
+            case "wps":
+                return R.string.wifi_attack_wps;
+            case "wep":
+                return R.string.wifi_attack_wep;
+            default:
+                return R.string.wifi_attack_deauth;
+        }
+    }
+
+    private static int attackDescRes(String kind) {
+        switch (kind) {
+            case "pmkid":
+                return R.string.wifi_attack_pmkid_desc;
+            case "wps":
+                return R.string.wifi_attack_wps_desc;
+            case "wep":
+                return R.string.wifi_attack_wep_desc;
+            default:
+                return R.string.wifi_attack_deauth_desc;
+        }
+    }
+
+    private static int attackIconRes(String kind) {
+        switch (kind) {
+            case "pmkid":
+                return R.drawable.key;
+            case "wps":
+                return R.drawable.fiber_pin;
+            case "wep":
+                return R.drawable.autopixie;
+            default:
+                return R.drawable.deauth;
+        }
+    }
+
+    private static int attackAnimRes(String kind) {
+        switch (kind) {
+            case "pmkid":
+                return R.raw.brutehydra;
+            case "wps":
+                return R.raw.meteor;
+            case "wep":
+                return R.raw.atom2;
+            default:
+                return R.raw.brute;
         }
     }
 

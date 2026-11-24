@@ -255,6 +255,30 @@ public final class WifiBridge {
         send(json("cmd", "stop_scan"));
     }
 
+    /**
+     * Asks the engine which attacks wifi4 offers for each AP in its sink. The reply is a
+     * {@code targets} event, so the app never guesses eligibility from the row labels.
+     */
+    public void requestTargets() {
+        send(json("cmd", "targets"));
+    }
+
+    /** Starts one campaign against one BSSID; progress arrives as attack_log/attack_progress. */
+    public void attack(String kind, String bssid) {
+        JSONObject command = json("cmd", "attack");
+        try {
+            command.put("kind", kind);
+            command.put("bssid", bssid);
+        } catch (JSONException ignored) {
+            // Both keys are always present, so this cannot fail.
+        }
+        send(command);
+    }
+
+    public void stopAttack() {
+        send(json("cmd", "stop_attack"));
+    }
+
     private static JSONObject json(String key, String value) {
         JSONObject object = new JSONObject();
         try {

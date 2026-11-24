@@ -150,6 +150,30 @@
     <string name="wifi_error_hide">Hide traceback</string>
     <string name="wifi_error_retry">Scan again</string>
 
+    <!-- Target sheet and the running-attack card. The list of attacks comes from the engine
+         (wifi4 decides what it can run against each AP); only their names live here. -->
+    <string name="wifi_section_attacks">ATTACKS</string>
+    <string name="wifi_attack_loading">Reading the target from the engine…</string>
+    <string name="wifi_attack_usb_only">The built-in radio cannot inject frames. Scan with the USB adapter, then tap the network again.</string>
+    <string name="wifi_attack_none">wifi4 has no attack for this network: its encryption or WPS state rules every campaign out.</string>
+    <string name="wifi_attack_hint">Tap an attack to start it. The radio stays on this network until you stop it.</string>
+    <string name="wifi_attack_clients">%1$d client(s) seen · %2$d handshake(s) held</string>
+    <string name="wifi_attack_stop">Stop</string>
+    <string name="wifi_attack_stopping">Stopping…</string>
+    <string name="wifi_attack_dismiss">Dismiss</string>
+    <string name="wifi_attack_stopped">stopped</string>
+    <string name="wifi_attack_starting">Starting…</string>
+    <string name="wifi_attack_done_ok">Done — %1$s</string>
+    <string name="wifi_attack_done_fail">Finished — %1$s</string>
+    <string name="wifi_attack_deauth">Deauthentication</string>
+    <string name="wifi_attack_deauth_desc">Force a WPA/WPA2 re-handshake and capture it</string>
+    <string name="wifi_attack_pmkid">PMKID harvest</string>
+    <string name="wifi_attack_pmkid_desc">Ask the AP for an RSN PMKID, no client needed</string>
+    <string name="wifi_attack_wps">WPS PIN</string>
+    <string name="wifi_attack_wps_desc">PIN brute-force with Pixie Dust on WSC 2.0</string>
+    <string name="wifi_attack_wep">ARP replay</string>
+    <string name="wifi_attack_wep_desc">Fake-auth, replay ARP, then crack the WEP key</string>
+
     <string name="about_title">About</string>
     <string name="about_version_value">Version %1$s</string>
     <string name="about_version_unknown">Version unknown</string>
