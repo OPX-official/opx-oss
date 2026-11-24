@@ -6,7 +6,6 @@ import android.view.View;
 import android.widget.ImageView;
 import android.widget.TextView;
 
-import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.view.GravityCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
@@ -18,8 +17,6 @@ import androidx.fragment.app.Fragment;
  * NavigationView.
  */
 public class MainActivity extends AppCompatActivity implements OpxService.Listener {
-
-    private static final int REQUEST_STORAGE = 3;
 
     private DrawerLayout drawer;
     private int currentItem = -1;
@@ -79,17 +76,19 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         rowAbout.setOnClickListener(v -> open(R.id.nav_about));
         rowSettings.setOnClickListener(v -> open(R.id.nav_settings));
 
-        // The engine starts with the app, not with a screen: the runtime is installed and kept
-        // warm so the USB bridge and the WiFi engine are usable from any tab.
-        OpxService.start(this);
-        requestStorageOnce();
+        // First launch belongs to the intro: it grants permissions and starts the download
+        // with OpxService.beginDownload(), so no network or install happens behind it.
+        boolean introSeen = getSharedPreferences("opx", MODE_PRIVATE)
+                .getBoolean("intro_seen", false);
+        boolean downloadStarted = getSharedPreferences("opx", MODE_PRIVATE)
+                .getBoolean("download_allowed", false);
+        if (introSeen || downloadStarted || OpxRuntime.isInstalled(this)) OpxService.start(this);
 
         if (savedInstanceState == null) {
             open(R.id.nav_home);
-            // Stryker's intro, once per install; the app keeps working behind it.
+            // The intro owns the first launch: permissions and the runtime download happen
+            // there, and only its finish marks the setup as seen.
             if (!getSharedPreferences("opx", MODE_PRIVATE).getBoolean("intro_seen", false)) {
-                getSharedPreferences("opx", MODE_PRIVATE).edit()
-                        .putBoolean("intro_seen", true).apply();
                 startActivity(new Intent(this, IntroActivity.class));
             }
         }
@@ -178,24 +177,6 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         rowAbout.setActivated(itemId == R.id.nav_about);
         rowSettings.setActivated(itemId == R.id.nav_settings);
         drawer.closeDrawer(GravityCompat.START);
-    }
-
-    /** targetSdk 28: storage is an ordinary runtime permission, needed for {@code ~/storage}. */
-    private void requestStorageOnce() {
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) return;
-        if (OpxRuntime.hasStoragePermission(this)) return;
-        requestPermissions(new String[]{android.Manifest.permission.READ_EXTERNAL_STORAGE,
-                android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_STORAGE);
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != REQUEST_STORAGE) return;
-        if (OpxRuntime.hasStoragePermission(this)) {
-            new Thread(() -> OpxRuntime.setupStorage(this), "opx-storage").start();
-        }
     }
 
     @Override

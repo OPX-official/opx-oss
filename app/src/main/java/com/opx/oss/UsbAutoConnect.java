@@ -57,7 +57,8 @@ public final class UsbAutoConnect {
                 AppLog.error("UsbAutoConnect", e);
             }
         }
-        // The card may already be plugged in from before this process started.
+        // The card may already be plugged in from before this process started. First-run
+        // setup owns the prompt, so nothing appears behind the intro.
         if (!IntroActivity.isShowing() && introSeen(app)) ensurePermission(app);
     }
 
@@ -69,6 +70,18 @@ public final class UsbAutoConnect {
     /** The first launch's slides are over (or the app came back to a screen): ask if needed. */
     public static void resume(Context context) {
         if (context == null || IntroActivity.isShowing()) return;
+        Context app = context.getApplicationContext();
+        if (!introSeen(app)) return;
+        ensurePermission(app);
+    }
+
+    /**
+     * The intro's permissions slide asks for the adapter too. Attach broadcasts normally wait
+     * for the intro, but this explicit call lets first-run setup collect the USB grant in the
+     * same place as location and storage.
+     */
+    public static void requestNow(Context context) {
+        if (context == null) return;
         ensurePermission(context.getApplicationContext());
     }
 

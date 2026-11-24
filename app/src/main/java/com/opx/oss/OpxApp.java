@@ -22,10 +22,14 @@ public class OpxApp extends Application {
         // screen (and from none): the WiFi screen is not the entry point for that any more.
         UsbAutoConnect.start(this);
 
-        // The engine belongs to the app, not to the terminal screen. Starting it here means any
-        // entry point that creates the process (launcher, shortcut, notification, restored task)
-        // warms the bundled userland immediately, so no feature ever depends on the terminal
-        // having been opened. OpxService.start() is idempotent and MainActivity calls it as well.
-        OpxService.start(this);
+        // Do not start the engine before first-run setup. The service would see no installed
+        // runtime and could start the network download before the intro has collected its
+        // permissions. MainActivity starts it for an installed/intro-complete app, and the
+        // intro's download slide calls OpxService.beginDownload() exactly once.
+        boolean introSeen = getSharedPreferences("opx", MODE_PRIVATE)
+                .getBoolean("intro_seen", false);
+        boolean downloadStarted = getSharedPreferences("opx", MODE_PRIVATE)
+                .getBoolean("download_allowed", false);
+        if (introSeen || downloadStarted || OpxRuntime.isInstalled(this)) OpxService.start(this);
     }
 }

@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 
 import androidx.core.app.NotificationCompat;
 
@@ -20,7 +21,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * The OPX engine host: a started foreground service that installs and verifies the packaged
+ * The OPX engine host: a started foreground service that downloads, installs and verifies the
  * userland, runs one-off commands inside it and keeps the ongoing notification with Exit.
  * <p>
  * There is no terminal: the service owns no shell sessions. Everything a module needs goes
@@ -103,6 +104,28 @@ public class OpxService extends Service {
         service.restartEngine();
     }
 
+    /**
+     * First-run setup calls this only after the intro has collected every permission. The
+     * service may already exist (the app starts it with the process), but it will not touch
+     * the network or install anything until this flag is set.
+     */
+    public static void beginDownload(Context context) {
+        if (context == null) return;
+        context.getSharedPreferences("opx", Context.MODE_PRIVATE).edit()
+                .putBoolean("download_allowed", true).apply();
+        start(context);
+    }
+
+    private static boolean downloadAllowed(Context context) {
+        // An app updated from the bundled-runtime build has intro_seen=true but no
+        // download_allowed flag. Its permissions were collected already, so resume the
+        // download instead of sitting in STARTING forever.
+        android.content.SharedPreferences prefs =
+                context.getSharedPreferences("opx", Context.MODE_PRIVATE);
+        return prefs.getBoolean("download_allowed", false)
+                || prefs.getBoolean("intro_seen", false);
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -140,12 +163,18 @@ public class OpxService extends Service {
     // ---------------------------------------------------------------- engine
 
     /**
-     * Installs the packaged runtime on first launch and verifies it with a throwaway run,
+     * Installs the downloaded runtime on first launch and verifies it with a throwaway run,
      * so a broken runtime is reported here instead of looking like a dead WiFi screen.
      */
     private void startEngine() {
         if (state == STATE_READY && OpxRuntime.isInstalled(this)) return;
         if (engineThread != null && engineThread.isAlive()) return;
+        if (!OpxRuntime.isInstalled(this) && !downloadAllowed(this)) {
+            // Do not create a thread that immediately exits: beginDownload() calls start()
+            // once permissions are in place, and only then may the network be touched.
+            setState(STATE_STARTING, null);
+            return;
+        }
         AppLog.info("OpxService", "engine thread starting (installed=" + OpxRuntime.isInstalled(this) + ")");
 
         engineThread = new Thread(() -> {
@@ -153,6 +182,27 @@ public class OpxService extends Service {
             try {
                 if (!OpxRuntime.isInstalled(context)) {
                     setState(STATE_INSTALLING, null);
+                    // The APK is deliberately small: fetch the arch-correct bootstrap and
+                    // payloads before install. The downloader keeps its .part files, so a
+                    // killed process or a lost connection resumes instead of restarting.
+                    if (!OpxRuntime.hasSources(context)) {
+                        PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                        PowerManager.WakeLock wake = power == null ? null
+                                : power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
+                                "opx:runtime-download");
+                        if (wake != null) {
+                            wake.setReferenceCounted(false);
+                            // A foreground service is not a guarantee that the CPU stays awake;
+                            // the download must not stall behind a dark screen.
+                            wake.acquire(30L * 60L * 1000L);
+                        }
+                        try {
+                            RuntimeDownloadManager.ensureDownloaded(context,
+                                    snapshot -> updateNotification());
+                        } finally {
+                            if (wake != null && wake.isHeld()) wake.release();
+                        }
+                    }
                     OpxRuntime.install(context);
                 }
                 OpxRuntime.repair(context);
@@ -163,6 +213,8 @@ public class OpxService extends Service {
                 setState(failure == null ? STATE_READY : STATE_FAILED, failure);
             } catch (Exception e) {
                 AppLog.error("OpxService", e);
+                RuntimeDownloadManager.reportError(e.getMessage());
+                RuntimeDownloadManager.invalidate(context);
                 if (exiting) return;
                 setState(STATE_FAILED, e.toString());
             }
@@ -293,6 +345,7 @@ public class OpxService extends Service {
     /** The notification's Exit action: stop the engine process and take the service down. */
     private void exitAll() {
         exiting = true;
+        if (engineThread != null) engineThread.interrupt();
         clearReadyActions();
         WifiBridge.get(this).stop();
         state = STATE_STOPPED;
@@ -348,6 +401,11 @@ public class OpxService extends Service {
     private String notificationText() {
         switch (state) {
             case STATE_INSTALLING:
+                RuntimeDownloadManager.Snapshot download = RuntimeDownloadManager.snapshot();
+                if (download.state == RuntimeDownloadManager.STATE_DOWNLOADING) {
+                    return getString(R.string.notification_state_downloading,
+                            download.percent(), download.label);
+                }
                 return getString(R.string.notification_state_installing);
             case STATE_READY:
                 return getString(R.string.notification_state_ready);

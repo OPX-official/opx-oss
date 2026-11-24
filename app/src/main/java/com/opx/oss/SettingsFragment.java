@@ -1,11 +1,13 @@
 package com.opx.oss;
 
-import android.Manifest;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.LayoutInflater;
@@ -31,8 +33,6 @@ import com.google.android.material.snackbar.Snackbar;
  * carries a Settings row like Stryker's.
  */
 public class SettingsFragment extends Fragment implements OpxService.Listener {
-
-    private static final int REQUEST_STORAGE = 4;
 
     /** wifi4 scanner preferences the app exposes; the engine reads DFS before it hops. */
     static final String PREFS = "opx_settings";
@@ -69,7 +69,7 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
         dfsSwitch = view.findViewById(R.id.settings_dfs_switch);
 
         view.findViewById(R.id.settings_restart_row).setOnClickListener(v -> restartEngine());
-        view.findViewById(R.id.settings_storage_row).setOnClickListener(v -> requestStorage());
+        view.findViewById(R.id.settings_storage_row).setOnClickListener(v -> repairStorage());
         view.findViewById(R.id.settings_log_level_row).setOnClickListener(v -> chooseLogLevel());
         view.findViewById(R.id.settings_copy_row).setOnClickListener(v -> copyDiagnosis());
         dfsSwitch.setOnCheckedChangeListener((button, checked) -> {
@@ -180,37 +180,30 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
         refresh();
     }
 
-    /** Grants storage if needed, then rebuilds the {@code ~/storage} links. */
-    private void requestStorage() {
+    /** Rebuilds the {@code ~/storage} links; a missing grant is fixed in system settings. */
+    private void repairStorage() {
         Context context = requireContext();
-        if (OpxRuntime.hasStoragePermission(context)) {
-            new Thread(() -> {
-                OpxRuntime.setupStorage(context);
-                new Handler(Looper.getMainLooper()).post(() -> {
-                    if (!isAdded()) return;
-                    Snackbar.make(requireView(), R.string.settings_storage_ready,
-                            Snackbar.LENGTH_SHORT).show();
-                    refresh();
-                });
-            }, "opx-storage").start();
+        if (!OpxRuntime.hasStoragePermission(context)) {
+            Snackbar.make(requireView(), R.string.settings_storage_denied,
+                    Snackbar.LENGTH_LONG)
+                    .setAction(R.string.settings_open, v -> openAppSettings())
+                    .show();
             return;
         }
-        requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE,
-                Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_STORAGE);
+        new Thread(() -> {
+            OpxRuntime.setupStorage(context);
+            new Handler(Looper.getMainLooper()).post(() -> {
+                if (!isAdded()) return;
+                Snackbar.make(requireView(), R.string.settings_storage_ready,
+                        Snackbar.LENGTH_SHORT).show();
+                refresh();
+            });
+        }, "opx-storage").start();
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
-        if (requestCode != REQUEST_STORAGE) return;
-        if (!isAdded()) return;
-        if (OpxRuntime.hasStoragePermission(requireContext())) {
-            requestStorage();
-        } else {
-            Snackbar.make(requireView(), R.string.settings_storage_denied,
-                    Snackbar.LENGTH_LONG).show();
-        }
-        refresh();
+    private void openAppSettings() {
+        startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + requireContext().getPackageName())));
     }
 
     private void chooseLogLevel() {

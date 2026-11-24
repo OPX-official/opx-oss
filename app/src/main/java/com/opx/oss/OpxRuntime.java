@@ -31,7 +31,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * Owns the bundled native runtime.
+ * Owns the downloaded native runtime.
  * <p>
  * OPX OSS is a native app: every binary it runs lives under the app's own private
  * directory, {@code /data/data/com.opx.oss/files/usr} (the "prefix"), and every package is
@@ -39,13 +39,16 @@ import java.util.zip.ZipInputStream;
  * anywhere in the stack: the engine, the USB bridge and the UI all run in this process against
  * files inside this app.
  * <p>
- * Two kinds of assets are shipped, both built by this repository's package pipeline and
- * downloaded from the OPX package archive at APK build time:
+ * The APK itself is small: {@link RuntimeDownloadManager} resolves the phone's ABI (arm or
+ * aarch64), downloads the matching bootstrap and payloads into {@code files/runtime}, verifies
+ * every SHA-256 and resumes partial files. This class then installs from those files:
  * <ul>
- *   <li>{@code assets/bootstrap/bootstrap-<arch>.zip} — the OPX OSS bootstrap for this prefix.</li>
- *   <li>{@code assets/payload/<arch|all>/*.targz} — .deb-style trees (python, libusb, the
+ *   <li>{@code runtime/bootstrap/bootstrap-<arch>.zip} — the OPX OSS bootstrap for this prefix.</li>
+ *   <li>{@code runtime/payload/<arch|all>/*.tar.gz} — .deb-style trees (python, libusb, the
  *       wifi4 engine, the USB bridge shim) untarred straight into the prefix at install time.</li>
  * </ul>
+ * An older APK with bundled {@code assets/bootstrap} and {@code assets/payload} still works:
+ * the same install path falls back to assets when no downloaded files are present.
  * <p>
  * The app targets SDK 28 on purpose: Android 10+ denies {@code execve()} on files in the app
  * home directory for apps targeting 29+, which is where the runtime lives.
@@ -117,7 +120,7 @@ public final class OpxRuntime {
         return arch;
     }
 
-    /** Every runtime architecture this APK actually carries a bootstrap for. */
+    /** Every runtime architecture this APK carries or has already downloaded. */
     public static List<String> shippedArches(Context context) {
         List<String> arches = new ArrayList<>();
         try {
@@ -127,9 +130,32 @@ public final class OpxRuntime {
                 }
             }
         } catch (IOException ignored) {
-            // An APK with no bootstrap assets at all: the caller reports it.
+            // A small APK has no bundled bootstrap; the downloader supplies it.
+        }
+        File[] files = RuntimeDownloadManager.bootstrapDir(context).listFiles();
+        if (files != null) {
+            for (File file : files) {
+                String name = file.getName();
+                if (name.startsWith("bootstrap-") && name.endsWith(".zip")) {
+                    String arch = name.substring("bootstrap-".length(), name.length() - 4);
+                    if (!arches.contains(arch)) arches.add(arch);
+                }
+            }
         }
         return arches;
+    }
+
+    /** True when a bootstrap and the payload trees are available from the downloader or APK. */
+    public static boolean hasSources(Context context) {
+        if (RuntimeDownloadManager.isReady(context)) return true;
+        try {
+            for (String name : context.getAssets().list("bootstrap")) {
+                if (name.startsWith("bootstrap-") && name.endsWith(".zip")) return true;
+            }
+        } catch (IOException ignored) {
+            // No assets at all is the normal small-APK case.
+        }
+        return false;
     }
 
     /**
@@ -145,6 +171,11 @@ public final class OpxRuntime {
         if (!TextUtils.isEmpty(Build.CPU_ABI2)) candidates.add(Build.CPU_ABI2);
 
         List<String> shipped = shippedArches(context);
+        if (shipped.isEmpty()) {
+            // A downloaded runtime is not in assets yet; pick the device's own ABI and let the
+            // downloader fetch exactly that tree.
+            return RuntimeDownloadManager.arch(context);
+        }
         for (String abi : candidates) {
             String arch = archForAbi(abi);
             if (arch != null && shipped.contains(arch)) return arch;
@@ -175,14 +206,15 @@ public final class OpxRuntime {
         deleteTree(prefix);
         if (!staging.mkdirs()) throw new IOException("Cannot create " + staging);
 
-        extractBootstrap(context, "bootstrap/bootstrap-" + arch + ".zip", staging);
+        try (InputStream bootstrap = openBootstrap(context, arch)) {
+            extractBootstrap(bootstrap, staging);
+        }
         if (!staging.renameTo(prefix)) throw new IOException("Cannot move the bootstrap into place");
         AppLog.info("OpxRuntime", "bootstrap in place");
 
         extractPayloads(context, arch, prefix);
         ensureSiteShim(context);
         ensureUsbShim(context);
-        ensureUsbFdVariable(context);
 
         ensureDirectory(homeDir(context));
         ensureDirectory(tmpDir(context));
@@ -277,95 +309,48 @@ public final class OpxRuntime {
     }
 
     /**
-     * The descriptor half of the handshake happens inside libusb, which reads exactly one
-     * environment variable whose name is compiled into the library. The engine exports the
-     * granted descriptor as {@code OPX_USB_FD}; a library looking for any other name sees no
-     * descriptor, enumerates an empty bus, and wifi4 reports "no supported USB Wi-Fi adapter
-     * found" while the adapter is plugged in and Android has already granted it.
-     * <p>
-     * A base runtime installed from a payload built before the variable was renamed still
-     * carries the old name. It is one NUL-terminated string in .rodata, so rewriting it in
-     * place (same length, NUL padded) repairs an installed prefix without a reinstall; on a
-     * payload that already carries the new name this finds nothing and does nothing.
-     */
-    static void ensureUsbFdVariable(Context context) {
-        byte[] legacy = "TERMUX_USB_FD".getBytes(StandardCharsets.US_ASCII);
-        byte[] current = "OPX_USB_FD".getBytes(StandardCharsets.US_ASCII);
-        for (String name : new String[]{"libusb-1.0.so.0", "libusb-1.0.so"}) {
-            File library = new File(new File(prefixDir(context), "lib"), name);
-            if (!library.isFile()) continue;
-            try {
-                byte[] body;
-                try (InputStream in = new FileInputStream(library);
-                     ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
-                    byte[] chunk = new byte[8192];
-                    int count;
-                    while ((count = in.read(chunk)) > 0) buffer.write(chunk, 0, count);
-                    body = buffer.toByteArray();
-                }
-                int rewritten = 0;
-                for (int at = indexOf(body, legacy, 0);
-                     at >= 0;
-                     at = indexOf(body, legacy, at + legacy.length)) {
-                    System.arraycopy(current, 0, body, at, current.length);
-                    for (int pad = at + current.length; pad < at + legacy.length; pad++) {
-                        body[pad] = 0;
-                    }
-                    rewritten++;
-                }
-                if (rewritten == 0) continue;
-                try (FileOutputStream out = new FileOutputStream(library)) {
-                    out.write(body);
-                }
-                AppLog.info("OpxRuntime", name + ": " + rewritten
-                        + " USB descriptor variable(s) renamed to OPX_USB_FD");
-            } catch (IOException e) {
-                AppLog.info("OpxRuntime", "cannot repair " + name + ": " + e.getMessage());
-            }
-        }
-    }
-
-    /** First offset of {@code needle} in {@code haystack} at or after {@code from}, or -1. */
-    private static int indexOf(byte[] haystack, byte[] needle, int from) {
-        outer:
-        for (int at = Math.max(from, 0); at <= haystack.length - needle.length; at++) {
-            for (int i = 0; i < needle.length; i++) {
-                if (haystack[at + i] != needle[i]) continue outer;
-            }
-            return at;
-        }
-        return -1;
-    }
-
-    /**
      * Untars the packaged trees into the prefix. The arch-specific payload carries the base
      * runtime (python, libusb, bash, coreutils); the {@code all} payloads carry our own packages.
      */
     private static void extractPayloads(Context context, String arch, File prefix) throws Exception {
         for (String dir : new String[]{"all", arch}) {
-            String[] names;
-            try {
-                names = context.getAssets().list("payload/" + dir);
-            } catch (IOException e) {
-                names = null;
+            List<File> downloaded = new ArrayList<>();
+            File[] files = RuntimeDownloadManager.payloadDir(context, dir).listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    String name = file.getName();
+                    if (name.endsWith(".targz") || name.endsWith(".tar.gz")) downloaded.add(file);
+                }
             }
-            if (names == null || names.length == 0) {
-                if ("all".equals(dir)) throw new IOException("No packaged payloads in the APK");
-                continue;
-            }
-            List<String> sorted = new ArrayList<>(Arrays.asList(names));
-            Collections.sort(sorted);
-            for (String name : sorted) {
-                // fetch-packages.sh renames .tar.gz to .targz: AAPT strips a trailing .gz from
-                // asset names, which would leave the packager looking for files that do not exist.
-                if (!name.endsWith(".targz") && !name.endsWith(".tar.gz")) continue;
-                extractTarGz(new File(context.getCacheDir(), "opx-" + name),
-                        context.getAssets().open("payload/" + dir + "/" + name),
-                        context.getFilesDir());
+            Collections.sort(downloaded, (left, right) ->
+                    left.getName().compareTo(right.getName()));
+            if (downloaded.isEmpty()) {
+                // APKs built by the old pipeline still carry assets; keep them working.
+                String[] names;
+                try {
+                    names = context.getAssets().list("payload/" + dir);
+                } catch (IOException e) {
+                    names = null;
+                }
+                if (names != null) {
+                    List<String> sorted = new ArrayList<>(Arrays.asList(names));
+                    Collections.sort(sorted);
+                    for (String name : sorted) {
+                        if (!name.endsWith(".targz") && !name.endsWith(".tar.gz")) continue;
+                        extractTarGz(new File(context.getCacheDir(), "opx-" + name),
+                                context.getAssets().open("payload/" + dir + "/" + name),
+                                context.getFilesDir());
+                    }
+                }
+            } else {
+                for (File file : downloaded) {
+                    extractTarGz(new File(context.getCacheDir(), "opx-" + file.getName()),
+                            new FileInputStream(file), context.getFilesDir());
+                }
             }
         }
         if (!new File(prefix, "bin/python3").isFile()) {
-            throw new IOException("The packaged runtime has no python3");
+            throw new IOException("The downloaded runtime has no python3");
         }
         if (!new File(prefix, "lib/libusb-1.0.so").isFile()
                 && !new File(prefix, "lib/libusb-1.0.so.0").isFile()) {
@@ -443,7 +428,6 @@ public final class OpxRuntime {
         ensureDirectory(new File(prefix, "tmp"));
         ensureDirectory(new File(prefix, "var/lib/apt/lists/partial"));
         ensureDirectory(new File(prefix, "var/cache/apt/archives/partial"));
-        ensureUsbFdVariable(context);
     }
 
     /** Whether the app may read shared storage, needed for {@code ~/storage} to be usable. */
@@ -683,15 +667,26 @@ public final class OpxRuntime {
         return ok ? null : log;
     }
 
-    private static void extractBootstrap(Context context, String assetPath, File destination)
+    /** Opens the downloaded bootstrap, or the bundled one when this is an older APK. */
+    private static InputStream openBootstrap(Context context, String arch) throws IOException {
+        File downloaded = RuntimeDownloadManager.bootstrapFile(context, arch);
+        if (downloaded.isFile()) return new FileInputStream(downloaded);
+        return context.getAssets().open("bootstrap/bootstrap-" + arch + ".zip");
+    }
+
+    private static void extractBootstrap(InputStream asset, File destination)
             throws Exception {
         byte[] buffer = new byte[8192];
         List<String[]> symlinks = new ArrayList<>();
 
-        try (InputStream asset = context.getAssets().open(assetPath);
-             ZipInputStream zip = new ZipInputStream(asset)) {
+        try (InputStream source = asset;
+             ZipInputStream zip = new ZipInputStream(source)) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
+                String entryName = entry.getName();
+                if (entryName.contains("..") || entryName.startsWith("/")) {
+                    throw new IOException("Unsafe path in bootstrap: " + entryName);
+                }
                 if (entry.getName().equals("SYMLINKS.txt")) {
                     BufferedReader reader = new BufferedReader(new InputStreamReader(zip));
                     String line;

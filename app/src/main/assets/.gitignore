@@ -1,4 +1,4 @@
-# Downloaded by tools/fetch-packages.sh during the build - never committed.
+# Runtime payloads are downloaded by the app at first launch - never committed.
 /bootstrap/
 /payload/
 /index.json

@@ -11,7 +11,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.net.wifi.ScanResult;
+import android.provider.Settings;
 import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.os.Handler;
@@ -57,7 +59,7 @@ import java.util.Set;
  */
 public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxService.Listener {
 
-    private static final int REQUEST_LOCATION = 2;
+
 
     private final WifiAdapter adapter = new WifiAdapter();
     private final Set<String> bands = new HashSet<>();
@@ -97,6 +99,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     // The running attack's monitor: Stryker's long pop-up, fed by the engine's events.
     private AttackMonitorDialog attackMonitor;
     private CaptivePortalDialog captiveDialog;
+    private EvilTwinOptionsDialog evilTwinDialog;
 
     // The running-attack card.
     private View attackCard;
@@ -587,21 +590,20 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         }
         if (ContextCompat.checkSelfPermission(requireContext(),
                 Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
-                    REQUEST_LOCATION);
+            // First-run setup owns the request. A later denial is fixed in system settings,
+            // never with a surprise dialog on this screen.
+            Snackbar.make(requireView(), R.string.wifi_location_missing, Snackbar.LENGTH_LONG)
+                    .setAction(R.string.settings_open, v -> openAppSettings())
+                    .show();
             return;
         }
         progress.setVisibility(View.VISIBLE);
         wifiManager.startScan();
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
-        if (requestCode != REQUEST_LOCATION) return;
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            scanBuiltInRadio();
-        }
+    private void openAppSettings() {
+        startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + requireContext().getPackageName())));
     }
 
     private void onBuiltInResults() {
@@ -883,18 +885,31 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             return;
         }
         if (sheet != null) sheet.dismiss();
+        if ("eviltwin".equals(kind)) {
+            // The engine's EvilTwinInput supports the TUI's BSSID/channel/punt choices; collect
+            // them here rather than silently starting the single-card default.
+            evilTwinDialog = new EvilTwinOptionsDialog(requireContext(), target.ssid,
+                    target.bssid, target.channel,
+                    options -> launchAttack(kind, target, options));
+            evilTwinDialog.show();
+            return;
+        }
+        launchAttack(kind, target, null);
+    }
+
+    private void launchAttack(String kind, WifiAdapter.Network target, JSONObject options) {
         WifiBridge bridge = WifiBridge.get(requireContext());
         bridge.start();
         // Show Stryker's monitor straight away; the engine's attack_started fills it in.
         attackMonitor = new AttackMonitorDialog(requireContext(), kind, target.ssid,
                 target.bssid, target.channel);
         attackMonitor.show();
-        bridge.attack(kind, target.bssid);
         if ("captive".equals(kind)) {
             captiveDialog = new CaptivePortalDialog(requireContext(), target.ssid,
                     password -> WifiBridge.get(requireContext()).verifyPsk(target.bssid, password));
             captiveDialog.show();
         }
+        bridge.attack(kind, target.bssid, options);
     }
 
     private JSONObject targetFor(String bssid) {
@@ -910,6 +925,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         attackMonitor = null;
         if (captiveDialog != null) captiveDialog.dismiss();
         captiveDialog = null;
+        if (evilTwinDialog != null) evilTwinDialog.dismiss();
+        evilTwinDialog = null;
         if (sheet != null) sheet.dismiss();
         sheet = null;
         super.onDestroyView();

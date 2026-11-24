@@ -19,7 +19,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Drives the headless wifi4 engine: one long-lived process inside the bundled runtime,
+ * Drives the headless wifi4 engine: one long-lived process inside the installed runtime,
  * spoken to with JSON lines. The WiFi screen never sees a shell and there is no terminal UI
  * anywhere in the app.
  * <p>
@@ -95,8 +95,6 @@ public final class WifiBridge {
         // before the process asks for its first device. The shim it execs is repaired first:
         // an installed prefix can still carry a #!/usr/bin/env line, which Android cannot exec.
         OpxRuntime.ensureUsbShim(context);
-        // libusb has to be looking for the same descriptor variable this runtime exports.
-        OpxRuntime.ensureUsbFdVariable(context);
         UsbHostBridge.start(context);
         acquireWakeLock();
         // pyusb needs the prefix's libusb visible; the shim must exist before python starts.

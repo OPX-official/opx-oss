@@ -114,11 +114,12 @@ Two workflows keep this honest:
   runtime in the package build system's docker builder with the app identity forked to
   `com.opx.oss`, plus wifi4 from a pinned commit, the engine and the USB shim. Every artifact
   is audited for the foreign prefix before publishing, and the build system's own app
-  helpers (its `termux-*` tools, which name the other app) are stripped out of the runtime
+  helpers (upstream `*-tools` packages that name the other app) are stripped out of the runtime
   with `tools/prune-foreign.py` before the payload is packed.
-* **`Build`** (`.github/workflows/build.yml`) — runs `tools/fetch-packages.sh`, which downloads
-  **only** from that archive with checksum verification, then builds the debug and release APKs
-  and publishes a GitHub Release on a `v*` tag.
+* **`Build`** (`.github/workflows/build.yml`) — builds the debug and release APKs without
+  staging any runtime payloads, so the APK stays small; on first launch the app reads
+  `index.json` from that archive, selects `arm` or `aarch64`, downloads with Range resume and
+  verifies every SHA-256 before installing. It publishes a GitHub Release on a `v*` tag.
 
 Building locally:
 
@@ -126,8 +127,8 @@ Building locally:
 # packages (needs a wifi4 checkout)
 WIFI4_SRC=../opx-wifi4 bash tools/build-packages.sh
 
-# APK
-bash tools/fetch-packages.sh && ./gradlew assembleDebug
+# APK (small; the runtime is downloaded on first launch)
+./gradlew assembleDebug
 ```
 
 ## Roadmap

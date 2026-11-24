@@ -11,6 +11,18 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <com.google.android.material.textview.MaterialTextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_marginStart="28dp"
+        android:layout_marginTop="22dp"
+        android:letterSpacing="0.01"
+        android:text="@string/app_name"
+        android:textColor="@color/stryker_accent"
+        android:textSize="15sp"
+        android:textStyle="bold" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
@@ -33,6 +45,12 @@
 
             <include
                 android:id="@+id/slide_permissions"
+                layout="@layout/intro_slide"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <include
+                android:id="@+id/slide_download"
                 layout="@layout/intro_slide"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent" />
@@ -80,6 +98,13 @@
 
             <View
                 android:id="@+id/dot_3"
+                android:layout_width="8dp"
+                android:layout_height="8dp"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/intro_dot" />
+
+            <View
+                android:id="@+id/dot_4"
                 android:layout_width="8dp"
                 android:layout_height="8dp"
                 android:layout_marginStart="6dp"
