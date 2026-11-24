@@ -127,6 +127,17 @@ def bands_text(access_points):
     return seen.pop()
 
 
+def pool_access_points(array):
+    """The pool's BSSID -> AccessPoint map.
+
+    wifi4 handed this out as ``access_points()`` in older builds and as a property in the pinned
+    one, and calling the property fails with "TypeError: 'dict' object is not callable" - which
+    is exactly how the first scan died on a device. Accept both shapes.
+    """
+    points = array.access_points
+    return points() if callable(points) else points
+
+
 def ap_fields(ap):
     """Mapping of an AccessPoint to exactly what the app's rows draw."""
     def pick(*names):
@@ -231,7 +242,7 @@ class Engine:
             emit("status", connected=False, iface=None, access_points=0, band=None,
                  runtime=runtime_info())
             return
-        aps = self.array.access_points() if self.array else {}
+        aps = pool_access_points(self.array) if self.array else {}
         emit(
             "status",
             connected=True,
@@ -251,7 +262,7 @@ class Engine:
             await self.array.start_hopping()
             deadline = time.monotonic() + seconds
             while time.monotonic() < deadline and self.scanning:
-                for bssid, ap in self.array.access_points().items():
+                for bssid, ap in pool_access_points(self.array).items():
                     fields = ap_fields(ap)
                     key = fields["bssid"] or bssid
                     if seen.get(key) != fields:
@@ -278,7 +289,9 @@ class Engine:
                 return
             error = task.exception()
             if error is not None:
-                log(traceback.format_exception_only(type(error), error)[-1].strip())
+                # The whole traceback, not just the message: a scan that dies inside wifi4 is
+                # undebuggable from a device log otherwise.
+                log("".join(traceback.format_exception(type(error), error, error.__traceback__)).strip())
                 emit("error", message=f"{type(error).__name__}: {error}")
                 emit("scan_done", count=0, seconds=0)
 
