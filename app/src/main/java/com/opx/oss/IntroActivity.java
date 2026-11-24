@@ -46,6 +46,7 @@ public class IntroActivity extends AppCompatActivity {
     private static final int[] DOTS = {R.id.dot_0, R.id.dot_1, R.id.dot_2, R.id.dot_3};
 
     private int index;
+    private IntroBackgroundView background;
     private static volatile boolean showing;
 
     /**
@@ -72,6 +73,7 @@ public class IntroActivity extends AppCompatActivity {
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_intro);
+        background = findViewById(R.id.intro_background);
 
         for (int i = 0; i < SLIDES.length; i++) {
             View slide = findViewById(SLIDES[i]);
@@ -95,12 +97,18 @@ public class IntroActivity extends AppCompatActivity {
     }
 
     private void show() {
+        if (background != null) background.setPageOffset(index);
         for (int i = 0; i < SLIDES.length; i++) {
             View slide = findViewById(SLIDES[i]);
             slide.setVisibility(i == index ? View.VISIBLE : View.GONE);
             if (i == index) {
                 LottieAnimationView anim = slide.findViewById(R.id.slide_anim);
                 anim.playAnimation();
+                slide.setAlpha(0f);
+                slide.setTranslationY(24f * getResources().getDisplayMetrics().density);
+                slide.animate().alpha(1f).translationY(0f).setDuration(420)
+                        .setInterpolator(new android.view.animation.DecelerateInterpolator(2f))
+                        .start();
             }
             View dot = findViewById(DOTS[i]);
             dot.setBackgroundResource(i == index
@@ -109,5 +117,6 @@ public class IntroActivity extends AppCompatActivity {
         }
         ((TextView) findViewById(R.id.intro_next)).setText(
                 index >= SLIDES.length - 1 ? R.string.intro_start : R.string.intro_next);
+        if (background != null) background.setPageOffset(index);
     }
 }

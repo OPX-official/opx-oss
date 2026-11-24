@@ -96,6 +96,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
 
     // The running attack's monitor: Stryker's long pop-up, fed by the engine's events.
     private AttackMonitorDialog attackMonitor;
+    private CaptivePortalDialog captiveDialog;
 
     // The running-attack card.
     private View attackCard;
@@ -446,6 +447,10 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 attackMonitor.dismiss();
                 attackMonitor = null;
             }
+            if (captiveDialog != null) {
+                captiveDialog.dismiss();
+                captiveDialog = null;
+            }
             if (attackCard != null) attackCard.setVisibility(View.GONE);
         } else if ("status".equals(name)) {
             boolean connected = event.optBoolean("connected");
@@ -536,10 +541,25 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             renderAttackLines();
         } else if ("attack_done".equals(name)) {
             if (attackMonitor != null) attackMonitor.onEvent(event);
+            if (captiveDialog != null) captiveDialog.dismiss();
             onAttackDone(event);
+        } else if ("psk_verified".equals(name)) {
+            boolean ok = event.optBoolean("ok");
+            String message = event.optString("message", "");
+            if (captiveDialog != null) {
+                captiveDialog.result(ok, ok
+                        ? getString(R.string.wifi_captive_match)
+                        : (message.isEmpty() ? getString(R.string.wifi_captive_mismatch) : message));
+            }
+            Snackbar.make(requireView(), ok ? R.string.wifi_captive_match
+                    : R.string.wifi_captive_mismatch, Snackbar.LENGTH_LONG).show();
         } else if ("error".equals(name)) {
             if (attackMonitor != null && attackMonitor.isShowing()) {
                 attackMonitor.fail(event.optString("message"));
+            }
+            if (captiveDialog != null) {
+                captiveDialog.dismiss();
+                captiveDialog = null;
             }
             scanning = false;
             progress.setVisibility(View.GONE);
@@ -870,6 +890,11 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 target.bssid, target.channel);
         attackMonitor.show();
         bridge.attack(kind, target.bssid);
+        if ("captive".equals(kind)) {
+            captiveDialog = new CaptivePortalDialog(requireContext(), target.ssid,
+                    password -> WifiBridge.get(requireContext()).verifyPsk(target.bssid, password));
+            captiveDialog.show();
+        }
     }
 
     private JSONObject targetFor(String bssid) {
@@ -883,6 +908,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     public void onDestroyView() {
         if (attackMonitor != null) attackMonitor.dismiss();
         attackMonitor = null;
+        if (captiveDialog != null) captiveDialog.dismiss();
+        captiveDialog = null;
         if (sheet != null) sheet.dismiss();
         sheet = null;
         super.onDestroyView();
@@ -935,12 +962,27 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 summary);
         if (event.optBoolean("stopped")) text = text + " · " + getString(R.string.wifi_attack_stopped);
         if (!detail.isEmpty() && !"null".equals(detail)) text = text + "\n" + detail;
+        String secret = firstKey(event);
+        if (!secret.isEmpty()) {
+            text = text + "\n" + getString(R.string.wifi_attack_secret) + "\n" + secret;
+        }
         attackResult.setText(text);
         attackResult.setTextColor(ContextCompat.getColor(requireContext(),
                 ok ? R.color.green : R.color.red));
         attackResult.setVisibility(View.VISIBLE);
         // The engine holds the captures; the sheet's counts come back fresh from it.
         WifiBridge.get(requireContext()).requestTargets();
+    }
+
+    /** The first recovered passphrase/key in an attack_done, for the card and copy action. */
+    static String firstKey(JSONObject event) {
+        JSONArray keys = event.optJSONArray("keys");
+        if (keys == null) return "";
+        for (int i = 0; i < keys.length(); i++) {
+            String value = keys.optString(i, "");
+            if (!value.isEmpty() && !"null".equals(value)) return value;
+        }
+        return "";
     }
 
     static int attackTitleRes(String kind) {
@@ -953,6 +995,10 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 return R.string.wifi_attack_wep;
             case "pbc":
                 return R.string.wifi_attack_pbc;
+            case "eviltwin":
+                return R.string.wifi_attack_eviltwin;
+            case "captive":
+                return R.string.wifi_attack_captive;
             default:
                 return R.string.wifi_attack_deauth;
         }
@@ -968,6 +1014,10 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 return R.string.wifi_attack_wep_desc;
             case "pbc":
                 return R.string.wifi_attack_pbc_desc;
+            case "eviltwin":
+                return R.string.wifi_attack_eviltwin_desc;
+            case "captive":
+                return R.string.wifi_attack_captive_desc;
             default:
                 return R.string.wifi_attack_deauth_desc;
         }
@@ -983,6 +1033,10 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 return R.drawable.autopixie;
             case "pbc":
                 return R.drawable.fiber_pin;
+            case "eviltwin":
+                return R.drawable.router;
+            case "captive":
+                return R.drawable.wifi_tethering;
             default:
                 return R.drawable.deauth;
         }
@@ -998,6 +1052,10 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 return R.raw.atom2;
             case "pbc":
                 return R.raw.meteor;
+            case "eviltwin":
+                return R.raw.router;
+            case "captive":
+                return R.raw.globe;
             default:
                 return R.raw.brute;
         }

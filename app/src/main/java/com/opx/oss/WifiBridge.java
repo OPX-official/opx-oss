@@ -278,12 +278,30 @@ public final class WifiBridge {
 
     /** Starts one campaign against one BSSID; progress arrives as attack_log/attack_progress. */
     public void attack(String kind, String bssid) {
+        attack(kind, bssid, null);
+    }
+
+    /** Evil Twin/captive portal settings from the target sheet; null keeps wifi4's defaults. */
+    public void attack(String kind, String bssid, JSONObject options) {
         JSONObject command = json("cmd", "attack");
         try {
             command.put("kind", kind);
             command.put("bssid", bssid);
+            if (options != null) command.put("options", options);
         } catch (JSONException ignored) {
             // Both keys are always present, so this cannot fail.
+        }
+        send(command);
+    }
+
+    /** Verifies a captive-portal candidate against the AP's captured handshake. */
+    public void verifyPsk(String bssid, String psk) {
+        JSONObject command = json("cmd", "verify_psk");
+        try {
+            command.put("bssid", bssid);
+            command.put("psk", psk);
+        } catch (JSONException ignored) {
+            // Plain strings cannot fail to serialize.
         }
         send(command);
     }

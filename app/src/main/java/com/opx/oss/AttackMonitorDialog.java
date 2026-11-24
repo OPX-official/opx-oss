@@ -53,6 +53,8 @@ final class AttackMonitorDialog {
     private final TextView pill;
     private final TextView meta;
     private final TextView result;
+    private final View secretCard;
+    private final TextView secretValue;
     private final TextView console;
     private final TextView consoleCount;
     private final TextView tabProgress;
@@ -96,6 +98,8 @@ final class AttackMonitorDialog {
         pill = content.findViewById(R.id.attack_pill);
         meta = content.findViewById(R.id.attack_meta);
         result = content.findViewById(R.id.attack_result);
+        secretCard = content.findViewById(R.id.attack_secret_card);
+        secretValue = content.findViewById(R.id.attack_secret_value);
         console = content.findViewById(R.id.attack_console);
         consoleCount = content.findViewById(R.id.attack_console_count);
         tabProgress = content.findViewById(R.id.attack_tab_progress);
@@ -135,6 +139,16 @@ final class AttackMonitorDialog {
                 clipboard.setPrimaryClip(ClipData.newPlainText("OPX OSS", log.toString()));
             }
         });
+        content.findViewById(R.id.attack_secret_copy).setOnClickListener(v -> {
+            ClipboardManager clipboard = (ClipboardManager) context
+                    .getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(ClipData.newPlainText("OPX OSS",
+                        secretValue.getText().toString()));
+                android.widget.Toast.makeText(context, R.string.wifi_attack_secret_copied,
+                        android.widget.Toast.LENGTH_SHORT).show();
+            }
+        });
 
         stop.setOnClickListener(v -> {
             if (finished) {
@@ -168,6 +182,12 @@ final class AttackMonitorDialog {
         } else if ("wep".equals(kind)) {
             addStage("ivs", "Collecting usable IVs", "active");
             addStage("crack", "PTW key recovery", "pending");
+        } else if ("eviltwin".equals(kind)) {
+            addStage("assoc", "Punting clients onto the twin", "active");
+            addStage("eapol", "Capturing the 4-way handshake", "pending");
+        } else if ("captive".equals(kind)) {
+            addStage("assoc", "Hosting the captive twin", "active");
+            addStage("eapol", "Waiting for a client M2", "pending");
         } else {
             addStage("deauth", "Deauthenticating clients", "active");
             addStage("eapol", "Handshake / PMKID", "pending");
@@ -198,6 +218,13 @@ final class AttackMonitorDialog {
         } else if ("attack_progress".equals(name)) {
             JSONObject progress = event.optJSONObject("progress");
             if (progress != null) applyProgress(progress);
+            JSONArray lines = event.optJSONArray("lines");
+            if (lines != null) {
+                for (int i = 0; i < lines.length(); i++) {
+                    String line = lines.optString(i, "");
+                    if (!line.isEmpty()) appendLog(line);
+                }
+            }
             String under = event.optString("under", "");
             if (!under.isEmpty() && !"null".equals(under)) meta.setText(under);
         } else if ("attack_status".equals(name)) {
@@ -344,6 +371,7 @@ final class AttackMonitorDialog {
     }
 
     private void appendLog(String line) {
+        if (log.length() > 0 && log.toString().endsWith(line + "\n")) return;
         log.append(line).append('\n');
         console.setText(log.toString());
         int lines = log.toString().split("\n").length;
@@ -422,9 +450,36 @@ final class AttackMonitorDialog {
             text = text + " · " + context.getString(R.string.wifi_attack_stopped);
         }
         if (!detail.isEmpty() && !"null".equals(detail)) text = text + "\n" + detail;
+        showSecret(event);
         result.setText(text);
         result.setTextColor(ContextCompat.getColor(context, ok ? R.color.green : R.color.red));
         result.setVisibility(View.VISIBLE);
+        progressScroll.post(() -> {
+            if (progressScroll instanceof android.widget.ScrollView) {
+                ((android.widget.ScrollView) progressScroll).fullScroll(View.FOCUS_DOWN);
+            }
+        });
+    }
+
+    /** Shows the first recovered passphrase/WEP key as Stryker's copyable result block. */
+    private void showSecret(JSONObject event) {
+        JSONArray keys = event.optJSONArray("keys");
+        String secret = "";
+        if (keys != null) {
+            for (int i = 0; i < keys.length(); i++) {
+                String value = keys.optString(i, "");
+                if (!value.isEmpty() && !"null".equals(value)) {
+                    secret = value;
+                    break;
+                }
+            }
+        }
+        if (secret.isEmpty()) {
+            secretCard.setVisibility(View.GONE);
+            return;
+        }
+        secretValue.setText(secret);
+        secretCard.setVisibility(View.VISIBLE);
         progressScroll.post(() -> {
             if (progressScroll instanceof android.widget.ScrollView) {
                 ((android.widget.ScrollView) progressScroll).fullScroll(View.FOCUS_DOWN);
