@@ -38,6 +38,7 @@ import com.google.android.material.snackbar.Snackbar;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -106,6 +107,10 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     private String attackProgress = "";
     private final StringBuilder attackLog = new StringBuilder();
 
+    // Stryker's expandable action button: Pixie dust, Handshakes, Deauth.
+    private View fabMenu;
+    private boolean fabOpen;
+
     private WifiManager wifiManager;
     private BroadcastReceiver scanReceiver;
     private boolean scanning;
@@ -167,6 +172,23 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         refresh.setOnRefreshListener(() -> {
             refresh.setRefreshing(false);
             scan();
+        });
+
+        fabMenu = view.findViewById(R.id.wifi_fab_menu);
+        view.findViewById(R.id.wifi_fab).setOnClickListener(v -> toggleFab());
+        view.findViewById(R.id.wifi_fab_hs).setOnClickListener(v -> {
+            toggleFab();
+            if (getActivity() instanceof MainActivity) {
+                ((MainActivity) getActivity()).open(R.id.nav_handshakes);
+            }
+        });
+        view.findViewById(R.id.wifi_fab_deauth).setOnClickListener(v -> {
+            toggleFab();
+            pickTarget("deauth");
+        });
+        view.findViewById(R.id.wifi_fab_pixie).setOnClickListener(v -> {
+            toggleFab();
+            pickTarget("wps");
         });
 
         view.findViewById(R.id.wifi_scan_usb).setOnClickListener(v -> scan());
@@ -406,6 +428,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                         event.optString("ssid"), event.optString("bssid"),
                         event.optInt("channel"));
                 attackMonitor.show();
+                // A monitor opened mid-campaign starts from the engine's own progress snapshot.
+                attackMonitor.onEvent(event);
             }
         } else if ("attack_started".equals(name)) {
             attackRunning = true;
@@ -711,6 +735,60 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    /** Stryker's FAB expands its three shortcuts in place instead of pushing a new screen. */
+    private void toggleFab() {
+        if (fabMenu == null) return;
+        fabOpen = !fabOpen;
+        if (fabOpen) {
+            fabMenu.setVisibility(View.VISIBLE);
+            fabMenu.setAlpha(0f);
+            fabMenu.setTranslationY(dp(16));
+            fabMenu.animate().alpha(1f).translationY(0f).setDuration(180).start();
+        } else {
+            fabMenu.animate().alpha(0f).translationY(dp(16)).setDuration(150)
+                    .withEndAction(() -> fabMenu.setVisibility(View.GONE)).start();
+        }
+    }
+
+    /**
+     * The quick actions work on the last scan's targets: the engine says which network actually
+     * accepts the attack, so the list only holds targets that will start, never a dead tap.
+     */
+    private void pickTarget(String kind) {
+        WifiBridge.get(requireContext()).requestTargets();
+        List<WifiAdapter.Network> matches = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        for (WifiAdapter.Network network : adapter.networks()) {
+            JSONObject target = targetFor(network.bssid);
+            if (target == null) continue;
+            JSONArray attacks = target.optJSONArray("attacks");
+            if (attacks == null) continue;
+            for (int i = 0; i < attacks.length(); i++) {
+                JSONObject attack = attacks.optJSONObject(i);
+                if (attack == null) continue;
+                if (!kind.equals(attack.optString("kind"))) continue;
+                if (!attack.optBoolean("enabled")) continue;
+                String ssid = network.ssid == null || network.ssid.isEmpty()
+                        ? getString(R.string.wifi_hidden_ssid) : network.ssid;
+                labels.add(String.format(Locale.US, "%s · %s · CH %d", ssid,
+                        network.bssid == null ? "—" : network.bssid.toUpperCase(Locale.US),
+                        network.channel));
+                matches.add(network);
+                break;
+            }
+        }
+        if (matches.isEmpty()) {
+            Snackbar.make(requireView(), R.string.wifi_pick_empty, Snackbar.LENGTH_LONG).show();
+            return;
+        }
+        new android.app.AlertDialog.Builder(requireContext())
+                .setTitle(R.string.wifi_pick_title)
+                .setItems(labels.toArray(new String[0]),
+                        (dialog, which) -> openTarget(matches.get(which)))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
     }
 
     private void startAttack(String kind) {

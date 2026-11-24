@@ -242,6 +242,11 @@ class Engine:
         self.campaign = None
         self.campaign_kind = None
         self.campaign_ap = None
+        # Live packet-rate window for the monitor's sparkline: wifi4's own packet_stats
+        # cumulative tallies, diffed once per tick.
+        self._rate_snapshot = None
+        self._rate_at = 0.0
+        self.campaign_started = 0.0
         self.attack_task = None
         # One cracking job at a time: wifi4's own CPU cracker or hashcat over a saved capture.
         self.crack_tool = None
@@ -521,6 +526,9 @@ class Engine:
         self.campaign = campaign
         self.campaign_kind = kind
         self.campaign_ap = ap
+        self._rate_snapshot = None
+        self._rate_at = 0.0
+        self.campaign_started = time.monotonic()
         emit("attack_started", kind=kind, label=plain(campaign_cls.button_label(ap)),
              bssid=ap.bssid, ssid=ap.ssid or "", channel=ap.channel)
         self.attack_task = asyncio.create_task(self._watch_campaign(campaign, kind))
@@ -556,7 +564,9 @@ class Engine:
                 under = plain(campaign.status_under_card() or "")
             except Exception:  # noqa: BLE001
                 under = ""
-            emit("attack_progress", kind=kind, lines=[line for line in lines if line], under=under)
+            progress = self.campaign_progress(campaign, kind)
+            emit("attack_progress", kind=kind, lines=[line for line in lines if line], under=under,
+                 progress=progress)
             try:
                 self.harvest(getattr(campaign, "ap", None))
             except Exception:  # noqa: BLE001 - saving must never end the attack
@@ -602,6 +612,111 @@ class Engine:
             tested = getattr(state, "tested", None)
             return {"ok": False, "summary": "WPS PIN not found", "detail": f"{tested} PINs tried"}
         return {"ok": False, "summary": "finished", "detail": ""}
+
+    # ---------------------------------------------------- live campaign progress
+
+    def packet_rates(self):
+        """Per-second frame rates for the running campaign's AP (wifi4's packet_stats deltas).
+
+        ``inject`` is every injected frame, ``deauth`` the deauth ones, ``eapol`` the EAPOL
+        frames heard. This is the same source wifi4's Textual packet dashboard samples, so the
+        app's sparkline rises and falls with the radio, not with a timer.
+        """
+        keys = ("inject", "deauth", "eapol", "beacon", "data")
+        snap = {key: 0 for key in keys}
+        bssid = getattr(self.campaign_ap, "bssid", "") or ""
+        if self.array is not None and bssid:
+            try:
+                live = self.array.packet_stats.snapshot(bssid)
+                for key in keys:
+                    snap[key] = int(live.get(key, 0) or 0)
+            except Exception as exc:  # noqa: BLE001 - never end an attack over a counter
+                log(f"packet stats unavailable: {type(exc).__name__}: {exc}")
+        now = time.monotonic()
+        previous = self._rate_snapshot
+        span = now - self._rate_at if self._rate_at else 0.0
+        if previous is None or span <= 0:
+            rates = {key: 0 for key in keys}
+        else:
+            rates = {key: round(max(0, snap[key] - previous.get(key, 0)) / max(span, 0.2), 1)
+                     for key in keys}
+        self._rate_snapshot = snap
+        self._rate_at = now
+        return rates, snap
+
+    def campaign_progress(self, campaign, kind):
+        """Structured progress for the monitor: stages, metric chips and the rate window.
+
+        Everything here comes from the running campaign's own counters, so a stage is ACTIVE
+        because wifi4 is in it, never because a script guessed from a log line.
+        """
+        rates, totals = self.packet_rates()
+        ap = getattr(campaign, "ap", None) or self.campaign_ap
+        ssid = getattr(ap, "ssid", "") or ""
+        channel = getattr(ap, "channel", 0) or 0
+        elapsed = int(max(0.0, time.monotonic() - self.campaign_started)) if self.campaign_started else 0
+
+        def stage(key, label, state, detail=""):
+            return {"key": key, "label": label, "state": state, "detail": plain(detail)}
+
+        def metric(key, label, value):
+            return {"key": key, "label": label, "value": str(value)}
+
+        stages = [
+            stage("radio", "Taking the radio", "done"),
+            stage("target", "Locked on the target", "done",
+                  f"{ssid or 'hidden'} · CH {channel}" if channel else ssid),
+        ]
+        metrics = [
+            metric("elapsed", "ELAPSED", f"{elapsed // 60:02d}:{elapsed % 60:02d}"),
+            metric("inject", "INJECT", f"{rates['inject']:.0f}/s"),
+            metric("deauth", "DEAUTH", f"{rates['deauth']:.0f}/s"),
+            metric("eapol", "EAPOL", str(totals.get("eapol", 0))),
+            metric("clients", "CLIENTS", str(self.ap_clients(getattr(ap, "bssid", "")))),
+            metric("beacon", "BEACON", f"{rates['beacon']:.0f}/s"),
+        ]
+
+        if kind == "deauth":
+            captured = bool(getattr(campaign, "captured", False))
+            sent = getattr(campaign, "client_sent", 0) or 0
+            acked = getattr(campaign, "client_acks", 0) or 0
+            broadcast = getattr(campaign, "bcast_sent", 0) or 0
+            csa = getattr(campaign, "csa_sent", 0) or 0
+            stages.append(stage("deauth", "Deauthenticating clients",
+                                "done" if captured else "active",
+                                f"{acked}/{sent} acked · {broadcast} broadcast · {csa} CSA"))
+            stages.append(stage("eapol", "Handshake / PMKID",
+                                "done" if captured else "active",
+                                "capture saved" if captured else "waiting for EAPOL"))
+            metrics.append(metric("sent", "FRAMES", sent))
+            metrics.append(metric("acked", "ACKED", acked))
+        elif kind == "pmkid":
+            pmkid = getattr(campaign, "pmkid", None)
+            failed = getattr(campaign, "fail_reason", None)
+            done = bool(pmkid)
+            stages.append(stage("assoc", "Associating with the AP",
+                                "done" if done or failed else "active"))
+            stages.append(stage("eapol", "Requesting the PMKID",
+                                "done" if done else ("failed" if failed else "active"),
+                                "PMKID harvested" if done else
+                                (str(getattr(failed, "value", failed)) if failed
+                                 else "waiting for the association reply")))
+        elif kind == "wps":
+            state = getattr(campaign, "state", None)
+            pin = getattr(state, "found_pin", None)
+            tried = getattr(state, "tested", 0) or 0
+            stages.append(stage("assoc", "Associating with the AP", "done"))
+            stages.append(stage("wps", "WPS exchange", "done" if pin else "active",
+                                f"PIN {pin}" if pin else f"{tried:,} PINs tried"))
+            stages.append(stage("pixie", "Pixie-dust computation",
+                                "done" if pin else "pending"))
+            metrics.append(metric("tried", "PINs TRIED", f"{tried:,}"))
+            if pin:
+                metrics.append(metric("pin", "PIN", pin))
+
+        stages.append(stage("save", "Saving the capture", "pending"))
+        return {"stages": stages, "metrics": metrics, "rates": rates,
+                "elapsed": elapsed, "window": 1}
 
     # ------------------------------------------------------ captures and cracking
 
@@ -861,7 +976,8 @@ class Engine:
         ap = self.campaign_ap
         emit("attack_status", running=True, kind=self.campaign_kind,
              bssid=getattr(ap, "bssid", "") or "", ssid=getattr(ap, "ssid", None) or "",
-             channel=getattr(ap, "channel", 0) or 0)
+             channel=getattr(ap, "channel", 0) or 0,
+             progress=self.campaign_progress(campaign, self.campaign_kind))
 
     async def stop_attack(self):
         """Cooperative stop: the campaign's own teardown still runs, then attack_done lands."""

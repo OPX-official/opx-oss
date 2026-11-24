@@ -105,6 +105,11 @@ public class WifiAdapter extends RecyclerView.Adapter<WifiAdapter.Holder> {
         return true;
     }
 
+    /** The rows in display order, for the quick-action target picker. */
+    public List<Network> networks() {
+        return new ArrayList<>(items.values());
+    }
+
     public int size() {
         return items.size();
     }

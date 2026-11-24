@@ -204,10 +204,37 @@
                         android:paddingStart="18dp"
                         android:paddingEnd="18dp" />
 
+                    <!-- Stryker's live rate block: the injection rate as a heartbeat sparkline,
+                         fed by wifi4's own packet_stats deltas. -->
+                    <LinearLayout
+                        android:id="@+id/attack_rate_block"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="18dp"
+                        android:layout_marginTop="6dp"
+                        android:layout_marginEnd="18dp"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/attack_rate_label"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/wifi_attack_rate_label"
+                            android:textColor="@color/grey"
+                            android:textSize="10sp" />
+
+                        <com.opx.oss.SparklineView
+                            android:id="@+id/attack_rate"
+                            android:layout_width="match_parent"
+                            android:layout_height="56dp"
+                            android:layout_marginTop="4dp" />
+                    </LinearLayout>
+
                     <com.airbnb.lottie.LottieAnimationView
                         android:id="@+id/attack_anim"
-                        android:layout_width="120dp"
-                        android:layout_height="120dp"
+                        android:layout_width="96dp"
+                        android:layout_height="96dp"
+                        android:layout_marginTop="2dp"
                         android:layout_gravity="center_horizontal"
                         android:contentDescription="@string/wifi_section_attacks"
                         app:lottie_autoPlay="true"

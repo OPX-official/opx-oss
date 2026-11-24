@@ -37,10 +37,11 @@ public class HomeFragment extends Fragment implements OpxService.Listener {
         engineAnim = view.findViewById(R.id.home_engine_anim);
 
         view.findViewById(R.id.home_hero_scan).setOnClickListener(v -> open(R.id.nav_wifi));
-        view.findViewById(R.id.home_module_wifi).setOnClickListener(v -> open(R.id.nav_wifi));
-        view.findViewById(R.id.home_module_logs).setOnClickListener(v -> open(R.id.nav_logs));
-        view.findViewById(R.id.home_row_settings).setOnClickListener(v -> open(R.id.nav_settings));
-        view.findViewById(R.id.home_row_about).setOnClickListener(v -> open(R.id.nav_about));
+        view.findViewById(R.id.home_tool_wifi).setOnClickListener(v -> open(R.id.nav_wifi));
+        view.findViewById(R.id.home_tool_hs).setOnClickListener(v -> open(R.id.nav_handshakes));
+        view.findViewById(R.id.home_tool_logs).setOnClickListener(v -> open(R.id.nav_logs));
+        view.findViewById(R.id.home_tool_settings).setOnClickListener(v -> open(R.id.nav_settings));
+        view.findViewById(R.id.home_recent_hs).setOnClickListener(v -> open(R.id.nav_handshakes));
         applyState();
     }
 

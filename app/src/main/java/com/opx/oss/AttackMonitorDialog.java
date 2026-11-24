@@ -5,12 +5,19 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.PorterDuff;
+import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import androidx.core.content.ContextCompat;
@@ -20,15 +27,23 @@ import com.airbnb.lottie.LottieAnimationView;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+
 /**
  * Stryker's attack monitor, driven by the engine's campaign events.
  * <p>
  * The same long pop-up Stryker opens for an attack: icon, title and target, a state pill, the
- * Progress/Terminal tabs, the campaign's own status lines as stages, its gif, and the result
- * footer. The lines come from wifi4 itself ({@code attack_progress}/{@code attack_log}), so the
- * dialog never invents a stage the campaign is not in.
+ * Progress/Terminal tabs, a stage timeline with a spinner on the running stage, metric chips
+ * (elapsed / inject / deauth / EAPOL / clients / beacon) and the live rate sparkline. Everything
+ * comes from wifi4's own campaign counters and packet stats, so no stage or number is guessed
+ * from a log line.
  */
 final class AttackMonitorDialog {
+
+    private static final long RATE_STEP_MS = 60L;
+    private static final int RATE_STEPS = 8;
 
     private final Context context;
     private final Dialog dialog;
@@ -43,13 +58,23 @@ final class AttackMonitorDialog {
     private final TextView tabProgress;
     private final TextView tabTerminal;
     private final LinearLayout stages;
+    private final LinearLayout metrics;
+    private final SparklineView rateView;
+    private final View rateBlock;
     private final View progressScroll;
     private final View consoleScroll;
     private final com.google.android.material.button.MaterialButton stop;
     private final String kind;
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
+    private final Map<String, StageRow> stageRows = new LinkedHashMap<>();
+    private final Map<String, TextView> metricValues = new LinkedHashMap<>();
     private final StringBuilder log = new StringBuilder();
     private boolean finished;
+
+    private float rateShown;
+    private float rateCeiling = 8f;
+    private Runnable rateAnim;
 
     AttackMonitorDialog(Context context, String kind, String ssid, String bssid, int channel) {
         this.context = context;
@@ -76,6 +101,9 @@ final class AttackMonitorDialog {
         tabProgress = content.findViewById(R.id.attack_tab_progress);
         tabTerminal = content.findViewById(R.id.attack_tab_terminal);
         stages = content.findViewById(R.id.attack_stages);
+        metrics = content.findViewById(R.id.attack_metrics);
+        rateView = content.findViewById(R.id.attack_rate);
+        rateBlock = content.findViewById(R.id.attack_rate_block);
         progressScroll = content.findViewById(R.id.attack_body_scroll);
         consoleScroll = content.findViewById(R.id.attack_console_scroll);
         stop = content.findViewById(R.id.attack_stop);
@@ -88,12 +116,15 @@ final class AttackMonitorDialog {
                 ? context.getString(R.string.wifi_hidden_ssid) : ssid;
         target.setText(name);
         meta.setText(channel > 0
-                ? String.format(java.util.Locale.US, "%s · CH %d", bssid, channel)
+                ? String.format(Locale.US, "%s · CH %d", bssid, channel)
                 : bssid);
 
         anim.setAnimation(WifiFragment.attackAnimRes(this.kind));
         anim.setRepeatCount(-1);
         anim.playAnimation();
+
+        rateView.setAccent(ContextCompat.getColor(context, R.color.stryker_accent));
+        buildStagesFor(this.kind);
 
         tabProgress.setOnClickListener(v -> showTab(true));
         tabTerminal.setOnClickListener(v -> showTab(false));
@@ -114,8 +145,28 @@ final class AttackMonitorDialog {
             }
         });
 
-        stage(context.getString(R.string.wifi_attack_starting));
         showTab(true);
+    }
+
+    /**
+     * The stages the engine reports, so a monitor opened mid-attack shows the campaign where it
+     * really is; the engine's first progress tick replaces these labels and states.
+     */
+    private void buildStagesFor(String kind) {
+        stages.removeAllViews();
+        stageRows.clear();
+        if ("pmkid".equals(kind)) {
+            addStage("assoc", "Associating with the AP", "active");
+            addStage("eapol", "Requesting the PMKID", "pending");
+        } else if ("wps".equals(kind)) {
+            addStage("assoc", "Associating with the AP", "active");
+            addStage("wps", "WPS exchange", "pending");
+            addStage("pixie", "Pixie-dust computation", "pending");
+        } else {
+            addStage("deauth", "Deauthenticating clients", "active");
+            addStage("eapol", "Handshake / PMKID", "pending");
+        }
+        addStage("save", "Saving the capture", "pending");
     }
 
     void show() {
@@ -123,6 +174,7 @@ final class AttackMonitorDialog {
     }
 
     void dismiss() {
+        handler.removeCallbacksAndMessages(null);
         dialog.dismiss();
     }
 
@@ -137,19 +189,153 @@ final class AttackMonitorDialog {
             String line = event.optString("line");
             if (line.isEmpty()) return;
             appendLog(line);
-            stage(line);
         } else if ("attack_progress".equals(name)) {
-            JSONArray lines = event.optJSONArray("lines");
-            if (lines == null) return;
-            for (int i = 0; i < lines.length(); i++) {
-                String line = lines.optString(i);
-                if (!line.isEmpty()) stage(line);
-            }
+            JSONObject progress = event.optJSONObject("progress");
+            if (progress != null) applyProgress(progress);
             String under = event.optString("under", "");
             if (!under.isEmpty() && !"null".equals(under)) meta.setText(under);
+        } else if ("attack_status".equals(name)) {
+            JSONObject progress = event.optJSONObject("progress");
+            if (progress != null) applyProgress(progress);
         } else if ("attack_done".equals(name)) {
             finish(event);
         }
+    }
+
+    private void applyProgress(JSONObject progress) {
+        JSONArray rows = progress.optJSONArray("stages");
+        if (rows != null) {
+            for (int i = 0; i < rows.length(); i++) {
+                JSONObject row = rows.optJSONObject(i);
+                if (row == null) continue;
+                String key = row.optString("key");
+                String label = row.optString("label");
+                String detail = row.optString("detail", "");
+                if ("null".equals(detail)) detail = "";
+                StageRow stage = stageRows.get(key);
+                if (stage == null) {
+                    stage = addStage(key, label, row.optString("state", "pending"));
+                }
+                if (!label.isEmpty()) stage.title.setText(label);
+                applyState(stage, row.optString("state", "pending"), detail);
+            }
+        }
+
+        JSONArray chips = progress.optJSONArray("metrics");
+        if (chips != null) {
+            for (int i = 0; i < chips.length(); i++) {
+                JSONObject chip = chips.optJSONObject(i);
+                if (chip == null) continue;
+                String key = chip.optString("key");
+                TextView value = metricValues.get(key);
+                if (value == null) addMetric(key, chip.optString("label", key),
+                        chip.optString("value", "—"), i);
+                else value.setText(chip.optString("value", "—"));
+            }
+        }
+
+        JSONObject rates = progress.optJSONObject("rates");
+        if (rates != null) {
+            double inject = rates.optDouble("inject", 0);
+            double deauth = rates.optDouble("deauth", 0);
+            animateRate((float) (inject + deauth));
+        }
+    }
+
+    private StageRow addStage(String key, String label, String state) {
+        View row = LayoutInflater.from(context).inflate(R.layout.wifi_attack_stage, stages, false);
+        StageRow handle = new StageRow(
+                row.findViewById(R.id.stage_title),
+                row.findViewById(R.id.stage_detail),
+                row.findViewById(R.id.stage_icon),
+                row.findViewById(R.id.stage_spinner),
+                row.findViewById(R.id.stage_indicator),
+                row.findViewById(R.id.stage_rail));
+        handle.title.setText(label);
+        handle.state = state;
+        handle.want = state;
+        stageRows.put(key, handle);
+        stages.addView(row);
+        applyState(handle, state, "");
+        return handle;
+    }
+
+    private void addMetric(String key, String label, String value, int index) {
+        LinearLayout row = null;
+        int rowIndex = index / 2;
+        if (metrics.getChildCount() <= rowIndex) {
+            row = new LinearLayout(context);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            params.topMargin = dp(6);
+            metrics.addView(row, params);
+        } else {
+            row = (LinearLayout) metrics.getChildAt(rowIndex);
+        }
+        View chip = LayoutInflater.from(context).inflate(R.layout.wifi_attack_metric, row, false);
+        LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) chip.getLayoutParams();
+        if (index % 2 == 1) params.setMarginStart(dp(6));
+        chip.setLayoutParams(params);
+        ImageView icon = chip.findViewById(R.id.metric_icon);
+        icon.setImageResource(metricIcon(key));
+        icon.setColorFilter(ContextCompat.getColor(context, R.color.stryker_accent),
+                PorterDuff.Mode.SRC_IN);
+        ((TextView) chip.findViewById(R.id.metric_label)).setText(label);
+        TextView text = chip.findViewById(R.id.metric_value);
+        text.setText(value);
+        metricValues.put(key, text);
+        row.addView(chip);
+    }
+
+    private static int metricIcon(String key) {
+        switch (key) {
+            case "elapsed":
+                return R.drawable.timer;
+            case "inject":
+                return R.drawable.bolt;
+            case "deauth":
+                return R.drawable.deauth;
+            case "eapol":
+                return R.drawable.key;
+            case "clients":
+                return R.drawable.devices;
+            case "beacon":
+                return R.drawable.wifi;
+            case "tried":
+                return R.drawable.fiber_pin;
+            case "pin":
+                return R.drawable.key;
+            default:
+                return R.drawable.bolt;
+        }
+    }
+
+    /**
+     * The engine samples once a second; Stryker's monitor pushes several points per second, so the
+     * graph rises smoothly instead of stepping. Each new rate is drawn in a short ramp, which is
+     * what gives the injection line its heartbeat look.
+     */
+    private void animateRate(float value) {
+        if (finished) return;
+        if (rateAnim != null) handler.removeCallbacks(rateAnim);
+        rateCeiling = Math.max(rateCeiling, value);
+        final float from = rateShown;
+        final float to = value;
+        final float ceiling = Math.max(rateCeiling, 8f);
+        final int[] step = {0};
+        rateAnim = new Runnable() {
+            @Override
+            public void run() {
+                step[0]++;
+                float t = Math.min(1f, step[0] / (float) RATE_STEPS);
+                rateShown = from + (to - from) * t;
+                rateView.push(Math.min(1f, rateShown / ceiling));
+                if (step[0] < RATE_STEPS) handler.postDelayed(this, RATE_STEP_MS);
+            }
+        };
+        handler.post(rateAnim);
     }
 
     private void appendLog(String line) {
@@ -160,24 +346,6 @@ final class AttackMonitorDialog {
         consoleScroll.post(() -> {
             if (consoleScroll instanceof android.widget.ScrollView) {
                 ((android.widget.ScrollView) consoleScroll).fullScroll(View.FOCUS_DOWN);
-            }
-            if (progressScroll instanceof android.widget.ScrollView) {
-                ((android.widget.ScrollView) progressScroll).fullScroll(View.FOCUS_DOWN);
-            }
-        });
-    }
-
-    private void stage(String line) {
-        TextView row = new TextView(context);
-        row.setText("● " + line);
-        row.setTextSize(12f);
-        row.setTextColor(ContextCompat.getColor(context, R.color.night_contrast_2));
-        row.setPadding(0, 3, 0, 3);
-        stages.addView(row);
-        while (stages.getChildCount() > 10) stages.removeViewAt(0);
-        progressScroll.post(() -> {
-            if (progressScroll instanceof android.widget.ScrollView) {
-                ((android.widget.ScrollView) progressScroll).fullScroll(View.FOCUS_DOWN);
             }
         });
     }
@@ -199,6 +367,7 @@ final class AttackMonitorDialog {
     void fail(String message) {
         if (finished) return;
         finished = true;
+        failStages();
         pill.setText(R.string.wifi_attack_pill_failed);
         pill.setTextColor(ContextCompat.getColor(context, R.color.red));
         pill.setBackgroundTintList(android.content.res.ColorStateList.valueOf(
@@ -214,7 +383,6 @@ final class AttackMonitorDialog {
                 ? context.getString(R.string.hc_done_fail) : message);
         result.setTextColor(ContextCompat.getColor(context, R.color.red));
         result.setVisibility(View.VISIBLE);
-        stage(message);
     }
 
     private void finish(JSONObject event) {
@@ -222,6 +390,13 @@ final class AttackMonitorDialog {
         boolean ok = event.optBoolean("ok");
         String summary = event.optString("summary", "");
         String detail = event.optString("detail", "");
+        for (StageRow row : stageRows.values()) {
+            if ("active".equals(row.state)) {
+                applyState(row, ok ? "done" : "failed", row.detail.getText().toString());
+            }
+        }
+        StageRow save = stageRows.get("save");
+        if (save != null) applyState(save, ok ? "done" : "failed", ok ? "capture written" : "");
         pill.setText(ok ? R.string.wifi_attack_pill_ok : R.string.wifi_attack_pill_failed);
         pill.setTextColor(ContextCompat.getColor(context, ok ? R.color.green : R.color.red));
         pill.setBackgroundTintList(android.content.res.ColorStateList.valueOf(
@@ -234,6 +409,7 @@ final class AttackMonitorDialog {
         anim.setRepeatCount(0);
         anim.setAnimation(ok ? R.raw.confetti : R.raw.error);
         anim.playAnimation();
+        animateRate(0f);
 
         String text = context.getString(ok ? R.string.wifi_attack_done_ok : R.string.wifi_attack_done_fail,
                 summary);
@@ -244,6 +420,89 @@ final class AttackMonitorDialog {
         result.setText(text);
         result.setTextColor(ContextCompat.getColor(context, ok ? R.color.green : R.color.red));
         result.setVisibility(View.VISIBLE);
-        stage(summary);
+        progressScroll.post(() -> {
+            if (progressScroll instanceof android.widget.ScrollView) {
+                ((android.widget.ScrollView) progressScroll).fullScroll(View.FOCUS_DOWN);
+            }
+        });
+    }
+
+    private void failStages() {
+        for (StageRow row : stageRows.values()) {
+            if ("active".equals(row.state)) applyState(row, "failed", "");
+        }
+    }
+
+    private void applyState(StageRow row, String state, String detail) {
+        row.state = state;
+        int color;
+        switch (state) {
+            case "active":
+                color = ContextCompat.getColor(context, R.color.stryker_accent);
+                row.spinner.setVisibility(View.VISIBLE);
+                row.icon.setVisibility(View.GONE);
+                row.title.setTypeface(null, Typeface.BOLD);
+                break;
+            case "done":
+                color = ContextCompat.getColor(context, R.color.green);
+                row.spinner.setVisibility(View.GONE);
+                row.icon.setVisibility(View.VISIBLE);
+                row.icon.setImageResource(R.drawable.done);
+                row.icon.setColorFilter(color, PorterDuff.Mode.SRC_IN);
+                row.title.setTypeface(null, Typeface.NORMAL);
+                break;
+            case "failed":
+                color = ContextCompat.getColor(context, R.color.red);
+                row.spinner.setVisibility(View.GONE);
+                row.icon.setVisibility(View.VISIBLE);
+                row.icon.setImageResource(R.drawable.error);
+                row.icon.setColorFilter(color, PorterDuff.Mode.SRC_IN);
+                row.title.setTypeface(null, Typeface.BOLD);
+                break;
+            case "pending":
+            default:
+                color = ContextCompat.getColor(context, R.color.grey);
+                row.spinner.setVisibility(View.GONE);
+                row.icon.setVisibility(View.GONE);
+                row.title.setTypeface(null, Typeface.NORMAL);
+                break;
+        }
+        row.title.setTextColor(color);
+        if (row.indicator.getBackground() != null) {
+            row.indicator.getBackground().mutate().setColorFilter(color, PorterDuff.Mode.SRC_IN);
+            row.indicator.getBackground().setAlpha("pending".equals(state) ? 40 : 70);
+        }
+        row.rail.setBackgroundColor("done".equals(state)
+                ? (color & 0x00FFFFFF) | 0x66000000 : 0x22808080);
+        if (detail != null && !detail.isEmpty()) {
+            row.detail.setVisibility(View.VISIBLE);
+            row.detail.setText(detail);
+        } else {
+            row.detail.setVisibility(View.GONE);
+        }
+    }
+
+    private int dp(int value) {
+        return Math.round(value * context.getResources().getDisplayMetrics().density);
+    }
+
+    private static final class StageRow {
+        final TextView title;
+        final TextView detail;
+        final ImageView icon;
+        final ProgressBar spinner;
+        final FrameLayout indicator;
+        final View rail;
+        String state = "pending";
+
+        StageRow(TextView title, TextView detail, ImageView icon, ProgressBar spinner,
+                 FrameLayout indicator, View rail) {
+            this.title = title;
+            this.detail = detail;
+            this.icon = icon;
+            this.spinner = spinner;
+            this.indicator = indicator;
+            this.rail = rail;
+        }
     }
 }
