@@ -14,6 +14,7 @@ Commands
     {"cmd": "attack", "kind": "deauth|pmkid|wps", "bssid": ".."}
                                         -> {"event": "attack_started"}, attack_log/attack_progress,
                                            then {"event": "attack_done", "ok": .., "summary": ..}
+    {"cmd": "attack_status"}            -> {"event": "attack_status", "running": bool, ...}
     {"cmd": "stop_attack"}              -> the running campaign stops; attack_done follows
     {"cmd": "captures"}                 -> {"event": "captures", "captures": [...]}
     {"cmd": "crack_tools"}              -> {"event": "crack_tools", "tools": [...]}
@@ -240,6 +241,7 @@ class Engine:
         # One radio, one campaign: wifi4's Campaign.active is the mutex; these are the app's copy.
         self.campaign = None
         self.campaign_kind = None
+        self.campaign_ap = None
         self.attack_task = None
         # One cracking job at a time: wifi4's own CPU cracker or hashcat over a saved capture.
         self.crack_tool = None
@@ -518,6 +520,7 @@ class Engine:
 
         self.campaign = campaign
         self.campaign_kind = kind
+        self.campaign_ap = ap
         emit("attack_started", kind=kind, label=plain(campaign_cls.button_label(ap)),
              bssid=ap.bssid, ssid=ap.ssid or "", channel=ap.channel)
         self.attack_task = asyncio.create_task(self._watch_campaign(campaign, kind))
@@ -849,6 +852,17 @@ class Engine:
         except Exception as exc:  # noqa: BLE001
             emit("error", message=f"cannot stop the crack: {type(exc).__name__}: {exc}")
 
+    async def attack_status(self):
+        """The campaign that is running right now, so a screen opened mid-attack can show it."""
+        campaign = self.campaign
+        if campaign is None or campaign.done:
+            emit("attack_status", running=False)
+            return
+        ap = self.campaign_ap
+        emit("attack_status", running=True, kind=self.campaign_kind,
+             bssid=getattr(ap, "bssid", "") or "", ssid=getattr(ap, "ssid", None) or "",
+             channel=getattr(ap, "channel", 0) or 0)
+
     async def stop_attack(self):
         """Cooperative stop: the campaign's own teardown still runs, then attack_done lands."""
         campaign = self.campaign
@@ -920,6 +934,8 @@ async def main():
                 await engine.targets()
             elif name == "attack":
                 await engine.attack(command.get("kind"), command.get("bssid"))
+            elif name == "attack_status":
+                await engine.attack_status()
             elif name == "stop_attack":
                 await engine.stop_attack()
             elif name == "captures":

@@ -224,6 +224,8 @@ final class CrackDialog {
             if (!event.optString("capture").equals(capture.optString("id"))) return;
             running = true;
             status.setText(R.string.hc_running);
+        } else if ("crack_stopping".equals(name)) {
+            status.setText(R.string.hc_stopping);
         } else if ("crack_progress".equals(name)) {
             if (!event.optString("capture").equals(capture.optString("id"))) return;
             Double percent = event.isNull("percent") ? null : event.optDouble("percent");

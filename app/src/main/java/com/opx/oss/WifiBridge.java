@@ -279,6 +279,11 @@ public final class WifiBridge {
         send(json("cmd", "stop_attack"));
     }
 
+    /** Asks whether a campaign is running, for a WiFi screen opened mid-attack. */
+    public void requestAttackStatus() {
+        send(json("cmd", "attack_status"));
+    }
+
     /** Asks for the saved handshake/PMKID list; the reply is a {@code captures} event. */
     public void requestCaptures() {
         send(json("cmd", "captures"));

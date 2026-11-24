@@ -229,6 +229,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 bridge.start();
                 bridge.requestDevices();
                 bridge.requestTargets();
+                bridge.requestAttackStatus();
                 break;
             case OpxService.STATE_FAILED:
                 statusValue.setText(getString(R.string.wifi_usb_error,
@@ -391,6 +392,21 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             }
             targets = map;
             if (sheet != null && sheet.isShowing()) renderTargetAttacks();
+        } else if ("attack_status".equals(name)) {
+            if (!event.optBoolean("running")) {
+                if (!attackRunning && attackMonitor != null) attackMonitor.dismiss();
+                return;
+            }
+            // The screen was opened while a campaign was already running: show its monitor.
+            if (!attackRunning) {
+                attackRunning = true;
+                showAttackCard(event.optString("kind"), event.optString("ssid"),
+                        event.optString("bssid"));
+                attackMonitor = new AttackMonitorDialog(requireContext(), event.optString("kind"),
+                        event.optString("ssid"), event.optString("bssid"),
+                        event.optInt("channel"));
+                attackMonitor.show();
+            }
         } else if ("attack_started".equals(name)) {
             attackRunning = true;
             showAttackCard(event.optString("kind"), event.optString("ssid"),
