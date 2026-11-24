@@ -27,6 +27,7 @@ public class LogsFragment extends Fragment {
     private TextView logView;
     private TextView countView;
     private ScrollView scroll;
+    private View emptyView;
 
     @Nullable
     @Override
@@ -42,6 +43,7 @@ public class LogsFragment extends Fragment {
         logView = view.findViewById(R.id.logs_text);
         countView = view.findViewById(R.id.logs_count);
         scroll = view.findViewById(R.id.logs_scroll);
+        emptyView = view.findViewById(R.id.logs_empty_anim);
 
         view.findViewById(R.id.logs_copy).setOnClickListener(v -> copy());
         view.findViewById(R.id.logs_share).setOnClickListener(v -> share());
@@ -65,6 +67,8 @@ public class LogsFragment extends Fragment {
         String text = AppLog.snapshot();
         if (text.isEmpty()) text = AppLog.readFile(requireContext());
         logView.setText(text.isEmpty() ? getString(R.string.logs_empty) : text);
+        // Stryker's empty-state animation instead of a blank console.
+        if (emptyView != null) emptyView.setVisibility(text.isEmpty() ? View.VISIBLE : View.GONE);
         int lines = text.isEmpty() ? 0 : text.split("\n").length;
         countView.setText(getString(R.string.logs_count, lines));
         scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));

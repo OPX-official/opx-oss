@@ -39,22 +39,19 @@ public class HomeFragment extends Fragment implements OpxService.Listener {
     @Override
     public void onResume() {
         super.onResume();
-        OpxService service = OpxService.get();
-        if (service != null) service.setListener(this);
+        OpxService.addListener(this);
         applyState();
     }
 
     @Override
     public void onPause() {
         super.onPause();
-        OpxService service = OpxService.get();
-        if (service != null) service.clearListener(this);
+        OpxService.removeListener(this);
     }
 
     private void applyState() {
         if (!isAdded() || runtimeValue == null) return;
-        OpxService service = OpxService.get();
-        int state = service == null ? OpxService.STATE_STARTING : service.getState();
+        int state = OpxService.getState();
         switch (state) {
             case OpxService.STATE_READY:
                 runtimeValue.setText(R.string.home_runtime_ready);
@@ -64,13 +61,18 @@ public class HomeFragment extends Fragment implements OpxService.Listener {
             case OpxService.STATE_FAILED:
                 runtimeValue.setText(R.string.wifi_state_failed);
                 runtimeBody.setText(getString(R.string.wifi_usb_error,
-                        service == null ? "" : String.valueOf(service.getError())));
+                        String.valueOf(OpxService.getError())));
                 runtimeChip.setText("!");
                 break;
             case OpxService.STATE_INSTALLING:
                 runtimeValue.setText(R.string.notification_state_installing);
                 runtimeBody.setText(R.string.home_runtime_body);
                 runtimeChip.setText("…");
+                break;
+            case OpxService.STATE_STOPPED:
+                runtimeValue.setText(R.string.engine_stopped);
+                runtimeBody.setText(R.string.home_runtime_body);
+                runtimeChip.setText("—");
                 break;
             default:
                 runtimeValue.setText(R.string.notification_state_starting);
@@ -88,12 +90,6 @@ public class HomeFragment extends Fragment implements OpxService.Listener {
 
     @Override
     public void onEngineStateChanged() {
-        if (!isAdded()) return;
-        requireActivity().runOnUiThread(this::applyState);
-    }
-
-    @Override
-    public void onEngineExited() {
         if (!isAdded()) return;
         requireActivity().runOnUiThread(this::applyState);
     }

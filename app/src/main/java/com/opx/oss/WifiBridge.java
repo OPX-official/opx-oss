@@ -86,8 +86,7 @@ public final class WifiBridge {
     public synchronized void start() {
         if (running) return;
         userStopped = false;
-        OpxService service = OpxService.get();
-        if (service == null || service.getState() != OpxService.STATE_READY) {
+        if (OpxService.getState() != OpxService.STATE_READY) {
             AppLog.info(TAG, "start() ignored: runtime not ready");
             return;
         }
@@ -194,8 +193,7 @@ public final class WifiBridge {
             return;
         }
         restarts++;
-        OpxService service = OpxService.get();
-        if (service == null || service.getState() != OpxService.STATE_READY) return;
+        if (OpxService.getState() != OpxService.STATE_READY) return;
         main.postDelayed(() -> {
             AppLog.info(TAG, "restarting the engine after an unexpected exit");
             start();

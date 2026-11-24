@@ -94,22 +94,21 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
     @Override
     protected void onResume() {
         super.onResume();
-        OpxService service = OpxService.get();
-        if (service != null) service.setListener(this);
+        // Registered even when the service does not exist yet: the state is process-wide, so the
+        // drawer follows the engine to "ready" exactly like the notification does.
+        OpxService.addListener(this);
         applyRuntimeState();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        OpxService service = OpxService.get();
-        if (service != null) service.clearListener(this);
+        OpxService.removeListener(this);
     }
 
     private void applyRuntimeState() {
         if (runtimeStatus == null) return;
-        OpxService service = OpxService.get();
-        int state = service == null ? OpxService.STATE_STARTING : service.getState();
+        int state = OpxService.getState();
         switch (state) {
             case OpxService.STATE_READY:
                 runtimeStatus.setText(R.string.notification_state_ready);
@@ -119,6 +118,9 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
                 break;
             case OpxService.STATE_INSTALLING:
                 runtimeStatus.setText(R.string.notification_state_installing);
+                break;
+            case OpxService.STATE_STOPPED:
+                runtimeStatus.setText(R.string.engine_stopped);
                 break;
             default:
                 runtimeStatus.setText(R.string.notification_state_starting);
@@ -193,10 +195,5 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
     @Override
     public void onEngineStateChanged() {
         runOnUiThread(this::applyRuntimeState);
-    }
-
-    @Override
-    public void onEngineExited() {
-        runOnUiThread(() -> runtimeStatus.setText(R.string.engine_stopped));
     }
 }

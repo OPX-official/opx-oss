@@ -70,16 +70,14 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
     @Override
     public void onResume() {
         super.onResume();
-        OpxService service = OpxService.get();
-        if (service != null) service.setListener(this);
+        OpxService.addListener(this);
         refresh();
     }
 
     @Override
     public void onPause() {
         super.onPause();
-        OpxService service = OpxService.get();
-        if (service != null) service.clearListener(this);
+        OpxService.removeListener(this);
     }
 
     // ------------------------------------------------------------------ state
@@ -87,15 +85,14 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
     private void refresh() {
         if (!isAdded() || prefixValue == null) return;
         Context context = requireContext();
-        OpxService service = OpxService.get();
-        int state = service == null ? OpxService.STATE_STARTING : service.getState();
+        int state = OpxService.getState();
 
         prefixValue.setText(OpxRuntime.PREFIX_GUEST);
         archValue.setText(archText(context));
         stateValue.setText(stateText(state));
         versionValue.setText("v" + versionName(context));
 
-        String error = service == null ? null : service.getError();
+        String error = OpxService.getError();
         if (error == null || error.isEmpty()) {
             engineError.setVisibility(View.GONE);
         } else {
@@ -116,6 +113,8 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
                 return getString(R.string.notification_state_failed);
             case OpxService.STATE_INSTALLING:
                 return getString(R.string.notification_state_installing);
+            case OpxService.STATE_STOPPED:
+                return getString(R.string.engine_stopped);
             default:
                 return getString(R.string.notification_state_starting);
         }
@@ -151,15 +150,11 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
 
     // ---------------------------------------------------------------- actions
 
-    /** Stops the engine process and lets the service start a fresh one. */
+    /** Stops the engine process and re-runs the runtime install/probe pass. */
     private void restartEngine() {
         Context context = requireContext();
         WifiBridge.get(context).stop();
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            if (!isAdded()) return;
-            WifiBridge.get(requireContext()).start();
-            refresh();
-        }, 600);
+        OpxService.restart(context);
         Snackbar.make(requireView(), R.string.settings_restarted, Snackbar.LENGTH_SHORT).show();
         refresh();
     }
@@ -222,8 +217,7 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
         Context context = requireContext();
         StringBuilder text = new StringBuilder();
         text.append("OPX OSS ").append(versionName(context)).append('\n');
-        OpxService service = OpxService.get();
-        int state = service == null ? OpxService.STATE_STARTING : service.getState();
+        int state = OpxService.getState();
         text.append("state: ").append(stateText(state)).append('\n');
         text.append("arch: ").append(archText(context)).append('\n');
         text.append("installed: ").append(OpxRuntime.isInstalled(context)).append('\n');
@@ -231,7 +225,7 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
         text.append("storage: ").append(getString(OpxRuntime.hasStoragePermission(context)
                 ? R.string.settings_storage_granted : R.string.settings_storage_missing)).append('\n');
         text.append("log level: ").append(levelLabel()).append('\n');
-        String error = service == null ? null : service.getError();
+        String error = OpxService.getError();
         if (error != null && !error.isEmpty()) {
             text.append("engine error: ").append(error).append('\n');
         }
@@ -257,12 +251,6 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
 
     @Override
     public void onEngineStateChanged() {
-        if (!isAdded()) return;
-        requireActivity().runOnUiThread(this::refresh);
-    }
-
-    @Override
-    public void onEngineExited() {
         if (!isAdded()) return;
         requireActivity().runOnUiThread(this::refresh);
     }

@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * The OPX engine host: a started foreground service that installs and verifies the packaged
@@ -33,15 +34,17 @@ public class OpxService extends Service {
     public static final int STATE_INSTALLING = 1;
     public static final int STATE_READY = 2;
     public static final int STATE_FAILED = 3;
+    public static final int STATE_STOPPED = 4;
 
     private static final String CHANNEL_ID = "opx-engine";
     private static final int NOTIFICATION_ID = 1;
 
-    /** Receives engine state changes; the WiFi screen registers while it is visible. */
+    /**
+     * Receives engine state changes. Screens register while they are visible and read the state
+     * with {@link #getState()}; the callback is only the "something changed" signal.
+     */
     public interface Listener {
         void onEngineStateChanged();
-
-        void onEngineExited();
     }
 
     /** Result of a headless command; modules use this instead of a shell session. */
@@ -51,15 +54,27 @@ public class OpxService extends Service {
 
     private static OpxService instance;
 
+    /**
+     * The engine state belongs to the process, not to the service object. The activity starts the
+     * service and resumes straight away, so a screen routinely asks for the state before Android
+     * has even constructed {@link OpxService}; while this was an instance field, that screen read
+     * "starting" and, because it could not register on a null instance either, never heard the
+     * change — the drawer said "Starting the engine…" forever while the notification, written by
+     * the service itself, already said "Engine ready".
+     */
+    private static volatile int state = STATE_STARTING;
+    private static volatile String error;
+    /** Registered screens; kept here so a listener can register before the service exists. */
+    private static final List<Listener> listeners = new CopyOnWriteArrayList<>();
+
     /** Actions waiting for the userland to be installed and probed (see {@link #whenReady}). */
     private final ArrayDeque<Runnable> readyActions = new ArrayDeque<>();
-    private volatile int state = STATE_STARTING;
-    private volatile String error;
     private Thread engineThread;
-    private Listener listener;
     private boolean exiting;
 
     public static void start(Context context) {
+        // A start request always means "starting": never the "stopped" left behind by Exit.
+        if (state == STATE_STOPPED) state = STATE_STARTING;
         Intent intent = new Intent(context, OpxService.class).setAction(ACTION_START);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
@@ -70,6 +85,20 @@ public class OpxService extends Service {
 
     public static OpxService get() {
         return instance;
+    }
+
+    /**
+     * Restarts the install-and-probe pass behind the runtime. The Settings screen's Restart row
+     * calls this instead of only restarting the wifi4 process, which used to leave the engine in
+     * whatever state it was in.
+     */
+    public static void restart(Context context) {
+        OpxService service = get();
+        if (service == null) {
+            start(context);
+            return;
+        }
+        service.restartEngine();
     }
 
     @Override
@@ -102,7 +131,6 @@ public class OpxService extends Service {
     @Override
     public void onDestroy() {
         instance = null;
-        listener = null;
         clearReadyActions();
         super.onDestroy();
     }
@@ -140,22 +168,41 @@ public class OpxService extends Service {
         engineThread.start();
     }
 
+    /** Re-runs the install/repair/probe pass, e.g. after the user grants storage. */
+    void restartEngine() {
+        if (state == STATE_INSTALLING) return;
+        if (engineThread != null && engineThread.isAlive()) return;
+        AppLog.info("OpxService", "restart requested");
+        setState(STATE_STARTING, null);
+        startEngine();
+    }
+
     private void setState(int newState, String newError) {
         AppLog.info("OpxService", "state -> " + newState + (newError == null ? "" : " (" + newError + ")"));
         state = newState;
         error = newError;
         updateNotification();
-        Listener current = listener;
-        if (current != null) current.onEngineStateChanged();
+        notifyState();
         if (newState == STATE_READY) drainReadyActions();
         if (newState == STATE_FAILED) clearReadyActions();
     }
 
-    public int getState() {
+    /** Every visible screen re-reads the state; it is the same value the notification shows. */
+    private static void notifyState() {
+        for (Listener listener : listeners) {
+            try {
+                listener.onEngineStateChanged();
+            } catch (RuntimeException ignored) {
+                // A screen on its way out must not keep the others from hearing the change.
+            }
+        }
+    }
+
+    public static int getState() {
         return state;
     }
 
-    public String getError() {
+    public static String getError() {
         return error;
     }
 
@@ -173,7 +220,8 @@ public class OpxService extends Service {
                 readyActions.add(action);
                 return;
             }
-            if (state == STATE_FAILED) return;
+            // Nothing queued against a runtime that failed, or one the user has exited.
+            if (state == STATE_FAILED || state == STATE_STOPPED) return;
         }
         action.run();
     }
@@ -217,18 +265,19 @@ public class OpxService extends Service {
         exiting = true;
         clearReadyActions();
         WifiBridge.get(this).stop();
-        Listener current = listener;
-        if (current != null) current.onEngineExited();
+        state = STATE_STOPPED;
+        error = null;
+        notifyState();
         stopForeground(true);
         stopSelf();
     }
 
-    public void setListener(Listener listener) {
-        this.listener = listener;
+    public static void addListener(Listener listener) {
+        if (listener != null && !listeners.contains(listener)) listeners.add(listener);
     }
 
-    public void clearListener(Listener listener) {
-        if (this.listener == listener) this.listener = null;
+    public static void removeListener(Listener listener) {
+        listeners.remove(listener);
     }
 
     // ---------------------------------------------------------- notification

@@ -24,6 +24,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
+import com.airbnb.lottie.LottieAnimationView;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.google.android.material.snackbar.Snackbar;
 
@@ -64,6 +65,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     private View listCard;
     private View tryAgain;
     private LinearProgressIndicator progress;
+    private LottieAnimationView scanAnim;
     private SwipeRefreshLayout refresh;
     private RecyclerView list;
     private View errorCard;
@@ -102,6 +104,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         listCard = view.findViewById(R.id.wifi_list_card);
         tryAgain = view.findViewById(R.id.try_again);
         progress = view.findViewById(R.id.wifi_scan_progress);
+        scanAnim = view.findViewById(R.id.wifi_scan_anim);
         refresh = view.findViewById(R.id.refresh);
         list = view.findViewById(R.id.wifilist);
         errorCard = view.findViewById(R.id.wifi_error_card);
@@ -147,8 +150,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     public void onResume() {
         super.onResume();
         WifiBridge.get(requireContext()).addListener(this);
-        OpxService service = OpxService.get();
-        if (service != null) service.setListener(this);
+        OpxService.addListener(this);
         applyEngineState();
         requireContext().registerReceiver(scanReceiver,
                 new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION));
@@ -158,8 +160,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     public void onPause() {
         super.onPause();
         WifiBridge.get(requireContext()).removeListener(this);
-        OpxService service = OpxService.get();
-        if (service != null) service.clearListener(this);
+        OpxService.removeListener(this);
         try {
             requireContext().unregisterReceiver(scanReceiver);
         } catch (IllegalArgumentException ignored) {
@@ -170,21 +171,24 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     // --------------------------------------------------------------- engine
 
     private void applyEngineState() {
-        OpxService service = OpxService.get();
-        int state = service == null ? OpxService.STATE_STARTING : service.getState();
-        switch (state) {
+        switch (OpxService.getState()) {
             case OpxService.STATE_READY:
-                statusValue.setText(R.string.wifi_status_scanning);
+                // The status line reports the runtime, not a scan: "Scanning…" belonged there only
+                // while a scan was actually running, so this screen looked busy when it was idle.
+                if (!scanning) statusValue.setText(R.string.wifi_state_ready);
                 WifiBridge bridge = WifiBridge.get(requireContext());
                 bridge.start();
                 bridge.requestDevices();
                 break;
             case OpxService.STATE_FAILED:
                 statusValue.setText(getString(R.string.wifi_usb_error,
-                        service == null ? "" : String.valueOf(service.getError())));
+                        String.valueOf(OpxService.getError())));
                 break;
             case OpxService.STATE_INSTALLING:
                 statusValue.setText(R.string.notification_state_installing);
+                break;
+            case OpxService.STATE_STOPPED:
+                statusValue.setText(R.string.engine_stopped);
                 break;
             default:
                 statusValue.setText(R.string.notification_state_starting);
@@ -193,8 +197,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     }
 
     private void scan() {
-        OpxService service = OpxService.get();
-        if (service == null || service.getState() != OpxService.STATE_READY) {
+        if (OpxService.getState() != OpxService.STATE_READY) {
             Snackbar.make(requireView(), R.string.wifi_engine_pending, Snackbar.LENGTH_LONG).show();
             return;
         }
@@ -427,6 +430,11 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         countChip.setText(String.valueOf(size));
         emptyCard.setVisibility(size == 0 ? View.VISIBLE : View.GONE);
         listCard.setVisibility(size == 0 ? View.GONE : View.VISIBLE);
+        // The radar animation only runs while the empty card is on screen.
+        if (scanAnim != null) {
+            if (size == 0) scanAnim.playAnimation();
+            else scanAnim.pauseAnimation();
+        }
         if (size == 0) {
             scanText.setText(scanning ? R.string.wifi_scanning : R.string.wifi_empty_title);
             scanSubtext.setText(scanning ? R.string.wifi_usb_scanning : R.string.wifi_empty_body);
@@ -480,12 +488,5 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     public void onEngineStateChanged() {
         if (!isAdded()) return;
         requireActivity().runOnUiThread(this::applyEngineState);
-    }
-
-    @Override
-    public void onEngineExited() {
-        if (!isAdded()) return;
-        requireActivity().runOnUiThread(() ->
-                statusValue.setText(R.string.wifi_state_no_adapter));
     }
 }
