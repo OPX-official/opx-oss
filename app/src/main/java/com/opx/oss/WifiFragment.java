@@ -628,7 +628,11 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 .inflate(R.layout.item_attack, sheetAttacks, false);
         ((TextView) row.findViewById(R.id.attack_title)).setText(attackTitleRes(kind));
         TextView desc = row.findViewById(R.id.attack_desc);
-        desc.setText(enabled || reason.isEmpty() ? attackDescRes(kind) : reason);
+        if (enabled || reason.isEmpty()) {
+            desc.setText(attackDescRes(kind));
+        } else {
+            desc.setText(reason);
+        }
         ((ImageView) row.findViewById(R.id.attack_icon)).setImageResource(attackIconRes(kind));
         row.findViewById(R.id.attack_chevron).setVisibility(enabled ? View.VISIBLE : View.GONE);
         row.setAlpha(enabled ? 1f : 0.45f);
