@@ -191,7 +191,7 @@
     <string name="hs_section_files">CAPTURES</string>
     <string name="hs_status_empty">No captures yet</string>
     <string name="hs_status_count">%1$d captures · %2$d cracked</string>
-    <string name="hs_storage_path">the engine's capture directory</string>
+    <string name="hs_storage_path">the engine\'s capture directory</string>
     <string name="hs_action_refresh">Refresh</string>
     <string name="hs_meta_total">TOTAL</string>
     <string name="hs_meta_cracked">CRACKED</string>
@@ -208,7 +208,7 @@
     <string name="hs_password_copied">Password copied</string>
 
     <string name="hc_title">Crack handshake</string>
-    <string name="hc_subtitle">wifi4's own cracker: CPU crack, or hashcat when a GPU build is installed</string>
+    <string name="hc_subtitle">wifi4\'s own cracker: CPU crack, or hashcat when a GPU build is installed</string>
     <string name="hc_tool">TOOL</string>
     <string name="hc_tool_cpu">CPU Crack</string>
     <string name="hc_tool_gpu">Hashcat (GPU)</string>
