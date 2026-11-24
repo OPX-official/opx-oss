@@ -253,7 +253,6 @@ final class AttackMonitorDialog {
                 row.findViewById(R.id.stage_rail));
         handle.title.setText(label);
         handle.state = state;
-        handle.want = state;
         stageRows.put(key, handle);
         stages.addView(row);
         applyState(handle, state, "");
