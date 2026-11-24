@@ -24,6 +24,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import time
 import urllib.request
 
 
@@ -94,6 +95,32 @@ def merge(fresh: dict, published: dict, scope: str) -> list[dict]:
     return sorted(merged.values(), key=lambda entry: entry["path"])
 
 
+def refresh_from_files(index: dict, out: pathlib.Path) -> int:
+    """Re-reads the SHA-256 and size of every fresh entry from the artifact on disk.
+
+    The catalogue is the APK build's integrity gate, so its hashes must describe the bytes
+    that are about to be uploaded. A freshly built ``out/index.json`` can still carry another
+    run's hashes for the same file names (both runs use the date as the version); trusting it
+    would publish a catalogue whose checksums no download can match, and the APK build would
+    refuse a perfectly good runtime.
+    """
+    changed = 0
+    for entry in index.get("packages", []):
+        path = out / entry.get("path", "")
+        if not path.is_file():
+            continue
+        digest = make_index.sha256(path)
+        size = path.stat().st_size
+        if entry.get("sha256") != digest or entry.get("size") != size:
+            entry["sha256"] = digest
+            entry["size"] = size
+            changed += 1
+    if changed:
+        index["generated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    print(f"  refreshed {changed} checksum(s) from the built artifacts")
+    return changed
+
+
 def write_index(out: pathlib.Path, index: dict, entries: list[dict]) -> None:
     index = dict(index)
     index["packages"] = entries
@@ -144,6 +171,7 @@ def main() -> int:
         prune_page(args.prune_page.resolve(), fresh)
         return 0
 
+    refresh_from_files(fresh, out)
     published = load_index(args.published) if args.published else {}
     try:
         entries = merge(fresh, published, args.scope)
