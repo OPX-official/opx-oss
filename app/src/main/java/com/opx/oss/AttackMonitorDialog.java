@@ -162,6 +162,12 @@ final class AttackMonitorDialog {
             addStage("assoc", "Associating with the AP", "active");
             addStage("wps", "WPS exchange", "pending");
             addStage("pixie", "Pixie-dust computation", "pending");
+        } else if ("pbc".equals(kind)) {
+            addStage("assoc", "Joining the Push-Button window", "active");
+            addStage("wps", "WPS PBC exchange", "pending");
+        } else if ("wep".equals(kind)) {
+            addStage("ivs", "Collecting usable IVs", "active");
+            addStage("crack", "PTW key recovery", "pending");
         } else {
             addStage("deauth", "Deauthenticating clients", "active");
             addStage("eapol", "Handshake / PMKID", "pending");

@@ -150,6 +150,8 @@
     <string name="settings_storage_missing">Not granted</string>
     <string name="settings_storage_ready">Storage links rebuilt</string>
     <string name="settings_storage_denied">Storage permission denied</string>
+    <string name="settings_dfs">DFS channels</string>
+    <string name="settings_dfs_body">Scan 5 GHz channels 52–64 and 100–144. Shared with radar; most countries only allow transmitting while an AP is active.</string>
     <string name="settings_log_level">Log level</string>
     <string name="settings_log_level_body">How much the app writes to its log</string>
     <string name="settings_log_verbose">Verbose — every engine line</string>
@@ -189,6 +191,8 @@
     <string name="wifi_attack_wps_desc">PIN brute-force with Pixie Dust on WSC 2.0</string>
     <string name="wifi_attack_wep">ARP replay</string>
     <string name="wifi_attack_wep_desc">Fake-auth, replay ARP, then crack the WEP key</string>
+    <string name="wifi_attack_pbc">WPS PushButton</string>
+    <string name="wifi_attack_pbc_desc">Join an open WPS PBC window and capture the PSK</string>
 
     <string name="nav_handshakes">Handshakes</string>
 
@@ -220,6 +224,13 @@
     <string name="hs_subtitle">Every handshake and PMKID the engine saved, ready to crack.</string>
     <string name="hs_section_storage">STORAGE</string>
     <string name="hs_section_files">CAPTURES</string>
+    <string name="hs_section_keys">RECOVERED KEYS</string>
+    <string name="hs_key_wps_pin">WPS PIN</string>
+    <string name="hs_key_wps_pbc">WPS PushButton</string>
+    <string name="hs_key_wpa_psk">WPA PSK</string>
+    <string name="hs_key_wep">WEP key</string>
+    <string name="hs_key_pin">PIN %1$s</string>
+    <string name="hs_key_copied">Key copied</string>
     <string name="hs_status_empty">No captures yet</string>
     <string name="hs_status_count">%1$d captures · %2$d cracked</string>
     <string name="hs_storage_path">the engine\'s capture directory</string>

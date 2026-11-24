@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -17,6 +18,7 @@ import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.snackbar.Snackbar;
 
 /**
@@ -32,6 +34,10 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
 
     private static final int REQUEST_STORAGE = 4;
 
+    /** wifi4 scanner preferences the app exposes; the engine reads DFS before it hops. */
+    static final String PREFS = "opx_settings";
+    static final String PREF_DFS = "dfs_channels";
+
     private TextView prefixValue;
     private TextView archValue;
     private TextView stateValue;
@@ -39,6 +45,8 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
     private TextView engineError;
     private TextView storageValue;
     private TextView logLevelValue;
+    private MaterialSwitch dfsSwitch;
+    private boolean bindingDfs;
 
     @Nullable
     @Override
@@ -58,11 +66,19 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
         engineError = view.findViewById(R.id.settings_engine_error);
         storageValue = view.findViewById(R.id.settings_storage_value);
         logLevelValue = view.findViewById(R.id.settings_log_level_value);
+        dfsSwitch = view.findViewById(R.id.settings_dfs_switch);
 
         view.findViewById(R.id.settings_restart_row).setOnClickListener(v -> restartEngine());
         view.findViewById(R.id.settings_storage_row).setOnClickListener(v -> requestStorage());
         view.findViewById(R.id.settings_log_level_row).setOnClickListener(v -> chooseLogLevel());
         view.findViewById(R.id.settings_copy_row).setOnClickListener(v -> copyDiagnosis());
+        dfsSwitch.setOnCheckedChangeListener((button, checked) -> {
+            if (bindingDfs) return;
+            SharedPreferences prefs = requireContext()
+                    .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            prefs.edit().putBoolean(PREF_DFS, checked).apply();
+            WifiBridge.get(requireContext()).setDfs(checked);
+        });
 
         refresh();
     }
@@ -103,6 +119,11 @@ public class SettingsFragment extends Fragment implements OpxService.Listener {
         storageValue.setText(OpxRuntime.hasStoragePermission(context)
                 ? R.string.settings_storage_granted : R.string.settings_storage_missing);
         logLevelValue.setText(levelLabel());
+        boolean dfs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getBoolean(PREF_DFS, false);
+        bindingDfs = true;
+        dfsSwitch.setChecked(dfs);
+        bindingDfs = false;
     }
 
     private String stateText(int state) {

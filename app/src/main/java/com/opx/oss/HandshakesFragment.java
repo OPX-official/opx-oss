@@ -1,14 +1,20 @@
 package com.opx.oss;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.database.Cursor;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -51,6 +57,9 @@ public class HandshakesFragment extends Fragment
     private TextView metaTotal;
     private TextView metaCracked;
     private TextView metaSize;
+    private View keysTitle;
+    private View keysCard;
+    private LinearLayout keysList;
 
     private CrackDialog crackDialog;
     private String pendingWordlistName = "";
@@ -82,6 +91,9 @@ public class HandshakesFragment extends Fragment
         metaTotal = view.findViewById(R.id.hs_meta_total);
         metaCracked = view.findViewById(R.id.hs_meta_cracked);
         metaSize = view.findViewById(R.id.hs_meta_size);
+        keysTitle = view.findViewById(R.id.hs_keys_title);
+        keysCard = view.findViewById(R.id.hs_keys_card);
+        keysList = view.findViewById(R.id.hs_keys_list);
 
         list.setLayoutManager(new LinearLayoutManager(requireContext()));
         list.setAdapter(adapter);
@@ -136,6 +148,8 @@ public class HandshakesFragment extends Fragment
         String name = event.optString("event");
         if ("captures".equals(name)) {
             render(event);
+        } else if ("capture_saved".equals(name)) {
+            requestCaptures();
         } else if ("error".equals(name) && crackDialog != null && crackDialog.isShowing()) {
             String message = event.optString("message");
             if (!message.isEmpty()) Snackbar.make(requireView(), message, Snackbar.LENGTH_LONG).show();
@@ -160,6 +174,76 @@ public class HandshakesFragment extends Fragment
         metaSize.setText(humanSize(bytes));
         emptyCard.setVisibility(count == 0 ? View.VISIBLE : View.GONE);
         listCard.setVisibility(count == 0 ? View.GONE : View.VISIBLE);
+        renderCredentials(event.optJSONArray("credentials"));
+    }
+
+    /** Recovered WPS/WPA/WEP keys, written by wifi4's own savers beside the captures. */
+    private void renderCredentials(JSONArray credentials) {
+        if (keysList == null) return;
+        keysList.removeAllViews();
+        int count = credentials == null ? 0 : credentials.length();
+        keysTitle.setVisibility(count == 0 ? View.GONE : View.VISIBLE);
+        keysCard.setVisibility(count == 0 ? View.GONE : View.VISIBLE);
+        for (int i = 0; i < count; i++) {
+            JSONObject credential = credentials.optJSONObject(i);
+            if (credential == null) continue;
+            String ssid = credential.optString("ssid");
+            String bssid = credential.optString("bssid");
+            String value = credential.optString("value");
+            String pin = credential.optString("pin");
+            String kind = credential.optString("kind");
+            String label = credentialLabel(kind);
+            String shown = value.isEmpty() && !pin.isEmpty()
+                    ? getString(R.string.hs_key_pin, pin) : value;
+            if (!value.isEmpty() && !pin.isEmpty()) {
+                shown = value + " · " + getString(R.string.hs_key_pin, pin);
+            }
+
+            TextView row = new TextView(requireContext());
+            row.setText(String.format(Locale.US, "%s  ·  %s\n%s  ·  %s",
+                    ssid == null || ssid.isEmpty() ? "—" : ssid, label,
+                    bssid == null ? "" : bssid.toUpperCase(Locale.US), shown));
+            row.setTextColor(Color.parseColor("#2E7D32"));
+            row.setTextSize(12);
+            row.setPadding(dp(14), dp(10), dp(14), dp(10));
+            String copyValue = value.isEmpty() ? pin : value;
+            if (!copyValue.isEmpty()) {
+                row.setOnClickListener(v -> copy(copyValue));
+            }
+            keysList.addView(row);
+            if (i < count - 1) {
+                View divider = new View(requireContext());
+                divider.setBackgroundColor(Color.parseColor("#22000000"));
+                keysList.addView(divider, new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, dp(1)));
+            }
+        }
+    }
+
+    private String credentialLabel(String kind) {
+        switch (kind) {
+            case "wps_pin":
+                return getString(R.string.hs_key_wps_pin);
+            case "wps_pbc":
+                return getString(R.string.hs_key_wps_pbc);
+            case "wep":
+                return getString(R.string.hs_key_wep);
+            default:
+                return getString(R.string.hs_key_wpa_psk);
+        }
+    }
+
+    private void copy(String value) {
+        ClipboardManager clipboard = (ClipboardManager) requireContext()
+                .getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard != null) {
+            clipboard.setPrimaryClip(ClipData.newPlainText("OPX OSS", value));
+            Toast.makeText(requireContext(), R.string.hs_key_copied, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     private static String humanSize(long bytes) {

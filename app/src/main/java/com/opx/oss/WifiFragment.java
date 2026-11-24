@@ -951,6 +951,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 return R.string.wifi_attack_wps;
             case "wep":
                 return R.string.wifi_attack_wep;
+            case "pbc":
+                return R.string.wifi_attack_pbc;
             default:
                 return R.string.wifi_attack_deauth;
         }
@@ -964,6 +966,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 return R.string.wifi_attack_wps_desc;
             case "wep":
                 return R.string.wifi_attack_wep_desc;
+            case "pbc":
+                return R.string.wifi_attack_pbc_desc;
             default:
                 return R.string.wifi_attack_deauth_desc;
         }
@@ -977,6 +981,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 return R.drawable.fiber_pin;
             case "wep":
                 return R.drawable.autopixie;
+            case "pbc":
+                return R.drawable.fiber_pin;
             default:
                 return R.drawable.deauth;
         }
@@ -990,6 +996,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 return R.raw.meteor;
             case "wep":
                 return R.raw.atom2;
+            case "pbc":
+                return R.raw.meteor;
             default:
                 return R.raw.brute;
         }

@@ -147,6 +147,12 @@ build_opx_wifi4() { # $1 = arch label for the payload ("all")
     echo "wifi4 default password list missing or truncated: $defaults" >&2
     exit 1
   fi
+  for required in wifi4/campaigns/wep/campaign.py wifi4/engine/wep_status.py; do
+    if [ ! -s "$py/$required" ]; then
+      echo "wifi4 headless package is missing $required" >&2
+      exit 1
+    fi
+  done
 
   # Pure-Python runtime dependencies, vendored so the device needs no pip and no network.
   python3 -m pip install --quiet --disable-pip-version-check --no-compile --target "$py" \

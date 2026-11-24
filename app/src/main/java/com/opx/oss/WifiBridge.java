@@ -129,9 +129,11 @@ public final class WifiBridge {
         stderrThread.setDaemon(true);
         stderrThread.start();
 
-        // The engine only speaks after a command: the ready ping, then the adapter list and
-        // the status, so the WiFi screen always knows whether an adapter is there.
+        // The engine only speaks after a command: the ready ping, then its settings, the
+        // adapter list and the status, so the WiFi screen always knows whether an adapter is there.
         send(json("cmd", "ping"));
+        setDfs(context.getSharedPreferences(SettingsFragment.PREFS, Context.MODE_PRIVATE)
+                .getBoolean(SettingsFragment.PREF_DFS, false));
         requestDevices();
         send(json("cmd", "status"));
     }
@@ -238,6 +240,17 @@ public final class WifiBridge {
 
     public void requestDevices() {
         send(json("cmd", "devices"));
+    }
+
+    /** Applies the one wifi4 scanner preference the app exposes: DFS channel hopping. */
+    public void setDfs(boolean enabled) {
+        JSONObject command = json("cmd", "config");
+        try {
+            command.put("dfs", enabled);
+        } catch (JSONException ignored) {
+            // A plain boolean cannot fail to serialize.
+        }
+        send(command);
     }
 
     public void scan(int seconds) {

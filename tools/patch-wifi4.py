@@ -3,9 +3,9 @@
 
 The wifi4 project is a backend plus a Textual TUI. The app keeps the backend only:
 
-  * ``wifi4/ui/`` (the TUI) is removed, together with ``campaigns/wep/`` (legacy WEP campaign
-    whose status lines go straight through the removed focus model) and the ``__main__``
-    console entry point that launches the app.
+  * ``wifi4/ui/`` (the TUI) is removed, and the one WEP status helper it owned is replaced
+    with a headless version in ``wifi4/engine/wep_status.py``; the WEP campaign itself stays.
+    The ``__main__`` console entry point that launches the app is removed too.
   * the desktop-only privileged setup modules (udev/modprobe on Linux, WinUSB on Windows) are
     dropped: Android uses ``SetupTermux``, which needs no privileged step, and the other two
     are only imported lazily by ``Setup.for_platform()``.
@@ -30,7 +30,6 @@ import sys
 
 REMOVE = [
     "ui",
-    "campaigns/wep",
     "__main__.py",
     "scripts",
     "setup/linux.py",
@@ -110,6 +109,12 @@ TEXT_PATCHES = [
         '"libusb could not be loaded. Install it in Termux and relaunch:\\n\\n"\n            "  pkg install libusb"',
         '"libusb could not be loaded. Reinstall the OPX OSS runtime:\\n\\n"\n            "  opx runtime repair"',
     ),
+    # The WEP campaign stays in the headless package, but its footer used the removed TUI's
+    # focus model. Point that single call at the headless helper this script installs.
+    (
+        "from wifi4.ui.focus_model import wep_status_lines",
+        "from wifi4.engine.wep_status import wep_status_lines",
+    ),
 ]
 
 # The Android half of the engine is OPX OSS's own all the way down: its probe, its setup class,
@@ -140,6 +145,30 @@ WORD_PATCH = re.compile(r"\bTermux\b")
 LOWER_WORD_PATCH = re.compile(r"\btermux\b")
 
 ENGINE_INIT = '''"""Headless OPX additions: the prompter the engine uses instead of the removed TUI."""
+'''
+
+HEADLESS_WEP = '''"""The WEP footer without the removed Textual focus model.
+
+``WepCampaign.status_under_dash`` was the only shipped backend caller of the TUI's
+``wep_status_lines``. The numbers come from wifi4's own WEP capture store, so the app can show
+the usable-IV progress while the campaign is replaying.
+"""
+from __future__ import annotations
+
+from wifi4.crack.wep import CRACK_READY_THRESHOLD
+
+
+def wep_status_lines(ap, array, campaign, now: float) -> list[str]:
+    samples = array.wep_store.crack_sample_count(ap.bssid) if array else 0
+    usable = f"{samples:,}" if samples else "0"
+    if samples < CRACK_READY_THRESHOLD:
+        usable = f"{usable}/{CRACK_READY_THRESHOLD // 1000}k"
+    lines = []
+    if campaign is not None:
+        state = getattr(getattr(campaign, "replay", None), "state", "")
+        lines.append(f"Fake-Auth: {state or 'starting'}")
+    lines.append(f"Usable IVs: {usable}")
+    return lines
 '''
 
 HEADLESS_PROMPTER = '''"""A prompter with no user interface.
@@ -246,7 +275,8 @@ def main() -> int:
     engine.mkdir(parents=True, exist_ok=True)
     (engine / "__init__.py").write_text(ENGINE_INIT, encoding="utf-8")
     (engine / "prompter.py").write_text(HEADLESS_PROMPTER, encoding="utf-8")
-    print("  added wifi4/engine/{__init__,prompter}.py")
+    (engine / "wep_status.py").write_text(HEADLESS_WEP, encoding="utf-8")
+    print("  added wifi4/engine/{__init__,prompter,wep_status}.py")
 
     # Rewrite the app identity: every hardcoded path and message that names the other app.
     paths_changed = 0
