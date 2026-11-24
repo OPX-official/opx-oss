@@ -182,6 +182,7 @@ public final class OpxRuntime {
         extractPayloads(context, arch, prefix);
         ensureSiteShim(context);
         ensureUsbShim(context);
+        ensureUsbFdVariable(context);
 
         ensureDirectory(homeDir(context));
         ensureDirectory(tmpDir(context));
@@ -273,6 +274,67 @@ public final class OpxRuntime {
         } catch (IOException e) {
             AppLog.info("OpxRuntime", "cannot repair bin/opx-usb: " + e.getMessage());
         }
+    }
+
+    /**
+     * The descriptor half of the handshake happens inside libusb, which reads exactly one
+     * environment variable whose name is compiled into the library. The engine exports the
+     * granted descriptor as {@code OPX_USB_FD}; a library looking for any other name sees no
+     * descriptor, enumerates an empty bus, and wifi4 reports "no supported USB Wi-Fi adapter
+     * found" while the adapter is plugged in and Android has already granted it.
+     * <p>
+     * A base runtime installed from a payload built before the variable was renamed still
+     * carries the old name. It is one NUL-terminated string in .rodata, so rewriting it in
+     * place (same length, NUL padded) repairs an installed prefix without a reinstall; on a
+     * payload that already carries the new name this finds nothing and does nothing.
+     */
+    static void ensureUsbFdVariable(Context context) {
+        byte[] legacy = "TERMUX_USB_FD".getBytes(StandardCharsets.US_ASCII);
+        byte[] current = "OPX_USB_FD".getBytes(StandardCharsets.US_ASCII);
+        for (String name : new String[]{"libusb-1.0.so.0", "libusb-1.0.so"}) {
+            File library = new File(new File(prefixDir(context), "lib"), name);
+            if (!library.isFile()) continue;
+            try {
+                byte[] body;
+                try (InputStream in = new FileInputStream(library);
+                     ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
+                    byte[] chunk = new byte[8192];
+                    int count;
+                    while ((count = in.read(chunk)) > 0) buffer.write(chunk, 0, count);
+                    body = buffer.toByteArray();
+                }
+                int rewritten = 0;
+                for (int at = indexOf(body, legacy, 0);
+                     at >= 0;
+                     at = indexOf(body, legacy, at + legacy.length)) {
+                    System.arraycopy(current, 0, body, at, current.length);
+                    for (int pad = at + current.length; pad < at + legacy.length; pad++) {
+                        body[pad] = 0;
+                    }
+                    rewritten++;
+                }
+                if (rewritten == 0) continue;
+                try (FileOutputStream out = new FileOutputStream(library)) {
+                    out.write(body);
+                }
+                AppLog.info("OpxRuntime", name + ": " + rewritten
+                        + " USB descriptor variable(s) renamed to OPX_USB_FD");
+            } catch (IOException e) {
+                AppLog.info("OpxRuntime", "cannot repair " + name + ": " + e.getMessage());
+            }
+        }
+    }
+
+    /** First offset of {@code needle} in {@code haystack} at or after {@code from}, or -1. */
+    private static int indexOf(byte[] haystack, byte[] needle, int from) {
+        outer:
+        for (int at = Math.max(from, 0); at <= haystack.length - needle.length; at++) {
+            for (int i = 0; i < needle.length; i++) {
+                if (haystack[at + i] != needle[i]) continue outer;
+            }
+            return at;
+        }
+        return -1;
     }
 
     /**
@@ -381,6 +443,7 @@ public final class OpxRuntime {
         ensureDirectory(new File(prefix, "tmp"));
         ensureDirectory(new File(prefix, "var/lib/apt/lists/partial"));
         ensureDirectory(new File(prefix, "var/cache/apt/archives/partial"));
+        ensureUsbFdVariable(context);
     }
 
     /** Whether the app may read shared storage, needed for {@code ~/storage} to be usable. */
