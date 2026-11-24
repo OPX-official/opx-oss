@@ -676,7 +676,11 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         card.setLayoutParams(params);
         ((TextView) card.findViewById(R.id.attack_title)).setText(attackTitleRes(kind));
         TextView desc = card.findViewById(R.id.attack_desc);
-        desc.setText(enabled || reason.isEmpty() ? attackDescRes(kind) : reason);
+        if (enabled || reason.isEmpty()) {
+            desc.setText(attackDescRes(kind));
+        } else {
+            desc.setText(reason);
+        }
         ((ImageView) card.findViewById(R.id.attack_icon)).setImageResource(attackIconRes(kind));
         card.setAlpha(enabled ? 1f : 0.45f);
         card.setOnClickListener(v -> {
