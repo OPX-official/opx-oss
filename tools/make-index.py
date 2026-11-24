@@ -81,6 +81,12 @@ def _is_witness(name: str) -> bool:
     return any(witness in "/" + name for witness in PREFIX_WITNESSES)
 
 
+def _expects_witness(relative: str) -> bool:
+    """Only the base runtime carries compiled binaries, so only it must name our prefix."""
+    name = relative.rsplit("/", 1)[-1]
+    return name.startswith("opx-base_") or name.startswith("bootstrap-")
+
+
 def audit(path: pathlib.Path, relative: str) -> None:
     """Fail if the artifact references the foreign prefix, in its paths or inside its binaries.
 
@@ -131,6 +137,13 @@ def audit(path: pathlib.Path, relative: str) -> None:
         print(f"foreign prefix ({FOREIGN}) found in {relative}:", file=sys.stderr)
         for hit in hits[:5]:
             print("  " + hit, file=sys.stderr)
+        raise SystemExit(1)
+    if _expects_witness(relative) and not witnesses:
+        # Not one of the witness binaries is in this artifact, so nothing could be checked: a
+        # renamed interpreter upstream would otherwise turn this gate into a silent pass.
+        print(f"none of the prefix witnesses ({', '.join(PREFIX_WITNESSES)}) is in {relative}: "
+              f"cannot verify that the toolchain fork applied, refusing to publish",
+              file=sys.stderr)
         raise SystemExit(1)
     if witnesses and not ours:
         # A binary that names no prefix at all is not ours either: it was built for another

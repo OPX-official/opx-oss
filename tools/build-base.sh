@@ -178,28 +178,42 @@ with zipfile.ZipFile(boot) as check:
 print(f"  sources.list -> {repo}")
 PYAPT
 
-  # Merge the built .debs for this arch into one payload tar: that is what the app installs.
+  # Merge the debs of the base packages' runtime closure into one payload tar: that is what
+  # the app installs. output/ also holds everything the build touched on the way — each
+  # package's build-time dependencies (perl for openssl, doxygen, ...) and every -dev and
+  # -static subpackage of it — so the list comes from tools/select-debs.py, which reads the
+  # debs' own Depends, instead of a glob over that directory.
   merge="$WORK/merge-$arch"
   mkdir -p "$merge"
+  deb_list="$WORK/debs-$arch.txt"
+  python3 "$ROOT/tools/select-debs.py" --deb-dir "$TP_SRC/output" --arch "$arch" \
+    --roots "$BASE_PACKAGES" > "$deb_list" || exit 1
   debian_count=0
-  for deb in "$TP_SRC"/output/*.deb; do
-    [ -f "$deb" ] || continue
-    case "$(basename "$deb")" in
-      *"_$arch.deb") ;;
-      *) continue ;;
-    esac
-    control_schema="$(dpkg-deb -f "$deb" Architecture 2>/dev/null || true)"
-    [ "$control_schema" = "$arch" ] || continue
+  while IFS= read -r deb; do
+    [ -n "$deb" ] || continue
     debian_count=$((debian_count + 1))
     dpkg-deb --fsys-tarfile "$deb" | tar -xf - -C "$merge"
-  done
+  done < "$deb_list"
   if [ "$debian_count" -eq 0 ]; then
-    echo "no $arch debs found after the build" >&2
+    echo "no $arch debs resolved for $BASE_PACKAGES" >&2
     echo "output: $(ls -ld "$TP_SRC/output" 2>&1), $(ls "$TP_SRC/output" 2>/dev/null | wc -l) entries" >&2
     exit 1
   fi
   if [ -d "$merge/$FOREIGN" ]; then
     echo "foreign prefix directory ($FOREIGN) found in the built $arch tree" >&2
+    exit 1
+  fi
+  # The merge list is derived from package metadata, so prove it produced a runtime that can
+  # start before anything is packed: a bad resolution would otherwise ship a payload that
+  # dies on the phone with "no such file or directory".
+  missing=""
+  [ -x "$merge/$PREFIX_REL/bin/bash" ] || missing="$missing bin/bash"
+  compgen -G "$merge/$PREFIX_REL/bin/python3*" > /dev/null || missing="$missing bin/python3"
+  compgen -G "$merge/$PREFIX_REL/lib/libpython3*" > /dev/null || missing="$missing lib/libpython3"
+  [ -e "$merge/$PREFIX_REL/lib/libusb-1.0.so" ] || missing="$missing lib/libusb-1.0.so"
+  if [ -n "$missing" ]; then
+    echo "the $arch runtime is incomplete, missing:$missing" >&2
+    echo "merged: $(sed 's|.*/||' "$deb_list" | tr '\n' ' ')" >&2
     exit 1
   fi
   # The package build system also installs its own app helpers (termux-tools, termux-exec,
@@ -210,10 +224,19 @@ PYAPT
     > "$WORK/prune-$arch.log" 2>&1 || { cat "$WORK/prune-$arch.log"; exit 1; }
   grep -E '^  (drop|pruned|clean)' "$WORK/prune-$arch.log" | tail -4
 
+  # Drop the build-only half before packing: headers, static archives, man pages, docs and
+  # python's own test suite. See tools/prune-size.py; the same pass runs on the bootstrap.
+  tree_kb="$(du -sk "$merge" | cut -f1)"
+  python3 "$ROOT/tools/prune-size.py" "$merge/$PREFIX_REL" | tail -2
+  printf '  size    %s tree %s -> %s KiB\n' "$arch" "$tree_kb" "$(du -sk "$merge" | cut -f1)"
+
   payload="$OUT/payload/$arch/opx-base_${VERSION}_${arch}.tar.gz"
   mkdir -p "$(dirname "$payload")"
   tar -C "$merge" -czf "$payload" data
+  printf '  size    %s payload %s KiB\n' "$arch" "$(( $(stat -c %s "$payload") / 1024 ))"
   cp "$boot" "$OUT/base/bootstrap/bootstrap-$arch.zip"
+  python3 "$ROOT/tools/prune-size.py" "$OUT/base/bootstrap/bootstrap-$arch.zip" | tail -2
+  printf '  size    %s bootstrap %s KiB\n' "$arch" "$(( $(stat -c %s "$OUT/base/bootstrap/bootstrap-$arch.zip") / 1024 ))"
   python3 "$ROOT/tools/prune-foreign.py" --needle "$FOREIGN" \
     "$OUT/base/bootstrap/bootstrap-$arch.zip" > "$WORK/prune-boot-$arch.log" 2>&1 \
     || { cat "$WORK/prune-boot-$arch.log"; exit 1; }
