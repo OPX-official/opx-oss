@@ -31,9 +31,13 @@ ASSETS="$ROOT/app/src/main/assets"
 # Every phone OPX OSS targets is arm; x86/i686 only matter for emulators, where the adapter path
 # cannot work anyway. The archive still carries all four (set ARCHES to add them to the APK).
 ARCHES="${ARCHES:-aarch64 arm}"
-PACKAGES_BASE_URL="${PACKAGES_BASE_URL:-https://raw.githubusercontent.com/OPX-official/opx-packages/gh-pages}"
+DEFAULT_BASE_URL="https://raw.githubusercontent.com/OPX-official/opx-packages/gh-pages"
+PACKAGES_BASE_URL="${PACKAGES_BASE_URL:-$DEFAULT_BASE_URL}"
+PACKAGES_REPO="${PACKAGES_REPO:-OPX-official/opx-packages}"
+PACKAGES_API_INDEX="https://api.github.com/repos/$PACKAGES_REPO/contents/index.json?ref=gh-pages"
 PACKAGES_LOCAL_DIR="${PACKAGES_LOCAL_DIR:-}"
 INDEX_URL="$PACKAGES_BASE_URL/index.json"
+CACHE_BUST="${PACKAGES_CACHE_BUST:-$(date +%s)}"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -41,6 +45,27 @@ trap 'rm -rf "$WORK"' EXIT
 sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
   else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+
+cache_bust() { # url -> url with a per-run query, so a cached older body is not reused
+  case "$1" in
+    *\?*) printf '%s&cb=%s\n' "$1" "$CACHE_BUST" ;;
+    *) printf '%s?cb=%s\n' "$1" "$CACHE_BUST" ;;
+  esac
+}
+
+fetch_index() {
+  local destination="$1"
+  # raw.githubusercontent.com keeps a branch path cached even when the query changes, so a
+  # freshly published index stays invisible for a while. The contents API is not cached that
+  # way; the raw URL stays as the fallback for callers without a token.
+  if [ -n "${GITHUB_TOKEN:-}" ] && [ "$PACKAGES_BASE_URL" = "$DEFAULT_BASE_URL" ]; then
+    curl -fsSL --retry 3 \
+      -H "Authorization: Bearer $GITHUB_TOKEN" \
+      -H "Accept: application/vnd.github.raw" \
+      -o "$destination" "$PACKAGES_API_INDEX" && return 0
+  fi
+  curl -fsSL --retry 3 -o "$destination" "$(cache_bust "$INDEX_URL")"
 }
 
 echo "== index $INDEX_URL"
@@ -59,7 +84,7 @@ if [ -n "$PACKAGES_LOCAL_DIR" ]; then
 fi
 
 if [ -z "$PACKAGES_LOCAL_DIR" ] || [ ! -f "$ASSETS/index.json" ]; then
-  curl -fsSL --retry 3 -o "$WORK/index.json" "$INDEX_URL"
+  fetch_index "$WORK/index.json"
   if [ ! -f "$WORK/index.json" ]; then
     echo "FATAL: could not fetch index.json from archive or local dir" >&2
     exit 1
@@ -136,7 +161,7 @@ assert_native() { # final-name file-to-scan
 }
 
 fetch_verified() { # url sha256 destination
-  local url="$1" expected="$2" destination="$3"
+  local url="$(cache_bust "$1")" expected="$2" destination="$3"
   mkdir -p "$(dirname "$destination")"
   if [ -f "$destination" ] && [ "$(sha256 "$destination")" = "$expected" ]; then
     echo "  cached  ${destination#"$ASSETS"/}"

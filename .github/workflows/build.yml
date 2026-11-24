@@ -28,6 +28,10 @@ jobs:
       - name: Fetch runtime from the OPX package archive
         # Try the archive first; if that fails (e.g. PACKAGES_TOKEN missing, archive not published),
         # fall back to the locally-built packages from the Packages workflow's out/ directory.
+        env:
+          # Read the catalogue through the contents API: the raw CDN can serve a previous
+          # index.json for minutes after a package publish, which fails every checksum.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           ASSETS_DIR="$PWD/app/src/main/assets"
