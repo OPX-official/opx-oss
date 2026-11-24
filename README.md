@@ -90,7 +90,8 @@ and `tools/engine/opx_engine.py` exposes it as a line protocol:
 ## The package archive
 
 Binaries are **not** fetched from another app's releases at APK build time. They come from the
-OPX package archive, `OPX-official/opx-packages` (`gh-pages` branch):
+OPX package archive, `OPX-official/opx-packages` (`gh-pages` branch, plus its `packages` release
+for artifacts too large for a git branch):
 
 | Path | What |
 |---|---|
@@ -98,8 +99,14 @@ OPX package archive, `OPX-official/opx-packages` (`gh-pages` branch):
 | `dists/stable/main/binary-<arch>/Packages(.gz)` | apt index |
 | `payload/<arch>/…tar.gz` | the same trees, ready to untar into `$PREFIX` |
 | `payload/all/…tar.gz` | architecture-independent packages (`opx-wifi4`, `opx-runtime`, `opx-usb`) |
-| `base/bootstrap/bootstrap-<arch>.zip` | bootstrap built for this app's prefix |
-| `index.json` | catalogue with SHA-256 for every artifact |
+| `base/bootstrap/bootstrap-<arch>.zip` | bootstrap built for this app's prefix (release asset, >100 MiB) |
+| `payload/<arch>/opx-base_…tar.gz` | the base runtime payload (release asset, >100 MiB) |
+| `index.json` | catalogue with SHA-256 and the exact URL for every artifact |
+
+A git branch rejects any file over 100 MiB, so the bootstrap zips and the bare base payloads are
+published as assets of the `packages` release, where a single asset may be 2 GiB. Their asset
+names are the archive paths with `/` written as `__`, and `index.json` carries the URL of each
+one, so a consumer never has to know where a given artifact is stored.
 
 Two workflows keep this honest:
 

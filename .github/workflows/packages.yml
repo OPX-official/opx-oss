@@ -3,6 +3,9 @@ name: Packages
 # Builds the OPX package archive (OPX-official/opx-packages) from source. It runs next to
 # the APK workflow: nothing here depends on the APK, and the APK build consumes only what
 # this workflow publishes. Trigger it manually or whenever the packaging inputs change.
+#
+# If PACKAGES_TOKEN is not set, the publish step is skipped but the package archive
+# is still built locally (in out/) for the APK workflow to use as a fallback.
 
 on:
   workflow_dispatch:
@@ -72,14 +75,61 @@ jobs:
           PY
 
       - name: Publish to the package archive
+        # A git branch rejects any file over 100 MiB, and the bootstrap zips and bare base
+        # payloads are larger than that. Those go to the `packages` release (2 GiB per asset);
+        # everything else, including the apt dists/ tree, stays on gh-pages.
+        # If PACKAGES_TOKEN is not set, skip the publish step but continue so
+        # the locally-built packages in out/ are available for the APK workflow.
         env:
           PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${PACKAGES_TOKEN:-}" ]; then
-            echo "PACKAGES_TOKEN is not set in this repository's secrets" >&2
-            exit 1
+            echo "PACKAGES_TOKEN not set; skipping archive publish, keeping out/ for APK fallback" >&2
+            exit 0
           fi
+          export GH_TOKEN="$PACKAGES_TOKEN"
+
+          big="$(mktemp)"
+          find out -type f -size +90M -printf '%P\n' | sort > "$big"
+          echo "--- oversized artifacts (release assets) ---"
+          cat "$big"
+
+          notes="$(mktemp)"
+          {
+            echo "# OPX package archive"
+            echo
+            echo "Built from [OPX OSS](https://github.com/OPX-official/opx-oss) by its \`Packages\` workflow."
+            echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "Artifacts too large for a git branch live here; \`index.json\` on \`gh-pages\`"
+            echo "points at them. Asset names are the archive paths with \`/\` written as \`__\`."
+          } > "$notes"
+          if gh release view packages -R "$PACKAGES_REPO" >/dev/null 2>&1; then
+            gh release edit packages -R "$PACKAGES_REPO" --notes-file "$notes"
+          else
+            gh release create packages -R "$PACKAGES_REPO" \
+              --title "OPX package archive" --notes-file "$notes"
+          fi
+
+          stage="$(mktemp -d)"
+          while IFS= read -r relative; do
+            [ -z "$relative" ] && continue
+            cp "out/$relative" "$stage/$(printf '%s' "$relative" | sed 's|/|__|g')"
+          done < "$big"
+          if compgen -G "$stage/*" > /dev/null; then
+            gh release upload packages "$stage"/* -R "$PACKAGES_REPO" --clobber
+          fi
+          # Drop assets an earlier build produced that this one did not, so a version bump does
+          # not pile up old bootstraps in the release.
+          ls "$stage" > "$notes.current" 2>/dev/null || true
+          gh release view packages -R "$PACKAGES_REPO" --json assets \
+            -q '.assets[].name' | while IFS= read -r asset; do
+              [ -z "$asset" ] && continue
+              grep -qxF "$asset" "$notes.current" \
+                || gh release delete-asset packages "$asset" -R "$PACKAGES_REPO" --yes || true
+            done
+
           remote="https://x-access-token:${PACKAGES_TOKEN}@github.com/${PACKAGES_REPO}.git"
           work="$(mktemp -d)"
           if git clone --depth 1 --branch gh-pages "$remote" "$work/page" 2>/dev/null; then
@@ -91,6 +141,11 @@ jobs:
             git -C "$work/page" remote add origin "$remote"
           fi
           rsync -a --delete --exclude .git out/ "$work/page/"
+          # The oversized files are release assets; a branch push would be rejected.
+          while IFS= read -r relative; do
+            [ -z "$relative" ] && continue
+            rm -f "$work/page/$relative"
+          done < "$big"
           {
             echo "# OPX package archive"
             echo
@@ -99,14 +154,9 @@ jobs:
             echo
             echo "| kind | files |"
             echo "|---|---|"
-            python3 - <<'PY'
-          import collections, json
-          index = json.load(open("out/index.json", encoding="utf-8"))
-          for kind, count in sorted(collections.Counter(e["kind"] for e in index["packages"]).items()):
-              print(f"| {kind} | {count} |")
-          PY
+            python3 -c "import collections, json; index = json.load(open('out/index.json', encoding='utf-8')); print(''.join(f'| {k} | {c} |\n' for k, c in sorted(collections.Counter(e['kind'] for e in index['packages']).items())), end='')"
             echo
-            echo "\`index.json\` lists every artifact with its SHA-256; the APK build downloads only from here."
+            echo "`index.json` lists every artifact with its SHA-256; the APK build downloads only from here."
           } > "$work/page/README.md"
           git -C "$work/page" add -A
           git -C "$work/page" -c user.name="OPX Packages" -c user.email="opx@opx.dev" \

@@ -20,7 +20,13 @@ import tarfile
 import time
 import zipfile
 
+# Artifacts up to GitHub's per-file limit live in the gh-pages tree (apt also reads dists/
+# from there). Anything larger is published as an asset of the `packages` release instead,
+# because a git branch rejects files over 100 MiB, and a release asset may be 2 GiB.
 DEFAULT_BASE_URL = "https://raw.githubusercontent.com/OPX-official/opx-packages/gh-pages/"
+DEFAULT_RELEASE_BASE_URL = \
+    "https://github.com/OPX-official/opx-packages/releases/download/packages/"
+LARGE_FILE_LIMIT = 90 * 1024 * 1024
 FOREIGN = "com.termux"
 OURS = "com.opx.oss"
 
@@ -136,7 +142,14 @@ def audit(path: pathlib.Path, relative: str) -> None:
         raise SystemExit(1)
 
 
-def collect(out: pathlib.Path, base_url: str) -> list[dict]:
+def release_asset_name(relative: str) -> str:
+    """A release asset name cannot contain "/", so the path is flattened with a separator
+    that never occurs in an artifact name."""
+    return relative.replace("/", "__")
+
+
+def collect(out: pathlib.Path, base_url: str,
+            release_base_url: str = DEFAULT_RELEASE_BASE_URL) -> list[dict]:
     entries = []
     for path in sorted(out.rglob("*")):
         if not path.is_file():
@@ -161,15 +174,19 @@ def collect(out: pathlib.Path, base_url: str) -> list[dict]:
             # has to come from the file name itself.
             name, version = "bootstrap", "base"
             arch = path.stem[len("bootstrap-"):] if path.stem.startswith("bootstrap-") else "all"
+        size = path.stat().st_size
+        oversized = size > LARGE_FILE_LIMIT
         entry = {
             "name": name,
             "version": version,
             "arch": arch,
             "kind": kind,
             "path": relative,
-            "size": path.stat().st_size,
+            "size": size,
             "sha256": sha256(path),
-            "url": base_url + relative,
+            "url": (release_base_url + release_asset_name(relative)) if oversized
+                   else (base_url + relative),
+            "storage": "release" if oversized else "branch",
         }
         if kind == "deb":
             control = deb_control(path)
@@ -239,6 +256,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", required=True, type=pathlib.Path)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--release-base-url", default=DEFAULT_RELEASE_BASE_URL)
     args = parser.parse_args()
 
     out = args.out.resolve()
@@ -246,20 +264,23 @@ def main() -> int:
         print(f"no such directory: {out}", file=sys.stderr)
         return 1
 
-    entries = collect(out, args.base_url)
+    entries = collect(out, args.base_url, args.release_base_url)
     write_apt_index(out, entries)
 
     index = {
         "schema": 1,
         "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "base_url": args.base_url,
+        "release_base_url": args.release_base_url,
         "packages": entries,
     }
     (out / "index.json").write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
     kinds = {}
     for entry in entries:
         kinds[entry["kind"]] = kinds.get(entry["kind"], 0) + 1
-    print(f"  index.json: {len(entries)} artifacts {kinds} (all foreign-prefix-free)")
+    large = sum(1 for entry in entries if entry["storage"] == "release")
+    print(f"  index.json: {len(entries)} artifacts {kinds} (all foreign-prefix-free), "
+          f"{large} oversized -> release assets")
     return 0
 
 

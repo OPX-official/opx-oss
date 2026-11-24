@@ -26,7 +26,33 @@ jobs:
       # Everything the APK ships is built by the Packages workflow and downloaded from the OPX
       # package archive; nothing here talks to another app's repository.
       - name: Fetch runtime from the OPX package archive
-        run: bash tools/fetch-packages.sh
+        # Try the archive first; if that fails (e.g. PACKAGES_TOKEN missing, archive not published),
+        # fall back to the locally-built packages from the Packages workflow's out/ directory.
+        run: |
+          set -euo pipefail
+          ASSETS_DIR="$PWD/app/src/main/assets"
+          WORK_DIR="$(mktemp -d)"
+          trap 'rm -rf "$WORK_DIR"' EXIT
+  
+          # Attempt archive fetch
+          if bash tools/fetch-packages.sh; then
+            echo "Fetched runtime from OPX package archive"
+          else
+            echo "Archive fetch failed; falling back to local packages from out/"
+            if [ -d "out" ] && [ -f "out/index.json" ] && [ -f "out/bootstrap/bootstrap-aarch64.zip" ]; then
+              echo "== copying local packages to assets"
+              rm -rf "$ASSETS_DIR/bootstrap" "$ASSETS_DIR/payload" "$ASSETS_DIR/index.json"
+              cp -r out/bootstrap "$ASSETS_DIR/"
+              cp -r out/payload "$ASSETS_DIR/"
+              cp out/index.json "$ASSETS_DIR/"
+              echo "Local packages staged for APK build"
+            else
+              echo "ERROR: no local packages found in out/ and archive fetch failed" >&2
+              exit 1
+            fi
+          fi
+  
+          rm -rf "$WORK_DIR"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4

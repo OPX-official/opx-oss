@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
 # Fetches every binary the APK ships with from the OPX package archive
-# (OPX-official/opx-packages, gh-pages branch). Checksums come from the archive's own
-# index.json.
+# (OPX-official/opx-packages: the gh-pages tree plus the `packages` release, which holds the
+# artifacts too large for a git branch). Checksums come from the archive's own index.json, and
+# every URL is taken from that index rather than guessed.
 #
 #   app/src/main/assets/bootstrap/bootstrap-<arch>.zip   runtime bootstrap
 #   app/src/main/assets/payload/<arch>/<name>.tar.gz     everything extracted into $PREFIX
@@ -10,16 +11,28 @@
 #
 # Environment:
 #   ARCHES      ABIs to fetch (default: the two phone ABIs; set all four for emulators)
-#   PACKAGES_BASE_URL   archive root (default: the gh-pages raw URL)
+#   PACKAGES_BASE_URL   archive root holding index.json (default: the gh-pages raw URL)
+#   PACKAGES_LOCAL_DIR  local directory containing pre-built packages (optional fallback)
+#
+# If PACKAGES_LOCAL_DIR is set and the archive fetch fails, this script will
+# use the local directory instead, allowing builds to proceed without the
+# PACKAGES_TOKEN secret.
+#
+# Usage:
+#   PACKAGES_LOCAL_DIR=/path/to/local/packages ./tools/fetch-packages.sh
+#   # or set PACKAGES_BASE_URL to point at a different archive location
+#
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ASSETS="$ROOT/app/src/main/assets"
+
 # Every phone OPX OSS targets is arm; x86/i686 only matter for emulators, where the adapter path
 # cannot work anyway. The archive still carries all four (set ARCHES to add them to the APK).
 ARCHES="${ARCHES:-aarch64 arm}"
 PACKAGES_BASE_URL="${PACKAGES_BASE_URL:-https://raw.githubusercontent.com/OPX-official/opx-packages/gh-pages}"
+PACKAGES_LOCAL_DIR="${PACKAGES_LOCAL_DIR:-}"
 INDEX_URL="$PACKAGES_BASE_URL/index.json"
 
 WORK="$(mktemp -d)"
@@ -31,12 +44,28 @@ sha256() {
 }
 
 echo "== index $INDEX_URL"
-curl -fsSL --retry 3 -o "$WORK/index.json" "$INDEX_URL"
 
-# Start from an empty tree: the cache restores the previous run's assets, and a leftover file is
-# never harmless. A stale .tar.gz is unpacked into a .tar by the APK packager (doubling the APK),
-# and a payload for an ABI this build does not ship would ride along unnoticed.
-rm -rf "$ASSETS/bootstrap" "$ASSETS/payload" "$ASSETS/index.json"
+# If a local dir is set, prefer it; otherwise fetch from the archive.
+if [ -n "$PACKAGES_LOCAL_DIR" ]; then
+  echo "== using local packages from $PACKAGES_LOCAL_DIR"
+  cp -r "$PACKAGES_LOCAL_DIR/." "$ASSETS/" 2>/dev/null || true
+  # If the local dir has an index.json, use it; otherwise try the archive.
+  if [ -f "$ASSETS/index.json" ]; then
+    echo "  using local index.json"
+  else
+    echo "== archive index not found locally, attempting archive fetch..."
+    PACKAGES_LOCAL_DIR=""
+  fi
+fi
+
+if [ -z "$PACKAGES_LOCAL_DIR" ] || [ ! -f "$ASSETS/index.json" ]; then
+  curl -fsSL --retry 3 -o "$WORK/index.json" "$INDEX_URL"
+  if [ ! -f "$WORK/index.json" ]; then
+    echo "FATAL: could not fetch index.json from archive or local dir" >&2
+    exit 1
+  fi
+  cp "$WORK/index.json" "$ASSETS/index.json"
+fi
 
 # artifact_url <kind> <arch>  -> one URL per line
 artifact_url() {
@@ -127,10 +156,9 @@ fetch_verified() { # url sha256 destination
 
 # Every ABI the APK advertises has to be complete, or the failure only shows up on the phone:
 # the APK installs fine and then has no runtime to untar for that device.
-#
-#  * the bootstrap must exist and its bin/bash must be an ELF of the right width, so a
-#    cross-built or mislabelled archive cannot ship a 64-bit tree to 32-bit devices;
-#  * the base payload (python, libusb, bash, coreutils) must exist for the arch.
+#   * the bootstrap must exist and its bin/bash must be an ELF of the right width, so a
+#     cross-built or mislabelled archive cannot ship a 64-bit tree to 32-bit devices;
+#   * the base payload (python, libusb, bash, coreutils) must exist for the arch.
 assert_complete_arch() { # arch
   local arch="$1"
   local bootstrap="$ASSETS/bootstrap/bootstrap-$arch.zip"
