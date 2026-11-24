@@ -202,19 +202,22 @@ PYAPT
     echo "foreign prefix directory ($FOREIGN) found in the built $arch tree" >&2
     exit 1
   fi
-  # A literal foreign prefix inside a binary would make it look for another app's files at
-  # runtime. Names are forked (patch-properties.py), so this should be empty: report it loudly
-  # but do not throw away a finished build over a string in a man page.
-  foreign_hits="$(grep -rala "$FOREIGN" "$merge/$PREFIX_REL" 2>/dev/null | head -5 || true)"
-  if [ -n "$foreign_hits" ]; then
-    echo "warning: $arch payload still contains the foreign prefix in:" >&2
-    printf '%s\n' "$foreign_hits" >&2
-  fi
+  # The package build system also installs its own app helpers (termux-tools, termux-exec,
+  # termux-am, the shell snippets that read the other app's properties). They name the foreign
+  # package in their bodies and this app does not use them, so they are stripped here, before
+  # the payload is packed; prune-foreign.py fails if anything still names it afterwards.
+  python3 "$ROOT/tools/prune-foreign.py" --needle "$FOREIGN" "$merge/$PREFIX_REL" \
+    > "$WORK/prune-$arch.log" 2>&1 || { cat "$WORK/prune-$arch.log"; exit 1; }
+  grep -E '^  (drop|pruned|clean)' "$WORK/prune-$arch.log" | tail -4
 
   payload="$OUT/payload/$arch/opx-base_${VERSION}_${arch}.tar.gz"
   mkdir -p "$(dirname "$payload")"
   tar -C "$merge" -czf "$payload" data
   cp "$boot" "$OUT/base/bootstrap/bootstrap-$arch.zip"
+  python3 "$ROOT/tools/prune-foreign.py" --needle "$FOREIGN" \
+    "$OUT/base/bootstrap/bootstrap-$arch.zip" > "$WORK/prune-boot-$arch.log" 2>&1 \
+    || { cat "$WORK/prune-boot-$arch.log"; exit 1; }
+  grep -E '^  (drop|pruned|clean)' "$WORK/prune-boot-$arch.log" | tail -4
   printf '  payload  %s (%s debs)\n' "payload/$arch/opx-base_${VERSION}_${arch}.tar.gz" "$debian_count"
   printf '  bootstrap bootstrap-%s.zip\n' "$arch"
 done

@@ -113,7 +113,9 @@ Two workflows keep this honest:
 * **`Packages`** (`.github/workflows/packages.yml`) — builds everything from source: the base
   runtime in the package build system's docker builder with the app identity forked to
   `com.opx.oss`, plus wifi4 from a pinned commit, the engine and the USB shim. Every artifact
-  is audited for the foreign prefix before publishing.
+  is audited for the foreign prefix before publishing, and the build system's own app
+  helpers (its `termux-*` tools, which name the other app) are stripped out of the runtime
+  with `tools/prune-foreign.py` before the payload is packed.
 * **`Build`** (`.github/workflows/build.yml`) — runs `tools/fetch-packages.sh`, which downloads
   **only** from that archive with checksum verification, then builds the debug and release APKs
   and publishes a GitHub Release on a `v*` tag.
