@@ -95,8 +95,26 @@ for arch in $ARCHES; do
   cd "$TP_SRC"
   # build-bootstraps.sh builds the base set plus -a packages for --architectures and emits a
   # bootstrap-<arch>.zip; the .debs it builds end up in the checkout directory.
-  ./scripts/run-docker.sh ./scripts/build-bootstraps.sh --architectures "$arch" -a "$BASE_PACKAGES" \
-    > "$WORK/build-$arch.log" 2>&1 || { tail -50 "$WORK/build-$arch.log"; exit 1; }
+  #
+  # Upstream source mirrors (mirrors.kernel.org) time out intermittently, and that kills a run
+  # twenty minutes in. A retry rebuilds the same pinned tree, so retry instead of losing it.
+  attempt=1
+  while :; do
+    LOG="$WORK/build-$arch-$attempt.log"
+    if ./scripts/run-docker.sh ./scripts/build-bootstraps.sh --architectures "$arch" \
+        -a "$BASE_PACKAGES" > "$LOG" 2>&1; then
+      break
+    fi
+    if [ "$attempt" -ge 3 ]; then
+      tail -60 "$LOG"
+      echo "the base build for $arch failed $attempt times" >&2
+      exit 1
+    fi
+    echo "attempt $attempt for $arch failed; retrying" >&2
+    tail -15 "$LOG" >&2 || true
+    attempt=$((attempt + 1))
+    sleep 30
+  done
 
   # build-bootstraps.sh writes bootstrap-<arch>.zip into the checkout root and every built
   # .deb into output/.
@@ -108,8 +126,8 @@ for arch in $ARCHES; do
   done
   if [ -z "$boot" ]; then
     echo "no bootstrap-$arch.zip produced" >&2
-    grep -nE "Permission denied|No space left|cannot |Cannot |error:|Error:" "$WORK/build-$arch.log" | tail -20 >&2 || true
-    tail -40 "$WORK/build-$arch.log" >&2
+    grep -nE "Permission denied|No space left|cannot |Cannot |error:|Error:" "$LOG" | tail -20 >&2 || true
+    tail -40 "$LOG" >&2
     echo "checkout: $(ls -ld "$TP_SRC" 2>&1)" >&2
     echo "output:   $(ls -ld "$TP_SRC/output" 2>&1)" >&2
     exit 1
