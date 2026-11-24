@@ -76,7 +76,10 @@ jobs:
           path: out/*.apk
           if-no-files-found: error
 
-      - name: Publish release
+      # A pushed v* tag gets its own versioned release. Any other build on main (push or manual
+      # dispatch) refreshes one rolling pre-release, so the APKs the workflow just built are
+      # always in the Releases section without anyone hand-pushing a tag.
+      - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
@@ -84,3 +87,21 @@ jobs:
           generate_release_notes: true
           name: ${{ github.ref_name }}
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+
+      - name: Publish latest build
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          body: |
+            Automatic build of `${{ github.sha }}` from the `${{ github.event_name }}` event on `${{ github.ref_name }}`.
+            Workflow run ${{ github.run_number }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            - `OPX-OSS-release.apk` — release build, signed with the OPX key
+            - `OPX-OSS-debug.apk` — debug build
+
+            Every successful build replaces both files, so this release always holds the newest APK.
+            Direct link: https://github.com/${{ github.repository }}/releases/download/latest/OPX-OSS-release.apk
+          prerelease: true
+          files: out/*.apk
