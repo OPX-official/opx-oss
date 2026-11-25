@@ -84,11 +84,11 @@ public final class UsbFd implements Closeable {
             if (!reply.optBoolean("ok")) {
                 throw new IOException(failure(reply, "the bridge refused " + path));
             }
-            List<FileDescriptor> received = socket.getAncillaryFileDescriptors();
-            if (received == null || received.isEmpty()) {
+            FileDescriptor[] received = socket.getAncillaryFileDescriptors();
+            if (received == null || received.length == 0) {
                 throw new IOException("the bridge granted " + path + " without a descriptor");
             }
-            return new UsbFd(path, received.get(0));
+            return new UsbFd(path, received[0]);
         } finally {
             closeQuietly(socket);
         }
@@ -97,7 +97,7 @@ public final class UsbFd implements Closeable {
     @Override
     public void close() {
         try {
-            descriptor.close();
+            android.system.Os.close(descriptor);
         } catch (Exception ignored) {
             // Already closed by the bridge, or never opened.
         }
