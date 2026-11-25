@@ -787,10 +787,10 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         sheetAttacks.removeAllViews();
         JSONObject target = targetFor(sheetTarget.bssid);
         if (target == null) {
-            // No target data yet (or a built-in-radio row, which the engine cannot inject on).
-            boolean usb = "usb".equals(sheetTarget.source);
-            sheetNote.setText(usb ? R.string.wifi_attack_loading : R.string.wifi_attack_usb_only);
-            return;
+            // wifi4's row arrived as a network event and no target row covers it yet: the row
+            // already carries privacy/hidden/WPS, so offer the campaigns it allows instead of
+            // leaving the sheet saying "reading the target".
+            target = targetFromNetwork(sheetTarget);
         }
 
         JSONArray attacks = target.optJSONArray("attacks");
@@ -825,6 +825,39 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             sheetWpsLocked.setVisibility(target.optBoolean("wps_locked") ? View.VISIBLE : View.GONE);
         }
         sheetNote.setText(R.string.wifi_attack_hint);
+    }
+
+    /** The attacks a network row itself allows, used when the engine's target row is missing. */
+    private JSONObject targetFromNetwork(WifiAdapter.Network network) {
+        JSONArray attacks = new JSONArray();
+        attacks.put(attackRow("deauth", true, ""));
+        if (network.hidden) attacks.put(attackRow("decloak", true, ""));
+        String privacy = network.privacy == null ? "" : network.privacy;
+        if (privacy.startsWith("WEP")) {
+            attacks.put(attackRow("wep", true, ""));
+        } else if (privacy.startsWith("WPA2") || privacy.startsWith("WPA3")) {
+            attacks.put(attackRow("pmkid", true, ""));
+        }
+        if (network.wps) attacks.put(attackRow("wps", true, ""));
+        JSONObject target = new JSONObject();
+        try {
+            target.put("bssid", network.bssid).put("ssid", network.ssid)
+                    .put("privacy", privacy).put("hidden", network.hidden)
+                    .put("wps", network.wps).put("attacks", attacks);
+        } catch (org.json.JSONException ignored) {
+            // Plain values.
+        }
+        return target;
+    }
+
+    private static JSONObject attackRow(String kind, boolean enabled, String reason) {
+        JSONObject row = new JSONObject();
+        try {
+            row.put("kind", kind).put("enabled", enabled).put("reason", reason);
+        } catch (org.json.JSONException ignored) {
+            // Three plain values.
+        }
+        return row;
     }
 
     /** The TUI's clients panel: one de-auth per client, plus its broadcast one-shot. */

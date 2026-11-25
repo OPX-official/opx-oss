@@ -891,6 +891,7 @@ public final class NativeEngine {
             java.util.Map<String, Integer> before = new java.util.HashMap<>();
             long startedAt = System.currentTimeMillis();
             String[] keys = {"inject", "data", "eapol", "beacon"};
+            int logSeen = 0;
             for (int i = 0; i < 7200; i++) {
                 try {
                     Thread.sleep(1000);
@@ -914,6 +915,18 @@ public final class NativeEngine {
                         Integer was = before.put(key, now);
                         if (was != null) rates.put(key, Math.max(0, now - was));
                         metrics.put(metric(key, rateLabel(key), String.valueOf(now)));
+                    }
+                    // wifi4's campaigns log instead of emitting events: forward the new lines so
+                    // the monitor's Terminal tab shows what the backend is doing.
+                    JSONArray logLines = snapshot.optJSONArray("log");
+                    if (logLines != null) {
+                        if (logLines.length() < logSeen) logSeen = 0;
+                        for (int j = logSeen; j < logLines.length(); j++) {
+                            String line = logLines.optString(j);
+                            if (line.isEmpty()) continue;
+                            emitQuietly(event("attack_log").put("line", line));
+                        }
+                        logSeen = logLines.length();
                     }
                     JSONObject entry = event("attack_progress");
                     entry.put("kind", kind).put("rates", rates).put("metrics", metrics);

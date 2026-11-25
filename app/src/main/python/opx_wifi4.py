@@ -22,6 +22,7 @@ import logging
 import threading
 import time
 import traceback
+from collections import deque
 
 import opx_driver_host as host
 import usb_shim
@@ -31,6 +32,17 @@ import usb_shim
 usb_shim.bootstrap()
 
 logger = logging.getLogger("opx.wifi4")
+
+#: The running campaign's own log lines, polled by the app instead of a JNI callback.
+_log_lines = deque(maxlen=400)
+
+
+def _ui_log(line: str) -> None:
+    try:
+        _log_lines.append(str(line))
+    except Exception:
+        pass
+
 
 _array = None
 _iface = None
@@ -216,10 +228,14 @@ def attack(kind, bssid=None, **options):
     with _lock:
         if _campaign is not None and not _campaign.done:
             raise RuntimeError("a wifi4 campaign is already running")
+        _log_lines.clear()
         args = dict(options or {})
         if kind == "wep":
             # wifi4's WEP campaign names its logger differently from every other campaign.
-            args["log_callback"] = args.pop("log", None)
+            args["log_callback"] = args.pop("log", None) or _ui_log
+        else:
+            # Every other campaign writes its running commentary through ``log``.
+            args.setdefault("log", _ui_log)
         campaign = _campaign_class(kind)(_array, ap, **args)
         started = host._run(_launch(campaign), timeout=30.0)
         if started:
@@ -269,7 +285,8 @@ def progress():
     ``WlanSink`` tallies every frame it hears and ``PacketStats.record_tx`` tallies every frame a
     campaign injects, so these counters are the same ones wifi4's dashboard graph draws from.
     """
-    out = {"lines": [], "counters": {}, "kind": _kind, "bssid": _bssid}
+    out = {"lines": [], "counters": {}, "kind": _kind, "bssid": _bssid,
+           "log": list(_log_lines)}
     campaign = _campaign
     if campaign is None or _array is None:
         return json.dumps(out)
@@ -278,6 +295,9 @@ def progress():
         bssid = (getattr(target, "bssid", None) or _bssid or "").lower()
         if hasattr(campaign, "status_under_dash"):
             out["lines"] = [str(line) for line in campaign.status_under_dash(_array, time.time())]
+        if not out["lines"]:
+            # Most campaigns only log; their last lines are what the Progress tab can show.
+            out["lines"] = list(_log_lines)[-4:]
         if bssid:
             snapshot = _array.packet_stats.snapshot(bssid)
             out["counters"] = {str(k): int(v) for k, v in snapshot.items()}
