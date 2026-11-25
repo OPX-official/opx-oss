@@ -602,6 +602,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                         ? getString(R.string.wifi_captive_match)
                         : (message.isEmpty() ? getString(R.string.wifi_captive_mismatch) : message));
             }
+            // A match means the portal has nothing left to ask: take it down with the campaign.
+            if (ok) WifiBridge.get(requireContext()).stopAttack();
             Snackbar.make(requireView(), ok ? R.string.wifi_captive_match
                     : R.string.wifi_captive_mismatch, Snackbar.LENGTH_LONG).show();
         } else if ("error".equals(name)) {

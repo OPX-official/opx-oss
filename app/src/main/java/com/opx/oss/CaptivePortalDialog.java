@@ -37,6 +37,14 @@ final class CaptivePortalDialog {
     private final MaterialButton verify;
 
     CaptivePortalDialog(Context context, String ssid, Listener listener) {
+        this(context, ssid, "default", listener);
+    }
+
+    /**
+     * The AP crack mode's sheet: same verification flow, but the page copy comes from the
+     * template the crack dialog selected (wifi4's own Evil Twin hosts the AP either way).
+     */
+    CaptivePortalDialog(Context context, String ssid, String template, Listener listener) {
         this.context = context;
         this.listener = listener;
         this.dialog = new Dialog(context);
@@ -54,7 +62,7 @@ final class CaptivePortalDialog {
         body.setPadding(dp(20), dp(20), dp(20), dp(14));
 
         TextView title = new TextView(context);
-        title.setText(R.string.wifi_captive_title);
+        title.setText(templateTitle(template));
         title.setTextColor(ContextCompat.getColor(context, R.color.night_contrast_2));
         title.setTextSize(18);
         title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
@@ -69,7 +77,7 @@ final class CaptivePortalDialog {
         body.addView(target);
 
         TextView copy = new TextView(context);
-        copy.setText(R.string.wifi_captive_body);
+        copy.setText(templateBody(template));
         copy.setTextColor(ContextCompat.getColor(context, R.color.grey));
         copy.setTextSize(12);
         copy.setLineSpacing(0, 1.15f);
@@ -143,6 +151,18 @@ final class CaptivePortalDialog {
         } else {
             verify.setEnabled(true);
         }
+    }
+
+    private static int templateTitle(String template) {
+        if ("router".equals(template)) return R.string.wifi_portal_router_title;
+        if ("hotel".equals(template)) return R.string.wifi_portal_hotel_title;
+        return R.string.wifi_portal_default_title;
+    }
+
+    private static int templateBody(String template) {
+        if ("router".equals(template)) return R.string.wifi_portal_router_body;
+        if ("hotel".equals(template)) return R.string.wifi_portal_hotel_body;
+        return R.string.wifi_portal_default_body;
     }
 
     private void submit() {

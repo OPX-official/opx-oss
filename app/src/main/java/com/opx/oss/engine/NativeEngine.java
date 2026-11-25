@@ -606,12 +606,23 @@ public final class NativeEngine {
     private void verifyPsk(String bssid, String psk) {
         boolean ok = false;
         boolean any = false;
-        for (Handshake handshake : handshakes.list()) {
-            if (bssid != null && !bssid.isEmpty() && !bssid.equals(handshake.bssid)) continue;
-            any = true;
-            if (Verify.psk(handshake, psk)) {
-                ok = true;
-                break;
+        if (wifi4Attached) {
+            // wifi4's vault is where its handshakes live; its own verdict also saves a match.
+            try {
+                JSONObject reply = new JSONObject(PythonChip.backendText("verify_psk", bssid, psk));
+                ok = reply.optBoolean("ok");
+                any = reply.optBoolean("have_handshake");
+            } catch (Exception failed) {
+                AppLog.error("OpxEngine", failed);
+            }
+        } else {
+            for (Handshake handshake : handshakes.list()) {
+                if (bssid != null && !bssid.isEmpty() && !bssid.equals(handshake.bssid)) continue;
+                any = true;
+                if (Verify.psk(handshake, psk)) {
+                    ok = true;
+                    break;
+                }
             }
         }
         JSONObject reply = event("psk_verified");

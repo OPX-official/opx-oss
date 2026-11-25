@@ -10,8 +10,11 @@ import android.graphics.drawable.ColorDrawable;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.Window;
+import android.widget.ArrayAdapter;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -44,6 +47,17 @@ final class CrackDialog {
         void onPickWordlist();
     }
 
+    /** AP mode: the screen starts wifi4's Evil Twin and its captive portal. */
+    interface ApListener {
+        void onStartAp(String bssid, String ssid, String password, String template);
+    }
+
+    /** The captive-portal pages this build can host; ``default`` is preselected. */
+    private static final String[] TEMPLATE_KEYS = {"default", "router", "hotel"};
+    private static final int[] TEMPLATE_LABELS = {
+            R.string.hc_ap_template_default, R.string.hc_ap_template_router,
+            R.string.hc_ap_template_hotel};
+
     private final Context context;
     private final Dialog dialog;
     private final Listener listener;
@@ -53,6 +67,14 @@ final class CrackDialog {
     private final TextView captureText;
     private final MaterialCardView cpuCard;
     private final MaterialCardView hashcatCard;
+    private final MaterialCardView apCard;
+    private final LinearLayout apOptions;
+    private final EditText apName;
+    private final EditText apPassword;
+    private final Spinner apTemplate;
+    private final TextView sourcesTitle;
+    private final LinearLayout sourcesGroup;
+    private final MaterialCardView wordlistCard;
     private final TextView cpuDesc;
     private final TextView hashcatDesc;
     private final MaterialSwitch defaultPasswords;
@@ -71,6 +93,7 @@ final class CrackDialog {
     private boolean running;
     private boolean hashcatAvailable;
     private String hashcatReason = "";
+    private ApListener apListener;
 
     CrackDialog(Context context, JSONObject capture, Listener listener) {
         this.context = context;
@@ -91,6 +114,14 @@ final class CrackDialog {
         captureText = content.findViewById(R.id.hc_capture);
         cpuCard = content.findViewById(R.id.hc_tool_cpu);
         hashcatCard = content.findViewById(R.id.hc_tool_hashcat);
+        apCard = content.findViewById(R.id.hc_tool_ap);
+        apOptions = content.findViewById(R.id.hc_ap_options);
+        apName = content.findViewById(R.id.hc_ap_name);
+        apPassword = content.findViewById(R.id.hc_ap_password);
+        apTemplate = content.findViewById(R.id.hc_ap_template);
+        sourcesTitle = content.findViewById(R.id.hc_sources_title);
+        sourcesGroup = content.findViewById(R.id.hc_sources_group);
+        wordlistCard = content.findViewById(R.id.hc_wordlist_card);
         cpuDesc = content.findViewById(R.id.hc_tool_cpu_desc);
         hashcatDesc = content.findViewById(R.id.hc_tool_hashcat_desc);
         defaultPasswords = content.findViewById(R.id.hc_default_passwords);
@@ -113,12 +144,21 @@ final class CrackDialog {
                 pmkid ? "PMKID" : "handshake"));
         status.setText(R.string.hc_subtitle);
 
+        // AP mode's defaults: the captured network's name and wifi4's default portal page.
+        ((TextView) content.findViewById(R.id.hc_tool_ap_desc)).setText(R.string.hc_tool_ap_desc);
+        apName.setText(ssid == null ? "" : ssid);
+        apTemplate.setAdapter(new ArrayAdapter<>(context,
+                android.R.layout.simple_spinner_item, templateLabels()));
+        ((ArrayAdapter<?>) apTemplate.getAdapter()).setDropDownViewResource(
+                android.R.layout.simple_spinner_dropdown_item);
+
         cpuCard.setOnClickListener(v -> selectTool("cpu_crack"));
+        apCard.setOnClickListener(v -> selectTool("ap"));
         hashcatCard.setOnClickListener(v -> {
             if (hashcatAvailable) selectTool("hashcat");
             else if (!hashcatReason.isEmpty()) Toast.makeText(context, hashcatReason, Toast.LENGTH_SHORT).show();
         });
-        content.findViewById(R.id.hc_wordlist_card).setOnClickListener(v -> {
+        wordlistCard.setOnClickListener(v -> {
             if (listener != null) listener.onPickWordlist();
         });
         content.findViewById(R.id.hc_btn_close).setOnClickListener(v -> dialog.dismiss());
@@ -169,10 +209,29 @@ final class CrackDialog {
         wordlistMeta.setText(path == null ? "" : path);
     }
 
+    /** The screen's AP handler; the dialog only collects the settings for it. */
+    void setApListener(ApListener listener) {
+        this.apListener = listener;
+    }
+
+    private List<String> templateLabels() {
+        List<String> labels = new ArrayList<>();
+        for (int label : TEMPLATE_LABELS) labels.add(context.getString(label));
+        return labels;
+    }
+
     private void selectTool(String name) {
         tool = name;
+        boolean ap = "ap".equals(name);
         tint(cpuCard, "cpu_crack".equals(name));
         tint(hashcatCard, "hashcat".equals(name));
+        tint(apCard, ap);
+        // AP mode has no password sources: the client supplies the password to the portal.
+        apOptions.setVisibility(ap ? View.VISIBLE : View.GONE);
+        sourcesTitle.setVisibility(ap ? View.GONE : View.VISIBLE);
+        sourcesGroup.setVisibility(ap ? View.GONE : View.VISIBLE);
+        wordlistCard.setVisibility(ap ? View.GONE : View.VISIBLE);
+        run.setText(ap ? R.string.hc_ap_start : R.string.hc_run);
     }
 
     private void tint(MaterialCardView card, boolean selected) {
@@ -184,6 +243,23 @@ final class CrackDialog {
 
     private void start() {
         if (running) return;
+        if ("ap".equals(tool)) {
+            String name = apName.getText().toString().trim();
+            if (name.isEmpty()) {
+                Toast.makeText(context, R.string.hc_ap_name_missing, Toast.LENGTH_SHORT).show();
+                return;
+            }
+            int position = apTemplate.getSelectedItemPosition();
+            String template = position >= 0 && position < TEMPLATE_KEYS.length
+                    ? TEMPLATE_KEYS[position] : TEMPLATE_KEYS[0];
+            status.setText(R.string.hc_ap_starting);
+            if (apListener != null) {
+                apListener.onStartAp(capture.optString("bssid"), name,
+                        apPassword.getText().toString(), template);
+            }
+            dialog.dismiss();
+            return;
+        }
         List<String> wordlists = new ArrayList<>();
         if (!wordlistPath.isEmpty()) wordlists.add(wordlistPath);
         if (!defaultPasswords.isChecked() && !ssidPasswords.isChecked()
