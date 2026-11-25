@@ -238,15 +238,16 @@
 
 ## ১০. অগ্রগতি (সবসময় হালনাগাদ, GitHub-এ পুশ করা থাকে)
 
-### M1 — চলছে (আনুমানিক ৫০%)
+### M1 — সম্পন্ন (ডিভাইস-টেস্ট বাদে)
 
 - [x] **ক্লিন স্লেট:** চলন্ত `Packages` রান #43 (`45615454874`) বাতিল; সব ১২টি রিলিজ ও ট্যাগ (`latest`, `v0.2.0-alpha.*`, `v0.1.0-alpha.*`) মুছে ফেলা — এখন শূন্য।
 - [x] **পুরনো বাইরের-নির্ভর পাইপলাইন বাদ:** `.github/workflows/packages.yml`, `tools/build-base.sh`, `tools/build-packages.sh`, `tools/fetch-packages.sh`, `tools/make-index.py`, `tools/merge-index.py`, `tools/select-debs.py`, `tools/patch-bootstraps.py`, `tools/patch-properties.py`, `tools/patch-wifi4.py`, `tools/prune-foreign.py`, `tools/prune-size.py`, `tools/rebrand-runtime.py`, `tools/republish-archive.sh`, `tools/scrub-names.py`, পুরনো GPU-ক্র্যাকার রেসিপি ফোল্ডার, `tools/engine/`, `tools/usb/`।
 - [x] **`engine/UsbFd.java`** — `opx.usb` ক্লায়েন্ট: `list`/`open`, SCM_RIGHTS ডেসক্রিপ্টর গ্রহণ, `OPX_USB_FD` নাম ধরে রাখা।
 - [x] **`engine/UsbTransport.java`** — নিজের USB ট্রান্সপোর্ট: `bulkIn`/`bulkOut`/`control`, ইন্টারফেস claim, পারমিশন-অপেক্ষা, close — libusb-এর কোনো অংশ নেই।
 - [x] **`engine/NativeEngine.java`** — ইন-প্রসেস লাইন প্রোটোকল: `ready`/`ping`/`status`/`config`/`devices`/`targets`/`captures`/`attack_status`/`stop`/`error`, একক ওয়ার্কার থ্রেড।
-- [ ] `WifiBridge` রিওয়্যার — প্রসেস স্পনের বদলে `NativeEngine.start()`।
-- [ ] `OpxService`/`IntroActivity`/`SettingsFragment`-এ রানটাইম-নির্ভর ধাপ বন্ধ করা।
+- [x] **`WifiBridge` রিওয়্যার** — প্রসেস স্পন, stdin/stdout থ্রেড, shim-probe, রিস্টার্ট-লুপ বাদ; এখন `NativeEngine.start()` + `send()`, ইভেন্ট মেইন থ্রেডে, USB ব্রিজ প্রি-ফ্লাইট ও ডায়াগনস্টিক অপরিবর্তিত।
+- [x] **ইনস্টল-গেট বাদ** — `OpxService.startEngine()` আর ডাউনলোড/আনপ্যাক/`probe` করে না, সরাসরি `STATE_READY`; `MainActivity` প্রথম রানেই সার্ভিস চালু করে, ইনস্ট্রো ডাউনলোড-স্ক্রিন স্কিপ।
+- [x] **বিল্ড সবুজ (রিওয়্যার সহ):** রান **#45623741808** (`3203bfa`) সফল।
 
 - [x] **বিল্ড সবুজ:** GitHub Actions `Build` রান **#45622543773** (`d81858e`) — নতুন ইঞ্জিন ক্লাস কম্পাইল ও APK তৈরি সফল; আগের দুটি কম্পাইল এরর (ফাইন্ড টাইপ, JSONException) ঠিক করা হয়েছে।
 - [x] **রিলিজ বন্ধ:** `.github/workflows/build.yml` থেকে দুটি রিলিজ-স্টেপ বাদ, `latest` রিলিজ ও ট্যাগ মুছে ফেলা — প্রজেক্ট শেষ না হওয়া পর্যন্ত Releases খালি, শুধু রান-আর্টিফ্যাক্ট।
