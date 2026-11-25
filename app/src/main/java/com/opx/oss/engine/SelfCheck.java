@@ -8,6 +8,7 @@ import com.opx.oss.engine.crypto.Rc4;
 import com.opx.oss.engine.crypto.Sha1;
 import com.opx.oss.engine.crypto.Sha256;
 import com.opx.oss.engine.crypto.WpaKeys;
+import com.opx.oss.engine.crack.CpuCracker;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -47,6 +48,13 @@ public final class SelfCheck {
                         new byte[]{0x00, 0x11, 0x22, 0x33, 0x44, 0x55},
                         new byte[]{0x66, 0x77, (byte) 0x88, (byte) 0x99, (byte) 0xAA, (byte) 0xBB},
                         false));
+        // PMKID over the same passphrase: HMAC-SHA1-128(PMK, "PMK Name" || AP || STA).
+        expect(failures, "pmkid", "88787e90d6da43df43aff21fca3a3df6",
+                hex(WpaKeys.pmkid(WpaKeys.pmk("opx-selfcheck", bytes("OPX-SelfCheck")),
+                        new byte[]{2, 0, 0, 0, 0, 1}, new byte[]{2, 0, 0, 0, 0, 2})));
+        expect(failures, "mask-count", "260",
+                Long.toString(CpuCracker.count("?d?l")));
+        expect(failures, "mask-first", "0a", CpuCracker.expand("?d?l").next());
         return failures.isEmpty() ? null : String.join("; ", failures);
     }
 
