@@ -13,6 +13,7 @@ import com.opx.oss.engine.attacks.Campaign;
 import com.opx.oss.engine.attacks.DeauthCampaign;
 import com.opx.oss.engine.attacks.DecloakCampaign;
 import com.opx.oss.engine.attacks.PmkidCampaign;
+import com.opx.oss.engine.attacks.WepCampaign;
 import com.opx.oss.engine.capture.Handshake;
 import com.opx.oss.engine.capture.Verify;
 import com.opx.oss.engine.crack.CpuCracker;
@@ -58,6 +59,7 @@ public final class NativeEngine {
     private final HandshakeBook handshakes = new HandshakeBook();
     private final ScanEngine scanEngine = new ScanEngine(scan);
     private final ProbeBook probes = new ProbeBook();
+    private final WepBook wep = new WepBook();
     private final ExecutorService cracker = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "opx-crack");
         thread.setDaemon(true);
@@ -176,6 +178,7 @@ public final class NativeEngine {
                     break;
                 }
                 case "cpu_crack":
+                case "crack":
                     crack(command);
                     break;
                 case "stop_crack":
@@ -307,6 +310,7 @@ public final class NativeEngine {
     private void capture(byte[] mpdu) {
         int fc0 = mpdu[0] & 0xFF;
         int type = (fc0 >> 2) & 0x03;
+        if (type == 2 && (mpdu[1] & 0x40) != 0) wep.feed(mpdu);
         if (type == 0 && Frame.subtype(fc0) == Frame.SUBTYPE_PROBE_REQ) {
             String ssid = Parser.probeRequestSsid(mpdu);
             if (ssid != null) probes.record(Mac.text(Parser.slice(mpdu, 10, 6)), ssid);
@@ -424,6 +428,17 @@ public final class NativeEngine {
         });
     }
 
+    /** Keep a recovered WEP key next to the other captures. */
+    private void saveWepKey(String bssid, String key) {
+        if (key == null || key.isEmpty()) return;
+        try {
+            Vault.save(context, "wep_" + (bssid == null ? "unknown" : bssid.replace(':', '-')) + ".key",
+                    (key + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            error("cannot save the WEP key: " + e.getMessage());
+        }
+    }
+
     /** Write one hashline to the vault and announce it, whoever captured it. */
     private void saveCaptureLine(String bssid, String line) {
         if (line == null || line.isEmpty()) return;
@@ -538,6 +553,9 @@ public final class NativeEngine {
             case "pmkid":
                 starting = new PmkidCampaign(adapter, bssid, options, scan, handshakes);
                 break;
+            case "wep":
+                starting = new WepCampaign(adapter, bssid, options, wep);
+                break;
             default:
                 error(kind + " is not available yet");
                 return;
@@ -553,9 +571,13 @@ public final class NativeEngine {
             String summary = "";
             try {
                 running.start(entry -> {
-                    if ("capture_line".equals(entry.optString("event"))) {
+                    String name = entry.optString("event");
+                    if ("capture_line".equals(name)) {
                         saveCaptureLine(entry.optString("bssid"), entry.optString("line"));
                         return;
+                    }
+                    if ("wep_key".equals(name)) {
+                        saveWepKey(entry.optString("bssid"), entry.optString("key"));
                     }
                     emitQuietly(entry);
                 });
