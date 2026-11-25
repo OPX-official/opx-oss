@@ -459,20 +459,22 @@ public final class OpxRuntime {
     /**
      * The descriptor half of the handshake happens inside libusb, which reads exactly one
      * environment variable whose name is compiled into the library. The engine exports the
-     * granted descriptor as {@code OPX_USB_FD}, but the libusb in the base payload is Termux's
-     * own build: it looks for {@code TERMUX_USB_FD}, never sees ours, falls back to scanning
+     * granted descriptor as {@code OPX_USB_FD}, and the payload's libusb is compiled inside
+     * this app's own build tree, where that string is {@code OPXOSS_USB_FD} (tools/
+     * scrub-names.py renames the build tree's name out of every artifact in one same-length
+     * pass). Without this rewrite libusb never sees the descriptor, falls back to scanning
      * /dev/bus/usb (which an app may not open), and fails with "Input/Output Error" while
      * Android has already granted the adapter. wifi4 then reports "no supported USB Wi-Fi
      * adapter found" with the card plugged in.
      * <p>
      * The name is one NUL-terminated string in .rodata, so rewriting it in place (the shorter
      * name padded with NULs, which keeps every offset and size identical) matches the engine
-     * without re-downloading the 100 MB runtime. A payload built with the OPX name finds
-     * nothing and is left untouched, and this runs from {@link #repair} too, so an already
-     * installed prefix is fixed on the next app start.
+     * without the runtime having to export a second, build-name variable. A library that
+     * already carries the OPX name finds nothing and is left untouched, and this runs from
+     * {@link #repair} too, so an already installed prefix is fixed on the next app start.
      */
     static void ensureUsbFdVariable(Context context) {
-        byte[] legacy = "TERMUX_USB_FD".getBytes(StandardCharsets.US_ASCII);
+        byte[] legacy = "OPXOSS_USB_FD".getBytes(StandardCharsets.US_ASCII);
         byte[] current = "OPX_USB_FD".getBytes(StandardCharsets.US_ASCII);
         for (String name : new String[]{"libusb-1.0.so.0", "libusb-1.0.so"}) {
             File library = new File(new File(prefixDir(context), "lib"), name);
