@@ -111,15 +111,16 @@ public final class Ie {
         return out;
     }
 
+    /** HT Capabilities (tag 45): 20 MHz only, one spatial stream MCS 0-7, static SMPS. */
     public static byte[] htCapabilities() {
-        byte[] out = new byte[26];
+        byte[] out = new byte[28];
         out[0] = (byte) HT_CAP;
-        out[1] = 0x1A;
-        out[2] = 0x2D;
-        out[3] = 0x01;
-        out[4] = 0x1B;
+        out[1] = 0x1A;              // 26-byte body
+        out[2] = 0x2D;              // HT capabilities: LDPC, 20 MHz, SISO
+        out[3] = 0x01;              // AMPDU parameters
+        out[4] = 0x1B;              // supported MCS set
         out[5] = (byte) 0xFF;
-        return out;
+        return out;                 // the rest of the MCS/extension fields stay zero
     }
 
     /**
@@ -128,6 +129,17 @@ public final class Ie {
      */
     public static byte[] csa(int channel, int count) {
         return new byte[]{(byte) CSA, 0x03, 0x01, (byte) (channel & 0xFF), (byte) Math.max(0, count)};
+    }
+
+    /** Extended channel switch announcement: mode, operating class, channel, count. */
+    public static byte[] ecsa(int channel, int operatingClass, int count) {
+        return new byte[]{0x3C, 0x04, 0x01, (byte) (operatingClass & 0xFF),
+                (byte) (channel & 0xFF), (byte) Math.max(0, count)};
+    }
+
+    /** Secondary channel offset: 0 = 20 MHz (no secondary), 1 = above, 3 = below. */
+    public static byte[] secondaryChannelOffset(int offset) {
+        return new byte[]{0x3E, 0x01, (byte) (offset & 0xFF)};
     }
 
     public static byte[] dsParam(int channel) {

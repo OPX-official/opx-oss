@@ -10,8 +10,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Holds the four-way handshake frames per (AP, station) and reports the moment a pair becomes
- * crackable, exactly once per pair, so the vault never fills with duplicates.
+ * Holds the four-way handshake frames per (AP, station) and reports the moment a crackable pair
+ * appears, exactly once per pair, so the vault never fills with duplicates.
  */
 public final class HandshakeBook {
 
@@ -56,6 +56,7 @@ public final class HandshakeBook {
 
         switch (eapol.messageNumber) {
             case 1:
+                handshake.m1Nonce = eapol.nonce;
                 handshake.anonce = eapol.nonce;
                 handshake.hasM1 = true;
                 if (eapol.pmkid != null) handshake.pmkid = eapol.pmkid;
@@ -64,33 +65,40 @@ public final class HandshakeBook {
                 handshake.snonce = eapol.nonce;
                 handshake.mic = eapol.mic;
                 handshake.eapol = eapol.withoutMic();
+                handshake.keyVersion = eapol.keyInfo & 0x07;
                 handshake.hasM2 = true;
                 break;
             case 3:
+                handshake.m3Nonce = eapol.nonce;
                 handshake.anonce = eapol.nonce;
                 handshake.hasM3 = true;
                 break;
             case 4:
+                handshake.m4Nonce = eapol.nonce;
+                handshake.m4Mic = eapol.mic;
+                handshake.m4Eapol = eapol.withoutMic();
+                if (!handshake.hasM2) {
+                    handshake.keyVersion = eapol.keyInfo & 0x07;
+                    // An M4 carries the echoed SNonce and its MIC; let verification use it when
+                    // no M2 was captured.
+                    if (handshake.snonce == null) handshake.snonce = eapol.nonce;
+                    if (handshake.mic == null) handshake.mic = eapol.mic;
+                    if (handshake.eapol == null) handshake.eapol = eapol.withoutMic();
+                }
                 handshake.hasM4 = true;
                 break;
             default:
                 return null;
         }
 
-        if (eapol.messageNumber == 1 && handshake.pmkid != null && emitted.contains(key + "|pmkid")) {
-            return null;
+        if (eapol.messageNumber == 1 && handshake.pmkid != null && !emitted.contains(key + "|pmkid")) {
+            String pmkidLine = handshake.pmkidLine();
+            if (pmkidLine != null && emitted.add(key + "|pmkid")) return pmkidLine;
         }
         String line = handshake.eapolLine();
-        if (line == null) {
-            line = handshake.pmkidLine();
-            if (line != null) {
-                if (!emitted.add(key + "|pmkid")) return null;
-                return line;
-            }
-            return null;
-        }
-        String pairKey = key + "|" + (handshake.hasM1 && handshake.hasM2 ? "m1m2" : "m2m3");
-        if (!emitted.add(pairKey)) return null;
-        return line;
+        if (line == null) return null;
+        int pair = handshake.eapolPair();
+        if (pair < 0) return null;
+        return emitted.add(key + "|eapol" + pair) ? line : null;
     }
 }

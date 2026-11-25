@@ -60,16 +60,24 @@ public final class CpuCracker {
             if (stop != null && stop.getAsBoolean()) return null;
             String candidate = candidates.next();
             tried++;
-            byte[] pmk = null;
+            // A 64-hex candidate is a raw PMK, not a passphrase (hashcat accepts both).
+            byte[] rawPmk = rawPmk(candidate);
+            byte[] pmk = rawPmk;
+            String pmkSsid = null;
             for (Handshake handshake : targets) {
                 if (handshake.ssid == null || handshake.ssid.isEmpty()) continue;
-                if (pmk == null) {
+                if (rawPmk == null && (pmk == null || !handshake.ssid.equals(pmkSsid))) {
                     pmk = WpaKeys.pmk(candidate, handshake.ssid.getBytes(StandardCharsets.UTF_8));
+                    pmkSsid = handshake.ssid;
                 }
                 boolean found = handshake.mic != null
                         ? Verify.pmk(handshake, pmk)
                         : java.util.Arrays.equals(
-                                WpaKeys.pmkid(pmk, Mac.of(handshake.bssid), Mac.of(handshake.station)),
+                                handshake.sha256
+                                        ? WpaKeys.pmkidSha256(pmk, Mac.of(handshake.bssid),
+                                                Mac.of(handshake.station))
+                                        : WpaKeys.pmkid(pmk, Mac.of(handshake.bssid),
+                                                Mac.of(handshake.station)),
                                 handshake.pmkid);
                 if (found) {
                     return new Match(candidate, handshake, tried,
@@ -212,6 +220,19 @@ public final class CpuCracker {
             default:
                 return new char[]{kind};
         }
+    }
+
+    /** A 64-hex-digit candidate read as a raw PMK, or {@code null} when it is a passphrase. */
+    static byte[] rawPmk(String candidate) {
+        if (candidate == null || candidate.length() != 64) return null;
+        byte[] out = new byte[32];
+        for (int i = 0; i < 32; i++) {
+            int high = Character.digit(candidate.charAt(i * 2), 16);
+            int low = Character.digit(candidate.charAt(i * 2 + 1), 16);
+            if (high < 0 || low < 0) return null;
+            out[i] = (byte) ((high << 4) | low);
+        }
+        return out;
     }
 
     /** The PMKID check alone, for a line that carries no EAPOL pair. */

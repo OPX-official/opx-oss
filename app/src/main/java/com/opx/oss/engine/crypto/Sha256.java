@@ -18,7 +18,8 @@ public final class Sha256 {
     }
 
     public static byte[] digest(byte[] message) {
-        int bitLength = message.length * 8;
+        // Long: shifts of 32 or more wrap their count on an int, corrupting the length field.
+        long bitLength = (long) message.length * 8;
         int padded = ((message.length + 8) / 64 + 1) * 64;
         byte[] block = new byte[padded];
         System.arraycopy(message, 0, block, 0, message.length);

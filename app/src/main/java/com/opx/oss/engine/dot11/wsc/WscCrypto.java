@@ -110,10 +110,14 @@ public final class WscCrypto {
 
     // -- key derivation ------------------------------------------------------
 
-    /** hostapd's {@code wps_kdf} with the fixed WSC label. */
+    /**
+     * {@code wps_kdf} with the fixed WSC label, exactly as the reference builds it:
+     * {@code HMAC-SHA256(key, BE32(i) || label || BE32(length * 8))} concatenated over i.
+     */
     public static byte[] kdf(byte[] key, int length) {
+        int bits = length * 8;
         byte[] keyBits = new byte[]{
-                (byte) (length >> 24), (byte) (length >> 16), (byte) (length >> 8), (byte) length};
+                (byte) (bits >> 24), (byte) (bits >> 16), (byte) (bits >> 8), (byte) bits};
         byte[] out = new byte[length];
         int at = 0;
         int counter = 1;

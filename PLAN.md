@@ -349,4 +349,16 @@
 - [x] **SelfCheck:** রুল ও CSA এলিমেন্টের নতুন ভেক্টর।
 - [ ] বাকি: RTL8187 ছাড়া অন্য রেডিও, SAE/PMF/BTM/EAP, অন-এয়ার WPS, Pixie Dust, WEP chopchop, FT হ্যাশলাইন।
 
+### M6-পরবর্তী — রেফারেন্স পুনঃঅডিট (dot11 + crack)
+
+- [x] **`dot11/parser.py` পূর্ণ পোর্ট:** SSID বাধ্যতামূলক/প্রিন্টেবল/≤৩২ যাচাই, hidden, channel DS→HT→VHT, beacon protection (bit 84), সম্পূর্ণ RSN স্যুট/ক্যাপ/PMKID/GMCS, legacy WPA IE, WPS TLV (lock/state/config/DPID/registrar/version/manufacturer/model/device type), chipset OUI, airodump-ধাঁচের encryption label, WPA3-Enterprise শ্রেণিবিন্যাস।
+- [x] **`AccessPoint`:** `pairwiseCipher`, `akmSuites`, `rsnValid`, `vendorAkmOffered`, `beaconProtection`, WPS ও WSC ফিল্ড, `chipset` — `toJson`-এও।
+- [x] **WEP শনাক্তকরণ:** `WepBook` এখন KeyID বাইটের ExtIV বিট (`& 0x20`) দেখে WEP আলাদা করে, সাইফার ১৬ বাইট; ভুল স্যাম্পল আর ঢোকে না।
+- [x] **hashcat পেয়ারিং:** keystone M2 (বা নন-জিরো M4) + M1/M3 donor, মেসেজ-পেয়ার `0x00/0x02/0x05/0x01`, প্রতিটি লাইনে nonce-correction বিট `0x80`; জিরো ননস/ছোট MIC বাদ।
+- [x] **কী ডেসক্রিপ্টর ১–৩:** `Md5`, `Cmac`, `WpaKeys`-এ KDF-SHA256 PTK, HMAC-SHA256 PMKID, ৬৪-হেক্স পাসফ্রেজ = raw PMK; `Verify`/`CpuCracker` কেভার-অনুযায়ী MIC, প্রতি-SSID PMK।
+- [x] **ফ্রেম:** deauth-এ unicast ACK NAV `0x013A`, disassoc বিল্ডার, directed probe, assoc listen interval 1, HT Cap IE-র দৈর্ঘ্য ঠিক (২৬ বাইট বডি), CSA-তে ECSA + operating class + secondary offset (`Chan.java`)।
+- [x] **PMKID ক্যাম্পেইন:** PMF/PSK-AKM গেট, আগে Auth (seq 1) তারপর Assoc, M1 এলে terminal + reason-3 deauth, নীরব AP-তে MAC রোটেশন।
+- [x] **SelfCheck:** MD5, HMAC-MD5, AES-CMAC (RFC 4493) ভেক্টর যোগ।
+- [ ] বাকি (এই অডিটেও): WEP chopchop/ফ্র্যাগমেন্টেশন, FT হ্যাশলাইন, decloak-এর sibling-name sweep + auth/assoc, SAE ডাউনগ্রেড, BTM/PMF/EAP মডিউল, অন-এয়ার WPS।
+
 **বাকি (শুধু অনুমতি পেলে):** APK বিল্ড, রিলিজ, রেডিও টেস্ট।

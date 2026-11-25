@@ -17,6 +17,8 @@ public final class Hc22000 {
 
     /** Message-pair bit that marks a PMKID computed with SHA-256 (AKM 6). */
     public static final int PMKID_SHA256_BIT = 0x02;
+    /** Nonce-error-correction bit: hashcat only corrects nonces when this is set. */
+    public static final int NONCE_CORRECTION_BIT = 0x80;
 
     private Hc22000() {
     }
@@ -34,7 +36,7 @@ public final class Hc22000 {
         if (ssid == null || ssid.isEmpty() || mic == null || mic.length != 16) return null;
         return "WPA*02*" + hex(mic) + "*" + mac(bssid) + "*" + mac(station) + "*"
                 + ssidHex(ssid) + "*" + hex(anonce) + "*" + hex(eapol) + "*"
-                + String.format(Locale.US, "%02x", messagePair & 0xFF);
+                + String.format(Locale.US, "%02x", (messagePair | NONCE_CORRECTION_BIT) & 0xFF);
     }
 
     public static String mac(byte[] address) {

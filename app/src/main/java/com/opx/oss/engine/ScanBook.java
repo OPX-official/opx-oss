@@ -51,7 +51,28 @@ public final class ScanBook {
         known.transitionMode = seen.transitionMode;
         known.pmfCapable = seen.pmfCapable;
         known.pmfRequired = seen.pmfRequired;
+        if (!seen.akmSuites.isEmpty()) {
+            known.akmSuites.clear();
+            known.akmSuites.addAll(seen.akmSuites);
+        }
+        if (seen.pairwiseCipher != null) known.pairwiseCipher = seen.pairwiseCipher;
+        if (seen.rsnIe != null) known.rsnIe = seen.rsnIe;
+        known.rsnValid |= seen.rsnValid;
+        known.vendorAkmOffered |= seen.vendorAkmOffered;
+        known.beaconProtection |= seen.beaconProtection;
+        if (seen.chipset != null && known.chipset == null) known.chipset = seen.chipset;
         known.wps = seen.wps || known.wps;
+        known.wpsLocked |= seen.wpsLocked;
+        known.wpsSelectedRegistrar |= seen.wpsSelectedRegistrar;
+        if (seen.wpsState != 0) known.wpsState = seen.wpsState;
+        if (seen.wpsConfigMethods != 0) known.wpsConfigMethods = seen.wpsConfigMethods;
+        if (seen.wpsDevicePasswordId != 0) known.wpsDevicePasswordId = seen.wpsDevicePasswordId;
+        if (seen.wpsVersion != null) known.wpsVersion = seen.wpsVersion;
+        if (seen.wscManufacturer != null) known.wscManufacturer = seen.wscManufacturer;
+        if (seen.wscModelName != null) known.wscModelName = seen.wscModelName;
+        if (seen.wscModelNumber != null) known.wscModelNumber = seen.wscModelNumber;
+        if (seen.wscDeviceName != null) known.wscDeviceName = seen.wscDeviceName;
+        if (seen.wscDeviceType != null) known.wscDeviceType = seen.wscDeviceType;
         known.lastSeen = System.currentTimeMillis();
         known.beacons++;
         return known;

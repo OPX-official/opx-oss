@@ -12,6 +12,8 @@ public final class Eapol {
     public static final int MIC_OFFSET = 81;
     public static final int MIC_LENGTH = 16;
     public static final int NONCE_LENGTH = 32;
+    public static final int KEY_DESCRIPTOR_RSN = 2;
+
 
     private static final byte[] LLC_SNAP = {
             (byte) 0xAA, (byte) 0xAA, 0x03, 0x00, 0x00, 0x00, (byte) 0x88, (byte) 0x8E
@@ -107,6 +109,47 @@ public final class Eapol {
             i = end;
         }
         return null;
+    }
+
+    /**
+     * Build an EAPOL-Key payload (802.1X version 2). Multi-byte fields are network order; the
+     * MIC goes in zeroed and is spliced back with {@link #withMic} once it is computed.
+     */
+    public static byte[] buildKey(int keyInfo, int keyLength, long replay, byte[] nonce,
+                                 byte[] keyData, byte[] mic) {
+        if (nonce.length != NONCE_LENGTH) throw new IllegalArgumentException("nonce must be 32 bytes");
+        if (mic.length != MIC_LENGTH) throw new IllegalArgumentException("mic must be 16 bytes");
+        byte[] data = keyData == null ? new byte[0] : keyData;
+        int bodyLength = 95 + data.length;
+        byte[] out = new byte[4 + bodyLength];
+        out[0] = 0x02;                       // 802.1X version 2
+        out[1] = TYPE_KEY;
+        out[2] = (byte) (bodyLength >> 8);
+        out[3] = (byte) bodyLength;
+        int at = 4;
+        out[at++] = (byte) KEY_DESCRIPTOR_RSN;
+        out[at++] = (byte) (keyInfo >> 8);
+        out[at++] = (byte) keyInfo;
+        out[at++] = (byte) (keyLength >> 8);
+        out[at++] = (byte) keyLength;
+        for (int i = 7; i >= 0; i--) out[at++] = (byte) (replay >>> (8 * i));
+        System.arraycopy(nonce, 0, out, at, NONCE_LENGTH);
+        at += NONCE_LENGTH;
+        at += 16 + 8 + 8;                    // Key IV, Key RSC, Key ID
+        System.arraycopy(mic, 0, out, at, MIC_LENGTH);
+        at += MIC_LENGTH;
+        out[at++] = (byte) (data.length >> 8);
+        out[at++] = (byte) data.length;
+        System.arraycopy(data, 0, out, at, data.length);
+        return out;
+    }
+
+    /** The payload with its MIC field replaced. */
+    public static byte[] withMic(byte[] payload, byte[] mic) {
+        if (mic.length != MIC_LENGTH) throw new IllegalArgumentException("mic must be 16 bytes");
+        byte[] out = payload.clone();
+        System.arraycopy(mic, 0, out, MIC_OFFSET, MIC_LENGTH);
+        return out;
     }
 
     /** The same frame with its MIC zeroed: what the MIC is computed over. */

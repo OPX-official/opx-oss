@@ -14,7 +14,7 @@ public final class Aes {
     static {
         for (int value = 0; value < 256; value++) {
             int inverse = value == 0 ? 0 : power(value, 254);
-            int s = (rotate(inverse, 1) ^ rotate(inverse, 2) ^ rotate(inverse, 3)
+            int s = (inverse ^ rotate(inverse, 1) ^ rotate(inverse, 2) ^ rotate(inverse, 3)
                     ^ rotate(inverse, 4) ^ 0x63) & 0xFF;
             SBOX[value] = s;
             INV_SBOX[s] = value;
@@ -25,7 +25,7 @@ public final class Aes {
 
     public Aes(byte[] key) {
         if (key.length != 16) throw new IllegalArgumentException("AES-128 needs a 16-byte key");
-        System.arraycopy(key, 0, roundKeys, 0, 16);
+        for (int i = 0; i < 16; i++) roundKeys[i] = key[i] & 0xFF;
         int words = 4;
         for (int i = 4; i < 44; i++) {
             int temp = readWord(roundKeys, (i - 1) * 4);

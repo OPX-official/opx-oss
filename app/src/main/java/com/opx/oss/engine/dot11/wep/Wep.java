@@ -14,9 +14,6 @@ public final class Wep {
             0x00, 0x01, 0x08, 0x00, 0x06, 0x04, 0x00, 0x01
     };
 
-    /** A frame this short cannot carry an ARP body. */
-    public static final int MIN_ARP_BODY = 36;
-
     private Wep() {
     }
 
@@ -31,10 +28,5 @@ public final class Wep {
     /** The 24-bit IV of a protected frame, at the start of its body. */
     public static byte[] iv(byte[] frame, int headerLength) {
         return Arrays.copyOfRange(frame, headerLength, headerLength + 3);
-    }
-
-    /** True when the protected frame's body is long enough to be an ARP packet. */
-    public static boolean looksLikeArp(int bodyLength) {
-        return bodyLength >= 4 + MIN_ARP_BODY;
     }
 }

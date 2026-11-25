@@ -1,7 +1,9 @@
 package com.opx.oss.engine;
 
 import com.opx.oss.engine.capture.Hc22000;
+import com.opx.oss.engine.crypto.Cmac;
 import com.opx.oss.engine.crypto.Crc32;
+import com.opx.oss.engine.crypto.Md5;
 import com.opx.oss.engine.crypto.Hmac;
 import com.opx.oss.engine.crypto.Pbkdf2;
 import com.opx.oss.engine.crypto.Rc4;
@@ -39,6 +41,15 @@ public final class SelfCheck {
                 hex(Sha256.digest(bytes("abc"))));
         expect(failures, "hmac-sha1", "de7c9b85b8b78aa6bc8a7a36f70a90701c9db4d9",
                 hex(Hmac.hmacSha1(bytes("key"), bytes("The quick brown fox jumps over the lazy dog"))));
+        expect(failures, "md5", "900150983cd24fb0d6963f7d28e17f72",
+                hex(Md5.digest(bytes("abc"))));
+        expect(failures, "hmac-md5", "750c783e6ab0b503eaa86e310a5db738",
+                hex(Hmac.hmac(Hmac.MD5, bytes("Jefe"), bytes("what do ya want for nothing?"))));
+        expect(failures, "aes-cmac-empty", "bb1d6929e95937287fa37d129b756746",
+                hex(Cmac.cmac(hexBytes("2b7e151628aed2a6abf7158809cf4f3c"), new byte[0])));
+        expect(failures, "aes-cmac-block", "070a16b46b4d4144f79bdd9dd04a287c",
+                hex(Cmac.cmac(hexBytes("2b7e151628aed2a6abf7158809cf4f3c"),
+                        hexBytes("6bc1bee22e409f96e93d7e117393172a"))));
         expect(failures, "pbkdf2", "0c60c80f961f0e71f3a9b524af6012062fe037a6",
                 hex(Pbkdf2.hmacSha1(bytes("password"), bytes("salt"), 1, 20)));
         expect(failures, "crc32", "cbf43926",
@@ -62,12 +73,13 @@ public final class SelfCheck {
         expect(failures, "aes-128", "69c4e0d86a7b0430d8cdb78070b4c55a",
                 hex(new Aes(hexBytes("000102030405060708090a0b0c0d0e0f"))
                         .encryptBlock(hexBytes("00112233445566778899aabbccddeeff"))));
-        expect(failures, "wsc-kdf", "09b364567c2ed3e9b517d70240603766e38f4098b16345dcc674beb319b68ab8",
+        expect(failures, "wsc-kdf", "20663a1741066b78ab3c8f2c48e8f3c007dd01f2da46e908490389b2f648cb02",
                 hex(WscCrypto.copy(WscCrypto.kdf(new byte[32], 80), 0, 32)));
         expect(failures, "wsc-dh", "3803188372c4464b68b267a41431e7583ba86108b53901bb77b1f5992f2f99c3",
                 hex(WscCrypto.copy(WscCrypto.toFixed(
                         WscCrypto.DH_PRIME.valueOf(2).pow(12345).mod(WscCrypto.DH_PRIME), 192), 0, 32)));
-        expect(failures, "wps-pin-checksum", "7",
+        // 1234567 -> 12345670 is the classic default PIN, so this prefix's checksum is 0.
+        expect(failures, "wps-pin-checksum", "0",
                 Integer.toString(WscCrypto.pinChecksum(1234567)));
         expect(failures, "wps-pin-spec", "12345670", WpsPins.finalize(1234567));
         WscMessage m1 = WscMessage.m1(new byte[6], new byte[192], new byte[16], 0x0008);

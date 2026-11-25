@@ -10,6 +10,7 @@ public final class Hmac {
 
     public static final Hash SHA1 = Sha1::digest;
     public static final Hash SHA256 = Sha256::digest;
+    public static final Hash MD5 = Md5::digest;
 
     private static final int BLOCK = 64;
 

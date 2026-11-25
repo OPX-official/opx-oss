@@ -24,13 +24,16 @@ as such.
 
 | Reference | Native | Evidence |
 |---|---|---|
-| `dot11/wsc/crypto.py` (AES), hostapd `wps_common.c` | `Aes.java` | **vector**: FIPS-197 C.1 (`69c4e0d8…`); S-box derived from the GF inverse, not typed |
+| `dot11/wsc/crypto.py` (AES), hostapd `wps_common.c` | `Aes.java` | **vector**: FIPS-197 C.1 (`69c4e0d8…`); S-box derived from the GF inverse, not typed. The S-box's affine step was missing the `^ inverse` term, so every AES result was wrong until the re-audit fixed it |
+| hash padding (stdlib behaviour) | all hashes | **vector+run**: the length field of SHA-1/SHA-256 was written with `int` shifts (shift counts ≥ 32 wrap), and MD5's K table was cast straight from `double` (saturating above 2^31); both broke every digest until fixed. All vectors now pass under a real JVM run |
 | stdlib SHA-1 / SHA-256 | `Sha1.java`, `Sha256.java` | **vector**: `sha1("abc")`, `sha256("abc")` |
-| stdlib HMAC | `Hmac.java` | **vector**: RFC 2202 HMAC-SHA1 case 1 |
+| stdlib HMAC | `Hmac.java` | **vector**: RFC 2202 HMAC-SHA1 case 1, HMAC-MD5 case 2 (`750c783e…`) |
+| stdlib MD5 | `Md5.java` | **vector**: RFC 1321 `md5("abc")` |
+| `dot11/aes_cmac.py` | `Cmac.java` | **vector**: RFC 4493 examples 1 and 2 (empty and one-block messages) |
 | stdlib PBKDF2 | `Pbkdf2.java` | **vector**: RFC 6070 (`password`/`salt`, 1 iteration) |
-| `crack/wpa_psk.py` | `WpaKeys.java` | **vector**: IEEE 802.11i PMK for `password`/`IEEE`, and the PMKID for a fixed pair (computed outside with Python `hashlib`) |
+| `crack/wpa_psk.py`, `dot11/wpa.py` | `WpaKeys.java` | **vector**: IEEE 802.11i PMK for `password`/`IEEE`, and the PMKID for a fixed pair. **ported**: key descriptor versions 1/2/3 (HMAC-MD5, HMAC-SHA1, AES-CMAC), 384-bit KDF-SHA256 PTK, HMAC-SHA256 PMKID, 64-hex passphrase read as a raw PMK |
 | RC4 / CRC-32 | `Rc4.java`, `Crc32.java` | **vector**: RC4 `Key`/`Plaintext`, CRC-32 `123456789` |
-| `dot11/wsc/crypto.py` DH/KDF | `dot11/wsc/WscCrypto.java` | **vector**: MODP-1536 `2^12345 mod p` prefix, WSC KDF over an all-zero key, PIN checksum 7 for `1234567` |
+| `dot11/wsc/crypto.py` DH/KDF | `dot11/wsc/WscCrypto.java` | **vector**: MODP-1536 `2^12345 mod p` prefix, WSC KDF over an all-zero key (`20663a17…`, recomputed from the reference's own construction after the port was found to use a 2-byte byte-length instead of a 4-byte bit-length), PIN checksum 0 for `1234567` (→ `12345670`) |
 
 No constant in this area is taken from memory without a vector except the DH prime itself, which
 is the RFC 3526 group-5 literal and is exercised by the `2^12345` check.
@@ -42,19 +45,21 @@ is the RFC 3526 group-5 literal and is exercised by the `2^12345` check.
 | `dot11/mac.py` | `Mac.java` | **ported**: header build, `headerLength` for the DS/QoS bits, MAC text/parse |
 | `dot11/eapol.py`, `parser._parse_eapol` | `Eapol.java` | **ported**: LLC/SNAP discovery, big-endian lengths, M1–M4 classification, PMKID KDE, MIC-zeroed copy; offsets 1/2/5/9/17/81/97/99 as in the reference |
 | `dot11/ie.py` | `Ie.java` | **ported** for SSID/RSN/WPA/rates/DS/HT; `forcePskAkm` follows the reference's "single PSK AKM, drop PMKID list" rewrite |
-| `dot11/parser.py` | `Parser.java` | **ported** for beacon/probe-response fields, RSN counters, WPS vendor element, probe-request SSID |
-| `dot11/packet.py` | `Frame.java` | **ported** for deauth, auth, probe request, assoc request; **simplified** for beacon/probe response (see below) |
-| `dot11/ap.py` `beacon_clone` | `Frame.beacon` / `probeResponse` | **simplified**: no HT/VHT operation, WMM, extended capabilities, country or CSA elements; capability/interval/SSID/rates/DS/RSN only |
-| `dot11/chan.py` | `ScanEngine.java` | **simplified**: channel list and dwell are our own; the reference's per-region plan and dwell table were not reviewed line by line |
-| `dot11/csa.py`, `btm.py`, `pmf.py`, `aes_cmac.py`, `auth_assoc.py`, `eap.py` | — | **missing** |
+| `dot11/parser.py` | `Parser.java` | **ported**: mandatory-SSID validation (printable, ≤32), hidden SSID, channel DS→HT→VHT precedence, Extended Capabilities bit 84, full RSN suite/caps/PMKID/GMCS walk with malformed-element bail, legacy WPA element, WPS TLV subset (lock, state, config methods, device password id, registrar, version 1.0/2.0, manufacturer/model/device type), chipset OUI table, airodump-style encryption label, and WPA3-Enterprise classification |
+| `dot11/packet.py` | `Frame.java` | **ported** for deauth (with the 0x013A ACK NAV on unicast), disassoc, auth, directed/broadcast probe request, assoc request; **simplified** for beacon/probe response (see below) |
+| `dot11/ap.py` `beacon_clone` | `Frame.beacon` / `probeResponse` | **simplified**: no WMM, country, extended capabilities or VHT operation; capability/interval/SSID/rates/DS/RSN plus (for CSA) legacy CSA, ECSA and secondary-channel-offset |
+| `dot11/csa.py` | `Ie.csa`/`Ie.ecsa`, `Frame.csaBeacon` | **ported** shape (legacy CSA only same-band, always ECSA, secondary offset 0); **simplified**: we build our own beacon instead of rewriting the captured one |
+| `dot11/chan.py` | `Chan.java` | **ported**: operating class 81/82/115/118/121/125, DFS range, same-band test |
+| `dot11/auth_assoc.py` | `Frame.assocRequest` | **simplified**: fixed capability 0x0411; no beacon-derived short-preamble/short-slot bits, no WPS-without-RSN privacy rule |
+| `dot11/btm.py`, `pmf.py`, `eap.py` | — | **missing** |
 
 ## 3. Capture (`engine/capture/`)
 
 | Reference | Native | Evidence |
 |---|---|---|
-| `crack/handshake.py` | `Handshake.java`, `HandshakeBook.java` | **ported**: one hashline per M1+M2 or M2+M3 pair, PMKID line, duplicate suppression |
+| `crack/handshake.py` | `Handshake.java`, `HandshakeBook.java` | **ported**: keystone M2 (or non-zero-nonce M4) paired with an ANonce donor from M1/M3, message pairs 0x00/0x02/0x05/0x01, nonce-correction bit 0x80 on every line, zero-nonce and short-MIC rejection, per-pair duplicate suppression, PMKID line |
 | `crack/hc22000_format.py` | `Hc22000.java` | **vector**: an exact hashline string is asserted at start-up |
-| `crack/wpa_psk.py` verify | `Verify.java` | **ported**: PMK → KCK → MIC over the MIC-zeroed frame; PMK path for a raw 64-hex key |
+| `crack/wpa_psk.py` verify | `Verify.java`, `CpuCracker.java` | **ported**: PMK → KCK → MIC for key descriptor versions 1/2/3 over the MIC-zeroed frame, per-SSID PMK derivation across targets, HMAC-SHA1 and HMAC-SHA256 PMKIDs, raw 64-hex PMK |
 
 Fixed: `Handshake.sha256` now follows the AP's AKM list (`PSK-SHA256`), so an AKM-6 PMKID is
 written with the `03` message-pair field the reference sets. FT lines (`WPA*03`/`WPA*04`) are
@@ -102,15 +107,19 @@ compare line by line — this layer is ours by design.
 
 ## Verdict
 
-**Not 100% accurate, and not claimed to be.** Since the first audit, four gaps were closed: the
-PMKID SHA-256 pair field, hashcat-style mangling rules, the CSA/punt path in the twin, and the
-WPS PIN database. Still open: every radio family except RTL8187, SAE/PMF/BTM/EAP modules, the
-on-air WPS exchange, Pixie Dust, WEP chopchop, and FT hashlines. What is machine-checked: every hash, key
-derivation, hashline format and the WSC/AES/DH vectors. What is review-only: the 802.11 field
-layouts, the EAPOL offsets, the RTL8187 register sequence, the PTW vote arithmetic and the PIN
-formulas. What is knowingly different: WEP has ARP replay only, the evil twin has no SAE
-downgrade, the WPS PIN database and Pixie Dust are absent, only one radio family is brought up,
-and the beacon template omits HT/VHT/CSA.
+**Not 100% accurate, and not claimed to be.** Eight gaps were closed across the two audits: the
+PMKID SHA-256 pair field, hashcat-style mangling rules, the CSA/punt path in the twin, the WPS
+PIN database, the WEP ExtIV/cipher-length test, the full reference beacon parser (RSN/WPS/label),
+the keystone-pair/message-pair/NC-bit hashline emission, and key descriptor versions 1-3 with the
+SHA-256 KDF. Still open: every radio family except RTL8187, SAE/PMF/BTM/EAP modules, the on-air
+WPS exchange, Pixie Dust, WEP chopchop/fragmentation, FT (WPA*03/WPA*04) hashlines, the
+decloak sibling-name sweep and its auth/assoc phase, the twin's SAE downgrade, and the beacon
+template's WMM/VHT/country elements. What is machine-checked: every hash, key derivation,
+hashline format and the WSC/AES/DH/CMAC vectors. What is review-only: the 802.11 field layouts,
+the EAPOL offsets, the RTL8187 register sequence, the PTW vote arithmetic and the PIN formulas.
+What is knowingly different: WEP has ARP replay only, the WPS PIN database is applied offline and
+Pixie Dust is absent, only one radio family is brought up, and the beacon template is built from
+scratch rather than cloned from the AP's own beacon.
 
 Nothing in the engine has been run against real hardware in this workspace; the only execution
 environment available here has no JDK, no Android SDK and no radio. Treat the driver paths as

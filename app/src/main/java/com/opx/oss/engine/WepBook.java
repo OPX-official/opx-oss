@@ -26,10 +26,13 @@ public final class WepBook {
         if ((mpdu[1] & 0x40) == 0) return;              // the protected bit is not set
         int header = Mac.headerLength(fc0, mpdu[1] & 0xFF);
         int body = mpdu.length - header;
-        if (!Wep.looksLikeArp(body)) return;
+        if (body < 4 + 16) return;
+        // The Key ID byte's ExtIV bit tells WEP (clear, 4-byte IV) from TKIP/CCMP (set,
+        // 8-byte extended IV). Only a clear bit yields the WEP keystream PTW votes on.
+        if ((mpdu[header + 3] & 0x20) != 0) return;
 
         byte[] iv = Wep.iv(mpdu, header);
-        byte[] keystream = Wep.keystreamFromArp(mpdu, header + 4, Math.min(16, body - 4));
+        byte[] keystream = Wep.keystreamFromArp(mpdu, header + 4, 16);
         cracker.feed(iv, keystream);
         frames++;
         if (arps.size() < 8) arps.add(mpdu.clone());
