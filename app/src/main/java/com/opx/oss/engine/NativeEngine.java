@@ -143,6 +143,12 @@ public final class NativeEngine {
                 case "status":
                     emit(statusEvent());
                     break;
+                case "usb_attach":
+                    usbAttach();
+                    break;
+                case "usb_lost":
+                    usbLost();
+                    break;
                 case "config":
                     emit(event("config").put("dfs", command.optBoolean("dfs", false)));
                     break;
@@ -246,7 +252,7 @@ public final class NativeEngine {
                     attackStatus();
                     break;
                 case "stop":
-                    stopScan();
+                    releaseRadio();
                     emit(event("stopped"));
                     shutdown();
                     break;
@@ -408,7 +414,12 @@ public final class NativeEngine {
 
     private WifiChip openChip(String path) throws Exception {
         WifiChip adapter = chip;
-        if (adapter != null) return adapter;
+        if (adapter != null) {
+            if (adapter.isUp()) return adapter;
+            // The cached card died (unplug, firmware crash): wifi4's array died with it, so
+            // both sides are dropped before this path opens a fresh one.
+            releaseRadio();
+        }
         UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
         UsbDevice device = manager == null ? null : device(manager, path);
         if (device == null) throw new java.io.IOException("no USB device at " + path);
@@ -1018,14 +1029,54 @@ public final class NativeEngine {
         return "OPEN";
     }
 
+    /**
+     * End a scan. wifi4's array stays attached with its AP table after the hop stops: that table
+     * is what the target sheet reads (its attacks, clients and handshakes), so closing it here
+     * would leave every row after {@code scan_done} without a target — exactly what a closed
+     * array used to do. The card is released on detach and on engine stop, not at scan end, which
+     * is also how wifi4's own console keeps the radio after hopping stops.
+     */
     private void stopScan() {
         boolean wasRunning = scanEngine.isRunning();
-        boolean wasWifi4 = wifi4Attached;
-        int wifi4Rows = wifi4Count;
+        if (wifi4Attached) {
+            wifi4Scanning = false;
+            scanEngine.stop();
+            try {
+                // Stop hopping only: wifi4's stop_scan leaves the sink and its table readable.
+                PythonChip.backendBool("stop_scan");
+                wifi4Count = wifi4Refresh();
+            } catch (Throwable failed) {
+                AppLog.error("OpxEngine", failed);
+            }
+            // The rows already went out as network events; the count is wifi4's, not ScanBook's.
+            JSONObject done = event("scan_done");
+            try {
+                done.put("count", wifi4Count).put("frames", scanEngine.frames())
+                        .put("backend", "wifi4");
+            } catch (Exception ignored) {
+                // Plain values.
+            }
+            emitQuietly(done);
+            return;
+        }
         scanEngine.stop();
+        releaseRadio();
+        if (!wasRunning) emitScanDone();
+    }
+
+    /**
+     * Drop both halves of the radio: wifi4's array (which owns the AP table) and the open card.
+     * Only a detach or an engine stop does this; a finished scan keeps both, so its targets stay
+     * attackable.
+     */
+    private void releaseRadio() {
+        boolean wasWifi4 = wifi4Attached;
         wifi4Attached = false;
         wifi4Scanning = false;
-        // wifi4's array keeps hopping on its own loop; release it before the card goes away.
+        wifi4Count = 0;
+        synchronized (wifi4Sent) {
+            wifi4Sent.clear();
+        }
         if (wasWifi4) {
             try {
                 PythonChip.backendBool("close");
@@ -1042,19 +1093,44 @@ public final class NativeEngine {
                 AppLog.info("OpxEngine", "closing the adapter: " + e.getMessage());
             }
         }
-        if (wasWifi4) {
-            // The rows already went out as network events; the count is wifi4's, not ScanBook's.
-            JSONObject done = event("scan_done");
+        if (wasWifi4) emitQuietly(statusEvent());
+    }
+
+    /**
+     * The adapter's doorbell: {@link com.opx.oss.UsbAutoConnect} sends this once the permission
+     * is granted, so the card is open before the WiFi screen asks for a scan. The answer is the
+     * {@code usb_attached} event that screen already draws.
+     */
+    private void usbAttach() {
+        String path = firstSupportedDevice();
+        if (path == null) {
+            JSONObject waiting = event("usb_waiting");
             try {
-                done.put("count", wifi4Rows).put("frames", scanEngine.frames())
-                        .put("backend", "wifi4");
+                waiting.put("message", context.getString(com.opx.oss.R.string.wifi_usb_waiting));
             } catch (Exception ignored) {
-                // Plain values.
+                // One plain string.
             }
-            emitQuietly(done);
+            emitQuietly(waiting);
             return;
         }
-        if (!wasRunning) emitScanDone();
+        try {
+            WifiChip adapter = openChip(path);
+            JSONObject attached = event("usb_attached");
+            try {
+                attached.put("iface", adapter.name());
+            } catch (Exception ignored) {
+                // One plain string.
+            }
+            emitQuietly(attached);
+        } catch (Exception failed) {
+            error("the adapter could not be opened: " + failed.getMessage());
+        }
+    }
+
+    /** The card is gone: wifi4's table and the attacks built on it go with it. */
+    private void usbLost() {
+        releaseRadio();
+        emitQuietly(event("usb_detached"));
     }
 
     /** The device path of the first attached adapter the engine has a driver for. */
