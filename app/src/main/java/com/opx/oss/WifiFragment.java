@@ -88,6 +88,9 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
 
     // The target dialog: one card per attack the engine says it can run against this AP.
     private Dialog sheet;
+    // The interfaces wifi4 holds: the Evil Twin sheet's host/punter selects.
+    private final List<String> targetInterfaces = new ArrayList<>();
+    private String connectedIface = "";
     private WifiAdapter.Network sheetTarget;
     private LinearLayout sheetAttacks;
     private TextView sheetClients;
@@ -416,6 +419,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         } else if ("usb_attached".equals(name)) {
             // Plugging the card in anywhere in the app lands here: the interface is already up.
             String iface = event.optString("iface", "wlan0");
+            connectedIface = iface;
             ifaceValue.setText(iface);
             ifaceMeta.setText(iface);
             String chipset = event.optString("chipset", "");
@@ -458,6 +462,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         } else if ("status".equals(name)) {
             boolean connected = event.optBoolean("connected");
             String iface = event.optString("iface", "");
+            if (connected && !iface.isEmpty()) connectedIface = iface;
             ifaceValue.setText(connected && !iface.isEmpty()
                     ? iface : getString(R.string.wifi_state_no_adapter));
             ifaceMeta.setText(connected && !iface.isEmpty() ? iface : "—");
@@ -485,7 +490,27 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 }
             }
             targets = map;
+            JSONArray interfaces = event.optJSONArray("interfaces");
+            targetInterfaces.clear();
+            if (interfaces != null) {
+                for (int i = 0; i < interfaces.length(); i++) {
+                    String name = interfaces.optString(i, "");
+                    if (!name.isEmpty()) targetInterfaces.add(name);
+                }
+            }
             if (sheet != null && sheet.isShowing()) renderTargetAttacks();
+        } else if ("deauth_sent".equals(name)) {
+            int sent = event.optInt("sent");
+            int acked = event.optInt("acked");
+            String text = getString(R.string.wifi_deauth_sent, sent,
+                    acked > 0 ? getString(R.string.wifi_deauth_acked, acked) : "");
+            Snackbar.make(requireView(), text, Snackbar.LENGTH_SHORT).show();
+        } else if ("silenced".equals(name)) {
+            Snackbar.make(requireView(), event.optBoolean("silenced")
+                    ? R.string.wifi_target_silenced : R.string.wifi_target_unsilence,
+                    Snackbar.LENGTH_SHORT).show();
+        } else if ("chop".equals(name)) {
+            if (attackMonitor != null) attackMonitor.onEvent(event);
         } else if ("attack_status".equals(name)) {
             if (!event.optBoolean("running")) {
                 if (!attackRunning && attackMonitor != null) attackMonitor.dismiss();
@@ -766,6 +791,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                     ? getString(R.string.wifi_attack_none) : targetsReason);
             return;
         }
+        renderClientRows(target);
         LinearLayout row = null;
         for (int i = 0; i < attacks.length(); i++) {
             JSONObject attack = attacks.optJSONObject(i);
@@ -779,9 +805,10 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 params.topMargin = dp(10);
                 sheetAttacks.addView(row, params);
             }
-            addAttackCard(row, attack.optString("kind"), attack.optBoolean("enabled"),
-                    attack.optString("reason", ""), i % 2 == 1);
+            addAttackCard(row, attack.optString("kind"), attack.optString("label", ""),
+                    attack.optBoolean("enabled"), attack.optString("reason", ""), i % 2 == 1);
         }
+        addSilenceToggle(target);
         if (sheetClients != null) {
             sheetClients.setText(getString(R.string.wifi_attack_clients,
                     target.optInt("clients"), target.optInt("handshakes")));
@@ -792,15 +819,96 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         sheetNote.setText(R.string.wifi_attack_hint);
     }
 
-    private void addAttackCard(LinearLayout row, String kind, boolean enabled, String reason,
-                               boolean second) {
+    /** The TUI's clients panel: one de-auth per client, plus its broadcast one-shot. */
+    private void renderClientRows(JSONObject target) {
+        if (sheetAttacks == null || sheetTarget == null) return;
+        JSONArray macs = target.optJSONArray("clients_list");
+        TextView title = new TextView(requireContext());
+        title.setText(R.string.wifi_clients_title);
+        title.setTextColor(ContextCompat.getColor(requireContext(), R.color.grey));
+        title.setTextSize(11);
+        title.setLetterSpacing(0.06f);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        titleParams.topMargin = dp(12);
+        sheetAttacks.addView(title, titleParams);
+
+        if (macs == null || macs.length() == 0) {
+            TextView empty = new TextView(requireContext());
+            empty.setText(R.string.wifi_clients_empty);
+            empty.setTextColor(ContextCompat.getColor(requireContext(), R.color.grey));
+            empty.setTextSize(12);
+            sheetAttacks.addView(empty);
+            return;
+        }
+        for (int i = 0; i < macs.length(); i++) {
+            String mac = macs.optString(i, "");
+            if (mac.isEmpty()) continue;
+            LinearLayout row = new LinearLayout(requireContext());
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            rowParams.topMargin = dp(4);
+            TextView value = new TextView(requireContext());
+            value.setText(mac);
+            value.setTextColor(ContextCompat.getColor(requireContext(), R.color.night_contrast_2));
+            value.setTextSize(12);
+            value.setTypeface(android.graphics.Typeface.MONOSPACE);
+            row.addView(value, new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            final String bssid = sheetTarget.bssid;
+            final String client = mac;
+            row.addView(smallButton(R.string.wifi_client_deauth,
+                    v -> WifiBridge.get(requireContext()).deauthClient(bssid, client)));
+            sheetAttacks.addView(row, rowParams);
+        }
+        final String bssid = sheetTarget.bssid;
+        sheetAttacks.addView(smallButton(R.string.wifi_clients_deauth_all,
+                v -> WifiBridge.get(requireContext()).deauthAll(bssid)));
+    }
+
+    /** wifi4's silenced list, the TUI's 's': campaigns off and captures ignored for this AP. */
+    private void addSilenceToggle(JSONObject target) {
+        if (sheetAttacks == null || sheetTarget == null) return;
+        boolean silenced = target.optBoolean("silenced");
+        final String bssid = sheetTarget.bssid;
+        MaterialButton button = smallButton(
+                silenced ? R.string.wifi_target_unsilence : R.string.wifi_target_silence, null);
+        button.setOnClickListener(v -> WifiBridge.get(requireContext())
+                .setSilenced(bssid, !silenced));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.topMargin = dp(12);
+        sheetAttacks.addView(button, params);
+    }
+
+    private MaterialButton smallButton(int text, View.OnClickListener listener) {
+        MaterialButton button = new MaterialButton(requireContext());
+        button.setText(text);
+        button.setTextSize(12);
+        button.setTextColor(ContextCompat.getColor(requireContext(), R.color.stryker_accent));
+        button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.TRANSPARENT));
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setCornerRadius(dp(12));
+        if (listener != null) button.setOnClickListener(listener);
+        return button;
+    }
+
+    private void addAttackCard(LinearLayout row, String kind, String label, boolean enabled,
+                               String reason, boolean second) {
         View card = LayoutInflater.from(requireContext())
                 .inflate(R.layout.item_attack_card, row, false);
         LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) card.getLayoutParams();
         if (second) params.leftMargin = dp(6);
         else params.rightMargin = dp(6);
         card.setLayoutParams(params);
-        ((TextView) card.findViewById(R.id.attack_title)).setText(attackTitleRes(kind));
+        ((TextView) card.findViewById(R.id.attack_title)).setText(
+                label != null && !label.isEmpty() ? label : getString(attackTitleRes(kind)));
         TextView desc = card.findViewById(R.id.attack_desc);
         if (enabled || reason.isEmpty()) {
             desc.setText(attackDescRes(kind));
@@ -886,12 +994,32 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         }
         if (sheet != null) sheet.dismiss();
         if ("eviltwin".equals(kind)) {
-            // The engine's EvilTwinInput supports the TUI's BSSID/channel/punt choices; collect
-            // them here rather than silently starting the single-card default.
+            // The TUI's Evil Twin modal: interface, BSSID, channel, punt methods and cycle.
+            if (targetInterfaces.isEmpty() && !connectedIface.isEmpty()) {
+                targetInterfaces.add(connectedIface);
+            }
             evilTwinDialog = new EvilTwinOptionsDialog(requireContext(), target.ssid,
-                    target.bssid, target.channel,
+                    target.bssid, target.channel, new ArrayList<>(targetInterfaces),
                     options -> launchAttack(kind, target, options));
             evilTwinDialog.show();
+            return;
+        }
+        if ("verify".equals(kind)) {
+            // The TUI's Verify: the saved credential for this BSSID, checked against the live AP.
+            JSONObject data = targetFor(target.bssid);
+            JSONObject credential = data == null ? null : data.optJSONObject("credential");
+            if (credential == null || credential.optString("value").isEmpty()) {
+                Snackbar.make(requireView(), R.string.wifi_attack_none, Snackbar.LENGTH_LONG).show();
+                return;
+            }
+            JSONObject options = new JSONObject();
+            try {
+                options.put("value", credential.optString("value"));
+                options.put("verify_type", credential.optString("type", "wpa_psk"));
+            } catch (org.json.JSONException ignored) {
+                // Two plain strings cannot fail to serialize.
+            }
+            launchAttack(kind, target, options);
             return;
         }
         launchAttack(kind, target, null);
@@ -901,8 +1029,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         WifiBridge bridge = WifiBridge.get(requireContext());
         bridge.start();
         // Show Stryker's monitor straight away; the engine's attack_started fills it in.
-        attackMonitor = new AttackMonitorDialog(requireContext(), kind, target.ssid,
-                target.bssid, target.channel);
+        attackMonitor = new AttackMonitorDialog(requireContext(), kind,
+                attackLabel(kind, target.bssid), target.ssid, target.bssid, target.channel);
         attackMonitor.show();
         if ("captive".equals(kind)) {
             captiveDialog = new CaptivePortalDialog(requireContext(), target.ssid,
@@ -910,6 +1038,19 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             captiveDialog.show();
         }
         bridge.attack(kind, target.bssid, options);
+    }
+
+    /** The engine's own button label for this attack ("AutoDeauth", "Decloak Home", …). */
+    private String attackLabel(String kind, String bssid) {
+        JSONObject data = targetFor(bssid);
+        JSONArray attacks = data == null ? null : data.optJSONArray("attacks");
+        if (attacks == null) return "";
+        for (int i = 0; i < attacks.length(); i++) {
+            JSONObject attack = attacks.optJSONObject(i);
+            if (attack == null || !kind.equals(attack.optString("kind"))) continue;
+            return attack.optString("label", "");
+        }
+        return "";
     }
 
     private JSONObject targetFor(String bssid) {
@@ -1016,6 +1157,11 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 return R.string.wifi_attack_eviltwin;
             case "captive":
                 return R.string.wifi_attack_captive;
+            case "decloak":
+            case "known_decloak":
+                return R.string.wifi_attack_decloak;
+            case "verify":
+                return R.string.wifi_attack_verify;
             default:
                 return R.string.wifi_attack_deauth;
         }
@@ -1035,6 +1181,11 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 return R.string.wifi_attack_eviltwin_desc;
             case "captive":
                 return R.string.wifi_attack_captive_desc;
+            case "decloak":
+            case "known_decloak":
+                return R.string.wifi_attack_decloak_desc;
+            case "verify":
+                return R.string.wifi_attack_verify_desc;
             default:
                 return R.string.wifi_attack_deauth_desc;
         }
@@ -1054,6 +1205,11 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 return R.drawable.router;
             case "captive":
                 return R.drawable.wifi_tethering;
+            case "decloak":
+            case "known_decloak":
+                return R.drawable.lan;
+            case "verify":
+                return R.drawable.login;
             default:
                 return R.drawable.deauth;
         }
@@ -1072,6 +1228,11 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             case "eviltwin":
                 return R.raw.router;
             case "captive":
+                return R.raw.globe;
+            case "decloak":
+            case "known_decloak":
+                return R.raw.brute;
+            case "verify":
                 return R.raw.globe;
             default:
                 return R.raw.brute;

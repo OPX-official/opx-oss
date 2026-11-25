@@ -66,6 +66,8 @@ final class AttackMonitorDialog {
     private final View progressScroll;
     private final View consoleScroll;
     private final com.google.android.material.button.MaterialButton stop;
+    private final com.google.android.material.button.MaterialButton primary;
+    private boolean chopping;
     private final String kind;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -111,6 +113,7 @@ final class AttackMonitorDialog {
         progressScroll = content.findViewById(R.id.attack_body_scroll);
         consoleScroll = content.findViewById(R.id.attack_console_scroll);
         stop = content.findViewById(R.id.attack_stop);
+        primary = content.findViewById(R.id.attack_primary);
 
         ImageView icon = content.findViewById(R.id.attack_icon);
         icon.setImageResource(WifiFragment.attackIconRes(this.kind));
@@ -159,7 +162,32 @@ final class AttackMonitorDialog {
             }
         });
 
+        // ChopChop is the WEP campaign's own sub-mode (the TUI's second button); every other
+        // campaign has nothing to toggle, so the button stays hidden.
+        primary.setOnClickListener(v -> {
+            if (!"wep".equals(this.kind) || finished) return;
+            chopping = !chopping;
+            WifiBridge.get(context).chop(chopping);
+            renderChop();
+        });
+        if ("wep".equals(this.kind)) {
+            primary.setVisibility(View.VISIBLE);
+            renderChop();
+        }
+
         showTab(true);
+    }
+
+    AttackMonitorDialog(Context context, String kind, String label, String ssid, String bssid,
+                        int channel) {
+        this(context, kind, ssid, bssid, channel);
+        if (label != null && !label.isEmpty()) title.setText(label);
+    }
+
+    private void renderChop() {
+        primary.setText(chopping ? R.string.wifi_attack_chop_stop : R.string.wifi_attack_chop);
+        primary.setBackgroundTintList(android.content.res.ColorStateList.valueOf(
+                ContextCompat.getColor(context, chopping ? R.color.red : R.color.green)));
     }
 
     /**
@@ -188,6 +216,12 @@ final class AttackMonitorDialog {
         } else if ("captive".equals(kind)) {
             addStage("assoc", "Hosting the captive twin", "active");
             addStage("eapol", "Waiting for a client M2", "pending");
+        } else if ("decloak".equals(kind) || "known_decloak".equals(kind)) {
+            addStage("probe", "Probing the hidden AP", "active");
+            addStage("ssid", "SSID revealed", "pending");
+        } else if ("verify".equals(kind)) {
+            addStage("assoc", "Joining the AP", "active");
+            addStage("verify", "Checking the credential", "pending");
         } else {
             addStage("deauth", "Deauthenticating clients", "active");
             addStage("eapol", "Handshake / PMKID", "pending");
@@ -211,7 +245,10 @@ final class AttackMonitorDialog {
     /** One engine event for this attack; anything else is ignored. */
     void onEvent(JSONObject event) {
         String name = event.optString("event");
-        if ("attack_log".equals(name)) {
+        if ("chop".equals(name)) {
+            chopping = event.optBoolean("active");
+            renderChop();
+        } else if ("attack_log".equals(name)) {
             String line = event.optString("line");
             if (line.isEmpty()) return;
             appendLog(line);
@@ -412,6 +449,7 @@ final class AttackMonitorDialog {
         anim.pauseAnimation();
         anim.setAnimation(R.raw.error);
         anim.playAnimation();
+        primary.setVisibility(View.GONE);
         result.setText(message == null || message.isEmpty()
                 ? context.getString(R.string.hc_done_fail) : message);
         result.setTextColor(ContextCompat.getColor(context, R.color.red));
@@ -443,6 +481,7 @@ final class AttackMonitorDialog {
         anim.setAnimation(ok ? R.raw.confetti : R.raw.error);
         anim.playAnimation();
         animateRate(0f);
+        primary.setVisibility(View.GONE);
 
         String text = context.getString(ok ? R.string.wifi_attack_done_ok : R.string.wifi_attack_done_fail,
                 summary);

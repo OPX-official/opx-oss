@@ -308,6 +308,52 @@ public final class WifiBridge {
         send(json("cmd", "stop_attack"));
     }
 
+    /** One client, one de-auth burst: the TUI's inline ✕ on its clients panel. */
+    public void deauthClient(String bssid, String client) {
+        JSONObject command = json("cmd", "deauth_client");
+        try {
+            command.put("bssid", bssid);
+            command.put("client", client);
+        } catch (JSONException ignored) {
+            // Plain strings cannot fail to serialize.
+        }
+        send(command);
+    }
+
+    /** Broadcast de-auth: the TUI's 'd' hotkey. */
+    public void deauthAll(String bssid) {
+        JSONObject command = json("cmd", "deauth_all");
+        try {
+            command.put("bssid", bssid);
+        } catch (JSONException ignored) {
+            // A plain string cannot fail to serialize.
+        }
+        send(command);
+    }
+
+    /** wifi4's silenced list: campaigns off and captures ignored for that AP. */
+    public void setSilenced(String bssid, boolean silenced) {
+        JSONObject command = json("cmd", "silence");
+        try {
+            command.put("bssid", bssid);
+            command.put("on", silenced);
+        } catch (JSONException ignored) {
+            // A plain string and boolean cannot fail to serialize.
+        }
+        send(command);
+    }
+
+    /** ChopChop, the WEP campaign's packet-forging sub-mode. */
+    public void chop(boolean on) {
+        JSONObject command = json("cmd", "chop");
+        try {
+            command.put("on", on);
+        } catch (JSONException ignored) {
+            // A plain boolean cannot fail to serialize.
+        }
+        send(command);
+    }
+
     /** Asks whether a campaign is running, for a WiFi screen opened mid-attack. */
     public void requestAttackStatus() {
         send(json("cmd", "attack_status"));
