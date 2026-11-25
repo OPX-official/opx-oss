@@ -224,7 +224,13 @@ public final class NativeEngine {
         scanEngine.stop();
         WifiChip stopping = chip;
         chip = null;
-        if (stopping != null) stopping.close();
+        if (stopping != null) {
+            try {
+                stopping.close();
+            } catch (Exception e) {
+                AppLog.info("OpxEngine", "closing the adapter: " + e.getMessage());
+            }
+        }
         if (!wasRunning) emitScanDone();
     }
 
