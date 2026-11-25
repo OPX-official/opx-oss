@@ -209,6 +209,11 @@ public final class WscMessage {
                 .add(ATTR_MAC_ADDR, registrarMac);
     }
 
+    /** M4: the registrar's proof of the first PIN half. */
+    public static WscMessage m4(byte[] eHash1) {
+        return new WscMessage().add(ATTR_MSG_TYPE, MSG_M4).add(ATTR_E_HASH1, eHash1);
+    }
+
     /** M5: the first half was right; here is the hash of the second. */
     public static WscMessage m5(byte[] eHash2) {
         return new WscMessage().add(ATTR_MSG_TYPE, MSG_M5).add(ATTR_E_HASH2, eHash2);
