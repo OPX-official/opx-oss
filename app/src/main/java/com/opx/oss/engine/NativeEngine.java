@@ -13,6 +13,7 @@ import com.opx.oss.engine.attacks.Campaign;
 import com.opx.oss.engine.attacks.DeauthCampaign;
 import com.opx.oss.engine.attacks.DecloakCampaign;
 import com.opx.oss.engine.chips.WifiChip;
+import com.opx.oss.engine.chips.firmware.FirmwareStore;
 import com.opx.oss.engine.chips.rtl8187.Rtl8187Chip;
 import com.opx.oss.engine.dot11.Eapol;
 import com.opx.oss.engine.dot11.Mac;
@@ -178,6 +179,11 @@ public final class NativeEngine {
                 String model = ChipCatalog.model(device.getVendorId(), device.getProductId());
                 entry.put("model", model == null ? "unsupported" : model);
                 entry.put("supported", model != null);
+                String firmware = ChipCatalog.firmware(
+                        device.getVendorId(), device.getProductId());
+                entry.put("firmware", firmware == null ? JSONObject.NULL : firmware);
+                entry.put("firmware_bundled", firmware != null
+                        && !FirmwareStore.forChip(context, firmware).isEmpty());
             }
             devices.put(entry);
         }

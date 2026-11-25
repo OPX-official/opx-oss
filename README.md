@@ -29,6 +29,20 @@ each build is an artifact of its own workflow run.
 Everything above is checked against known answers when the engine starts; the result is
 reported in the `ready` event as `runtime.selfcheck`.
 
+## Bundled chip firmware
+
+The APK carries **65 firmware images for 29 adapter families** in
+`app/src/main/assets/firmware/`, each with its own licence file and a `manifest.txt` holding
+its SHA-256 and size. `engine/chips/firmware/FirmwareStore.java` copies an image into the app's
+files on first use and verifies that digest before handing it to a driver; a truncated or
+replaced image is refused.
+
+| Family | Chips |
+|---|---|
+| Atheros | AR9271 |
+| Ralink / MediaTek | RT3070, RT3072, RT3572, RT5370, RT5372, RT5572, MT7601U, MT7610U/E, MT7662, MT7921AU, MT7925AU |
+| Realtek | RTL8188EU, RTL8188FTV, RTL8192CU, RTL8192FU, RTL8812AU, RTL8814AU, RTL8821AU/CU, RTL8822BU/CU, RTL8922AU |
+
 ## Rules
 
 - No external source tree, package archive or prebuilt library is shipped or executed.

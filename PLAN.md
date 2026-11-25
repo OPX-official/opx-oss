@@ -274,6 +274,7 @@
 - [x] **RTL8187 পাথ (ফার্মওয়্যার-মুক্ত পরিবার):** `engine/chips/rtl8187/{Rtl8187Regs,Rtl8187Transport,Eeprom93cx6,Rtl8187Tx,Rtl8187Rx}.java` — ভেন্ডর কন্ট্রোল রিড/রাইট (bRequest 0x05, wValue=reg, wIndex=page), 93cx6 বিট-ব্যাং ইইপ্রম, ১২-বাইট TX ডিস্ক্রিপ্টর (len+NO_ENC+rate, len=0, retry), সিকোয়েন্স স্ট্যাম্পিং, ZLP, RX trailer (−4−((27·agc)>>6) dBm, FCS স্ট্রিপ)।
 - [x] **বিল্ড সবুজ:** রান **#45626317618** (`0d0b69d`)।
 - [x] **নিয়ম আপডেট:** চিপের ক্লোজড ফার্মওয়্যার ব্যবহারের অনুমতি PLAN ও README-তে লেখা হয়েছে।
+- [x] **ফার্মওয়্যার শিপড:** রেফারেন্স ট্রির `chips/*/assets` থেকে **শুধু ফার্মওয়্যার বাইনারি ও লাইসেন্স** — ৬৫টি ইমেজ, ২৯টি ফ্যামিলি, ৬.০MB — `app/src/main/assets/firmware/`-এ; সাথে `manifest.txt` (path, SHA-256, size)। `engine/chips/firmware/FirmwareStore.java` অ্যাপের ফাইলস-এ কপি করে **SHA-256 যাচাই** করে, লাইসেন্স আলাদা রাখে, `chips()`/`forChip()`/`read()` দেয়। (`.py` টেবিল ও pcap ফিক্সচার শিপ হয়নি।)
 - [x] **RTL8187 MAC ব্রিং-আপ:** `chips/rtl8187/Rtl8187Mac.java` — anaparam, soft reset (CMD/EEPROM লোড অপেক্ষা), FE18 magic, pin defaults, RF timing/para, page-1 tail, `start()` (RX_CONF/MAR/CW/TX_CONF/CMD ল্যাচ)।
 - [x] **RTL8187 RF + চ্যানেল:** `chips/rtl8187/Rtl8187Phy.java` — PHY ৪-বাইট উইন্ডো, RF বিট-ব্যাং ও 8051 পাথ, সিন্থ টেবিল (ch 1–14), `configChannel()` (TX_CONF MAC-loopback ব্র্যাকেট সহ), RF stop।
 - [x] **বিল্ড সবুজ:** রান **#45627284768** (`13757bf`)।
