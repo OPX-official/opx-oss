@@ -76,8 +76,9 @@ final class AttackMonitorDialog {
     private final StringBuilder log = new StringBuilder();
     private boolean finished;
 
-    private float rateShown;
-    private float rateCeiling = 8f;
+    /** The rates the sparkline draws, in the same order as its labelled series. */
+    private static final String[] RATE_KEYS = {"inject", "deauth", "eapol"};
+    private final float[] rateShown = new float[RATE_KEYS.length];
     private Runnable rateAnim;
 
     AttackMonitorDialog(Context context, String kind, String ssid, String bssid, int channel) {
@@ -131,6 +132,13 @@ final class AttackMonitorDialog {
         anim.playAnimation();
 
         rateView.setAccent(ContextCompat.getColor(context, R.color.stryker_accent));
+        // Three rates, one plot: every line carries its own colour and its name above the peak.
+        rateView.setSeries(
+                new String[]{context.getString(R.string.wifi_rate_inject),
+                        context.getString(R.string.wifi_rate_deauth),
+                        context.getString(R.string.wifi_rate_eapol)},
+                new int[]{ContextCompat.getColor(context, R.color.stryker_accent),
+                        Color.parseColor("#FF7043"), Color.parseColor("#66BB6A")});
         buildStagesFor(this.kind);
 
         tabProgress.setOnClickListener(v -> showTab(true));
@@ -305,11 +313,7 @@ final class AttackMonitorDialog {
         }
 
         JSONObject rates = progress.optJSONObject("rates");
-        if (rates != null) {
-            double inject = rates.optDouble("inject", 0);
-            double deauth = rates.optDouble("deauth", 0);
-            animateRate((float) (inject + deauth));
-        }
+        if (rates != null) animateRates(rates);
     }
 
     private StageRow addStage(String key, String label, String state) {
@@ -386,21 +390,28 @@ final class AttackMonitorDialog {
      * graph rises smoothly instead of stepping. Each new rate is drawn in a short ramp, which is
      * what gives the injection line its heartbeat look.
      */
-    private void animateRate(float value) {
+    /**
+     * Each of the engine's rates gets its own ramp, so the three lines move together instead of
+     * as one summed line whose height said nothing about which frame type was going out.
+     */
+    private void animateRates(JSONObject rates) {
         if (finished) return;
         if (rateAnim != null) handler.removeCallbacks(rateAnim);
-        rateCeiling = Math.max(rateCeiling, value);
-        final float from = rateShown;
-        final float to = value;
-        final float ceiling = Math.max(rateCeiling, 8f);
+        final float[] from = rateShown.clone();
+        final float[] to = new float[RATE_KEYS.length];
+        if (rates != null) {
+            for (int i = 0; i < RATE_KEYS.length; i++) to[i] = (float) rates.optDouble(RATE_KEYS[i], 0);
+        }
         final int[] step = {0};
         rateAnim = new Runnable() {
             @Override
             public void run() {
                 step[0]++;
                 float t = Math.min(1f, step[0] / (float) RATE_STEPS);
-                rateShown = from + (to - from) * t;
-                rateView.push(Math.min(1f, rateShown / ceiling));
+                for (int i = 0; i < RATE_KEYS.length; i++) {
+                    rateShown[i] = from[i] + (to[i] - from[i]) * t;
+                    rateView.push(i, rateShown[i]);
+                }
                 if (step[0] < RATE_STEPS) handler.postDelayed(this, RATE_STEP_MS);
             }
         };
@@ -480,7 +491,7 @@ final class AttackMonitorDialog {
         anim.setRepeatCount(0);
         anim.setAnimation(ok ? R.raw.confetti : R.raw.error);
         anim.playAnimation();
-        animateRate(0f);
+        animateRates(null);
         primary.setVisibility(View.GONE);
 
         String text = context.getString(ok ? R.string.wifi_attack_done_ok : R.string.wifi_attack_done_fail,
