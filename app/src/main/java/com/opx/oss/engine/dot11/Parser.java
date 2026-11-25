@@ -59,6 +59,7 @@ public final class Parser {
         ap.wps = Ie.isWps(elements);
         Ie.Element rsn = Ie.first(elements, Ie.RSN);
         if (rsn != null) {
+            ap.rsnIe = rsn.raw;
             readRsn(ap, rsn.body);
         } else if (Ie.isWpa(elements)) {
             ap.encryption = "WPA";

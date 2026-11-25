@@ -23,6 +23,10 @@ public final class HandshakeBook {
         emitted.clear();
     }
 
+    public Handshake get(String bssid, String station) {
+        return handshakes.get(bssid + "|" + station);
+    }
+
     public List<Handshake> list() {
         return new ArrayList<>(handshakes.values());
     }

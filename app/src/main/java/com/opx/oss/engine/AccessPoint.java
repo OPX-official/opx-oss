@@ -21,6 +21,8 @@ public final class AccessPoint {
     public boolean pmfRequired;
     public boolean wps;
     public boolean hidden;
+    /** The AP's own RSN element, kept so a client frame can mirror it exactly. */
+    public byte[] rsnIe;
     public long lastSeen = System.currentTimeMillis();
     public int beacons;
 
