@@ -49,11 +49,23 @@ public abstract class Campaign {
     }
 
     protected void log(Events events, String line) {
-        events.emit(event("attack_log").put("message", line));
+        JSONObject entry = event("attack_log");
+        try {
+            entry.put("message", line);
+        } catch (Exception ignored) {
+            // A string cannot fail to serialize.
+        }
+        events.emit(entry);
     }
 
     protected void progress(Events events, int percent, String label) {
-        events.emit(event("attack_progress").put("percent", percent).put("label", label));
+        JSONObject entry = event("attack_progress");
+        try {
+            entry.put("percent", percent).put("label", label);
+        } catch (Exception ignored) {
+            // A number and a string cannot fail to serialize.
+        }
+        events.emit(entry);
     }
 
     protected JSONObject event(String name) {
