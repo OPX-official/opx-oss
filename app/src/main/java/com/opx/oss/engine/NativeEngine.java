@@ -6,6 +6,8 @@ import android.hardware.usb.UsbManager;
 import android.util.Log;
 
 import com.opx.oss.UsbHostBridge;
+import com.opx.oss.engine.capture.HandshakeBook;
+import com.opx.oss.engine.chips.ChipCatalog;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -36,6 +38,9 @@ public final class NativeEngine {
 
     private final Context context;
     private final Listener listener;
+    private final ScanBook scan = new ScanBook();
+    private final HandshakeBook handshakes = new HandshakeBook();
+    private final ScanEngine scanEngine = new ScanEngine(scan);
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "opx-native-engine");
         thread.setDaemon(true);
@@ -102,7 +107,16 @@ public final class NativeEngine {
                     devices();
                     break;
                 case "targets":
-                    emit(event("targets").put("targets", new JSONArray()));
+                    targets();
+                    break;
+                case "scan":
+                    // The scan needs the adapter's driver; until a chip is brought up there is
+                    // nothing to tune and no frames to fold in, so say exactly that.
+                    error("scan needs the adapter driver, which is not in this build yet");
+                    break;
+                case "stop_scan":
+                    scanEngine.stop();
+                    emit(event("scan_done").put("count", scan.size()));
                     break;
                 case "captures":
                     emit(event("captures").put("captures", Vault.toJson(context)));
@@ -138,10 +152,37 @@ public final class NativeEngine {
                 entry.put("name", device.getDeviceName());
                 entry.put("vendor_id", device.getVendorId());
                 entry.put("product_id", device.getProductId());
+                String model = ChipCatalog.model(device.getVendorId(), device.getProductId());
+                entry.put("model", model == null ? "unsupported" : model);
+                entry.put("supported", model != null);
             }
             devices.put(entry);
         }
         emit(event("devices").put("devices", devices).put("usb", usbState()));
+    }
+
+    /** Every AP with the attacks the engine can actually run against it. */
+    private void targets() throws Exception {
+        JSONArray targets = new JSONArray();
+        for (AccessPoint ap : scan.list()) {
+            JSONObject entry = ap.toJson();
+            JSONArray attacks = new JSONArray();
+            attacks.put("deauth");
+            if (ap.hidden) attacks.put("decloak");
+            if ("WEP".equals(ap.encryption)) {
+                attacks.put("wep");
+            } else if (ap.encryption.startsWith("WPA2") || ap.encryption.startsWith("WPA3")) {
+                attacks.put("pmkid");
+            }
+            if (ap.wps) attacks.put("wps");
+            if (!ap.ssid.isEmpty()) {
+                attacks.put("eviltwin");
+                attacks.put("captive");
+            }
+            entry.put("attacks", attacks);
+            targets.put(entry);
+        }
+        emit(event("targets").put("targets", targets).put("handshakes", handshakes.size()));
     }
 
     private JSONObject runtime() {
