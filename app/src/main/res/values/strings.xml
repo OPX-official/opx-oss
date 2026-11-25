@@ -342,8 +342,8 @@
     <string name="cred_how_wps_pbc">WPS Push-Button: the window was open, so the PSK came out of
         the PBC exchange.</string>
     <string name="cred_how_wpa_psk">Cracked from the saved capture %1$s.</string>
-    <string name="cred_how_wpa_psk_no_capture">Cracked from this network's saved handshake.</string>
-    <string name="cred_how_wep">WEP key recovered from this network's IV/ARP replay.</string>
+    <string name="cred_how_wpa_psk_no_capture">Cracked from this network\'s saved handshake.</string>
+    <string name="cred_how_wep">WEP key recovered from this network\'s IV/ARP replay.</string>
     <string name="cred_copy_value">Copy password</string>
     <string name="cred_copy_pin">Copy PIN</string>
     <string name="cred_close">Close</string>
