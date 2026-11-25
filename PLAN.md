@@ -233,3 +233,19 @@
 | ফ্রেম অফসেট ভুল হলে নীরব ব্যর্থতা | `dot11` টেস্ট ভেক্টর: পুরনো কোডের আউটপুট বাইট ধরে গোল্ডেন তুলনা |
 | USB রিগ্রেশন | প্রতিটা ফেজে USB গার্ড ডিফ + ডিভাইস চেকলিস্ট |
 | ভুল করে টার্গেট অ্যাটাক | যোগ্যতা `TargetBook`-এ, UI-তে নয় — আগের মতোই |
+
+---
+
+## ১০. অগ্রগতি (সবসময় হালনাগাদ, GitHub-এ পুশ করা থাকে)
+
+### M1 — চলছে (আনুমানিক ৫০%)
+
+- [x] **ক্লিন স্লেট:** চলন্ত `Packages` রান #43 (`45615454874`) বাতিল; সব ১২টি রিলিজ ও ট্যাগ (`latest`, `v0.2.0-alpha.*`, `v0.1.0-alpha.*`) মুছে ফেলা — এখন শূন্য।
+- [x] **পুরনো বাইরের-নির্ভর পাইপলাইন বাদ:** `.github/workflows/packages.yml`, `tools/build-base.sh`, `tools/build-packages.sh`, `tools/fetch-packages.sh`, `tools/make-index.py`, `tools/merge-index.py`, `tools/select-debs.py`, `tools/patch-bootstraps.py`, `tools/patch-properties.py`, `tools/patch-wifi4.py`, `tools/prune-foreign.py`, `tools/prune-size.py`, `tools/rebrand-runtime.py`, `tools/republish-archive.sh`, `tools/scrub-names.py`, `tools/termux/`, `tools/engine/`, `tools/usb/`।
+- [x] **`engine/UsbFd.java`** — `opx.usb` ক্লায়েন্ট: `list`/`open`, SCM_RIGHTS ডেসক্রিপ্টর গ্রহণ, `OPX_USB_FD` নাম ধরে রাখা।
+- [x] **`engine/UsbTransport.java`** — নিজের USB ট্রান্সপোর্ট: `bulkIn`/`bulkOut`/`control`, ইন্টারফেস claim, পারমিশন-অপেক্ষা, close — libusb-এর কোনো অংশ নেই।
+- [x] **`engine/NativeEngine.java`** — ইন-প্রসেস লাইন প্রোটোকল: `ready`/`ping`/`status`/`config`/`devices`/`targets`/`captures`/`attack_status`/`stop`/`error`, একক ওয়ার্কার থ্রেড।
+- [ ] `WifiBridge` রিওয়্যার — প্রসেস স্পনের বদলে `NativeEngine.start()`।
+- [ ] `OpxService`/`IntroActivity`/`SettingsFragment`-এ রানটাইম-নির্ভর ধাপ বন্ধ করা।
+
+**বাকি ফেজ (M2–M6):** উপরের ৬ নম্বর সেকশনের তালিকা অনুযায়ী অপরিবর্তিত।

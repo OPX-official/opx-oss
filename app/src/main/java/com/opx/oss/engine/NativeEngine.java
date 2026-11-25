@@ -1,0 +1,208 @@
+package com.opx.oss.engine;
+
+import android.content.Context;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbManager;
+
+import com.opx.oss.UsbHostBridge;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/**
+ * The headless engine, in the app's own process: it speaks the same line protocol the screens
+ * already use, one JSON object per command in and one event out.
+ * <p>
+ * This is the layer that replaces the external engine process. Its command and event names are
+ * the protocol the app has always spoken, so the UI keeps its contract while the work behind it
+ * is our own code, with no runtime to install and no interpreter to spawn.
+ */
+public final class NativeEngine {
+
+    public static final String VERSION = "1.0.0";
+
+    /** Every event the engine emits, in the same shape the app already parses. */
+    public interface Listener {
+        void onEvent(JSONObject event);
+    }
+
+    private static NativeEngine instance;
+
+    private final Context context;
+    private final Listener listener;
+    private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "opx-native-engine");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private volatile boolean stopped;
+
+    private NativeEngine(Context context, Listener listener) {
+        this.context = context;
+        this.listener = listener;
+    }
+
+    /** Start the engine for {@code listener}; the {@code ready} event follows immediately. */
+    public static synchronized NativeEngine start(Context context, Listener listener) {
+        if (instance != null) return instance;
+        NativeEngine engine = new NativeEngine(context.getApplicationContext(), listener);
+        instance = engine;
+        JSONObject ready = new JSONObject();
+        try {
+            ready.put("event", "ready");
+            ready.put("version", VERSION);
+            ready.put("runtime", engine.runtime());
+        } catch (Exception ignored) {
+            // A ready event without fields still tells the UI the engine is up.
+        }
+        engine.emit(ready);
+        return engine;
+    }
+
+    public static synchronized void stop() {
+        if (instance == null) return;
+        instance.shutdown();
+        instance = null;
+    }
+
+    public static synchronized boolean isRunning() {
+        return instance != null && !instance.stopped;
+    }
+
+    /** Feed one command; a long campaign never blocks the caller or the next command. */
+    public void send(JSONObject command) {
+        if (stopped || command == null) return;
+        worker.execute(() -> dispatch(command));
+    }
+
+    private void dispatch(JSONObject command) {
+        String name = command.optString("cmd");
+        try {
+            switch (name) {
+                case "":
+                    error("no command");
+                    break;
+                case "ping":
+                    emit(event("ready").put("version", VERSION).put("runtime", runtime()));
+                    break;
+                case "status":
+                    emit(event("status").put("iface", JSONObject.NULL).put("connected", false)
+                            .put("usb", usbState()));
+                    break;
+                case "config":
+                    emit(event("config").put("dfs", command.optBoolean("dfs", false)));
+                    break;
+                case "devices":
+                    devices();
+                    break;
+                case "targets":
+                    emit(event("targets").put("targets", new JSONArray()));
+                    break;
+                case "captures":
+                    emit(event("captures").put("captures", new JSONArray()));
+                    break;
+                case "attack_status":
+                    emit(event("attack_status").put("running", false));
+                    break;
+                case "stop":
+                    emit(event("stopped"));
+                    shutdown();
+                    break;
+                default:
+                    error("unknown command: " + name);
+                    break;
+            }
+        } catch (Exception e) {
+            error(name + " failed: " + e.getMessage());
+        }
+    }
+
+    private void devices() throws Exception {
+        JSONArray devices = new JSONArray();
+        List<String> paths = UsbFd.list();
+        UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
+        for (String path : paths) {
+            JSONObject entry = new JSONObject();
+            entry.put("path", path);
+            UsbDevice device = manager == null ? null : device(manager, path);
+            if (device != null) {
+                entry.put("name", device.getDeviceName());
+                entry.put("vendor_id", device.getVendorId());
+                entry.put("product_id", device.getProductId());
+            }
+            devices.put(entry);
+        }
+        emit(event("devices").put("devices", devices).put("usb", usbState()));
+    }
+
+    private JSONObject runtime() {
+        JSONObject runtime = new JSONObject();
+        try {
+            runtime.put("kind", "native");
+            runtime.put("engine", VERSION);
+            runtime.put("usb", usbState());
+        } catch (Exception ignored) {
+            // The caller still gets the event.
+        }
+        return runtime;
+    }
+
+    private JSONObject usbState() {
+        JSONObject usb = new JSONObject();
+        try {
+            usb.put("bridge", UsbHostBridge.isListening());
+            usb.put("variable", UsbFd.FD_VARIABLE);
+        } catch (Exception ignored) {
+            // Nothing to report beyond the event itself.
+        }
+        return usb;
+    }
+
+    private static UsbDevice device(UsbManager manager, String path) {
+        Map<String, UsbDevice> devices = manager.getDeviceList();
+        if (devices == null) return null;
+        for (UsbDevice device : devices.values()) {
+            if (path.equals(device.getDeviceName())) return device;
+        }
+        return null;
+    }
+
+    private JSONObject event(String name) {
+        JSONObject event = new JSONObject();
+        try {
+            event.put("event", name);
+        } catch (Exception ignored) {
+            // A JSONObject accepts every string key.
+        }
+        return event;
+    }
+
+    private void error(String message) {
+        try {
+            emit(event("error").put("message", message));
+        } catch (Exception ignored) {
+            // Nothing further to report.
+        }
+    }
+
+    private void emit(JSONObject event) {
+        if (stopped && !"stopped".equals(event.optString("event"))) return;
+        Listener target = listener;
+        if (target == null) return;
+        try {
+            target.onEvent(event);
+        } catch (RuntimeException ignored) {
+            // A listener that throws must not take the engine down with it.
+        }
+    }
+
+    private void shutdown() {
+        stopped = true;
+        worker.shutdownNow();
+    }
+}
