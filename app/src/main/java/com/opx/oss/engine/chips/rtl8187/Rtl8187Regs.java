@@ -65,6 +65,59 @@ public final class Rtl8187Regs {
     public static final int RATE_2MBPS = 1;
     public static final int RATE_6MBPS = 4;
 
+    // Registers the bring-up sequence touches.
+    public static final int REG_BRSR = CSR_BASE + 0x2C;
+    public static final int REG_RESP_RATE = CSR_BASE + 0x34;
+    public static final int REG_INT_TIMEOUT = CSR_BASE + 0x48;
+    public static final int REG_PHY = CSR_BASE + 0x7C;
+    public static final int REG_RFPINSOUTPUT = CSR_BASE + 0x80;
+    public static final int REG_RFPINSENABLE = CSR_BASE + 0x82;
+    public static final int REG_RFPINSSELECT = CSR_BASE + 0x84;
+    public static final int REG_RFPINSINPUT = CSR_BASE + 0x86;
+    public static final int REG_RF_PARA = CSR_BASE + 0x88;
+    public static final int REG_RF_TIMING = CSR_BASE + 0x8C;
+    public static final int REG_GP_ENABLE = CSR_BASE + 0x90;
+    public static final int REG_GPIO0 = CSR_BASE + 0x91;
+    public static final int REG_TX_AGC_CTL = CSR_BASE + 0x9C;
+    public static final int REG_WPA_CONF = CSR_BASE + 0xB0;
+    public static final int REG_CW_CONF = CSR_BASE + 0xBC;
+    public static final int REG_RATE_FALLBACK = CSR_BASE + 0xBE;
+    public static final int REG_TALLY_SEL = CSR_BASE + 0xFC;
+    public static final int REG_ATIM_WND = CSR_BASE + 0x72;
+    public static final int REG_BEACON_INTERVAL = CSR_BASE + 0x70;
+    public static final int REG_BEACON_INTERVAL_TIME = CSR_BASE + 0x74;
+    public static final int REG_ATIMTR_INTERVAL = CSR_BASE + 0x76;
+
+    // Registers outside the CSR window, addressed directly.
+    public static final int REG_MAGIC_FE18 = 0xFE18;
+    public static final int REG_MAGIC_FE53 = 0xFE53;
+    public static final int REG_MAGIC_FFF4 = 0xFFF4;
+    public static final int REG_MAGIC_ASIC_REV = 0xFFFE;
+
+    public static final int EEPROM_CMD_NORMAL = 0 << 6;
+    public static final int EEPROM_CMD_LOAD = 1 << 6;
+    public static final int EEPROM_CMD_CONFIG = 3 << 6;
+
+    public static final int CMD_TX_ENABLE = 1 << 2;
+    public static final int CMD_RX_ENABLE = 1 << 3;
+    public static final int CMD_RESET = 1 << 4;
+
+    public static final int CONFIG3_ANAPARAM_WRITE = 1 << 6;
+    public static final int ANAPARAM_ON = 0xA0000A59;
+    public static final int ANAPARAM2_ON = 0x860C7312;
+
+    public static final int RX_CONF_NICMAC = 1 << 1;
+    public static final int RX_CONF_BROADCAST = 1 << 3;
+    public static final int RX_CONF_DATA = 1 << 18;
+    public static final int RX_CONF_MGMT = 1 << 20;
+    public static final int RX_CONF_BSSID = 1 << 23;
+    public static final int RX_CONF_RX_AUTORESETPHY = 1 << 28;
+    public static final int RX_CONF_ONLYERLPKT = 1 << 31;
+
+    public static final int TX_CONF_LOOPBACK_MAC = 1 << 17;
+    public static final int TX_CONF_NO_ICV = 1 << 19;
+    public static final int TX_CONF_CW_MIN = 1 << 31;
+
     private Rtl8187Regs() {
     }
 }

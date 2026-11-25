@@ -69,6 +69,16 @@ public final class Rtl8187Transport {
         }
     }
 
+    /** A register write with a caller-chosen index: the RF path uses 0x8225 as its marker. */
+    public void rawWrite(int value, int index, byte[] data) throws IOException {
+        int sent = transport.control(Rtl8187Regs.REQT_WRITE, Rtl8187Regs.REQ_REGISTER,
+                value, index, data, TIMEOUT_MS);
+        if (sent != data.length) {
+            throw new IOException("register write short: " + sent + " of " + data.length
+                    + " at 0x" + Integer.toHexString(value));
+        }
+    }
+
     public void setBits8(int register, int mask) throws IOException {
         write8(register, read8(register) | mask);
     }
