@@ -53,7 +53,7 @@ public final class UsbFd implements Closeable {
     public static List<String> list() throws IOException {
         LocalSocket socket = connect();
         try {
-            write(socket, new JSONObject().put("cmd", "list"));
+            write(socket, "list", null);
             JSONObject reply = read(socket);
             if (!reply.optBoolean("ok")) {
                 throw new IOException(failure(reply, "the bridge refused the device list"));
@@ -79,7 +79,7 @@ public final class UsbFd implements Closeable {
     public static UsbFd open(String path) throws IOException {
         LocalSocket socket = connect();
         try {
-            write(socket, new JSONObject().put("cmd", "open").put("path", path));
+            write(socket, "open", path);
             JSONObject reply = read(socket);
             if (!reply.optBoolean("ok")) {
                 throw new IOException(failure(reply, "the bridge refused " + path));
@@ -114,7 +114,14 @@ public final class UsbFd implements Closeable {
         }
     }
 
-    private static void write(LocalSocket socket, JSONObject request) throws IOException {
+    private static void write(LocalSocket socket, String command, String path) throws IOException {
+        JSONObject request = new JSONObject();
+        try {
+            request.put("cmd", command);
+            if (path != null) request.put("path", path);
+        } catch (Exception e) {
+            throw new IOException("cannot build the bridge request", e);
+        }
         OutputStream out = socket.getOutputStream();
         out.write((request.toString() + "\n").getBytes(StandardCharsets.UTF_8));
         out.flush();
