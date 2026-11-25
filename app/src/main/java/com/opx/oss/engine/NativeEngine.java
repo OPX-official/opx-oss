@@ -9,8 +9,16 @@ import com.opx.oss.AppLog;
 import com.opx.oss.UsbHostBridge;
 import com.opx.oss.engine.capture.HandshakeBook;
 import com.opx.oss.engine.chips.ChipCatalog;
+import com.opx.oss.engine.attacks.Campaign;
+import com.opx.oss.engine.attacks.DeauthCampaign;
+import com.opx.oss.engine.attacks.DecloakCampaign;
 import com.opx.oss.engine.chips.WifiChip;
 import com.opx.oss.engine.chips.rtl8187.Rtl8187Chip;
+import com.opx.oss.engine.dot11.Eapol;
+import com.opx.oss.engine.dot11.Mac;
+import com.opx.oss.engine.dot11.Parser;
+
+import com.opx.oss.engine.dot11.Frame;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -44,7 +52,11 @@ public final class NativeEngine {
     private final ScanBook scan = new ScanBook();
     private final HandshakeBook handshakes = new HandshakeBook();
     private final ScanEngine scanEngine = new ScanEngine(scan);
+    private final ProbeBook probes = new ProbeBook();
     private volatile WifiChip chip;
+    private volatile Campaign campaign;
+    private volatile String campaignKind;
+    private volatile String campaignBssid;
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "opx-native-engine");
         thread.setDaemon(true);
@@ -113,6 +125,9 @@ public final class NativeEngine {
                 case "targets":
                     targets();
                     break;
+                case "probed":
+                    emit(event("probed").put("ssids", new JSONArray(probes.ssids())));
+                    break;
                 case "scan":
                     scan(command.optInt("seconds", 0));
                     break;
@@ -125,8 +140,14 @@ public final class NativeEngine {
                 case "crack_tools":
                     emit(event("crack_tools").put("tools", new JSONArray().put("cpu_crack")));
                     break;
+                case "attack":
+                    attack(command);
+                    break;
+                case "stop_attack":
+                    stopAttack();
+                    break;
                 case "attack_status":
-                    emit(event("attack_status").put("running", false));
+                    attackStatus();
                     break;
                 case "stop":
                     stopScan();
@@ -175,20 +196,20 @@ public final class NativeEngine {
             return;
         }
         scan.clear();
-        chip = new Rtl8187Chip(context, path);
-        chip.open();
-        AppLog.info("OpxEngine", "adapter up: " + chip.name() + " " + chip.mac());
+        WifiChip adapter = openChip(path);
+        AppLog.info("OpxEngine", "adapter up: " + adapter.name() + " " + adapter.mac());
 
         scanEngine.setPlan(true, false);
         scanEngine.start();
-        emit(event("scan_started").put("adapter", chip.name()));
-        chip.startReceive(scanEngine::feed);
+        emit(event("scan_started").put("adapter", adapter.name()));
+        adapter.startReceive(this::onFrame);
 
+        WifiChip hopping = adapter;
         Thread hop = new Thread(() -> {
             while (scanEngine.isRunning()) {
                 int next = scanEngine.nextChannel();
                 try {
-                    chip.setChannel(next);
+                    hopping.setChannel(next);
                 } catch (Exception e) {
                     if (scanEngine.isRunning()) error("channel " + next + ": " + e.getMessage());
                     scanEngine.stop();
@@ -217,6 +238,144 @@ public final class NativeEngine {
                 stopScan();
             });
         }
+    }
+
+    /** Every frame the radio hears: folded into the scan book and read for a handshake. */
+    private void onFrame(byte[] mpdu, int rssi) {
+        if (mpdu == null || mpdu.length < 24) return;
+        scanEngine.feed(mpdu, rssi);
+        capture(mpdu);
+    }
+
+    /**
+     * Reads a data frame for a four-way handshake or a probe request for a name. A completed
+     * pair is written to the vault once and reported as {@code capture_saved}.
+     */
+    private void capture(byte[] mpdu) {
+        int fc0 = mpdu[0] & 0xFF;
+        int type = (fc0 >> 2) & 0x03;
+        if (type == 0 && Frame.subtype(fc0) == Frame.SUBTYPE_PROBE_REQ) {
+            String ssid = Parser.probeRequestSsid(mpdu);
+            if (ssid != null) probes.record(Mac.text(Parser.slice(mpdu, 10, 6)), ssid);
+            return;
+        }
+        if (type != 2) return;
+
+        int headerLength = Mac.headerLength(fc0, mpdu[1] & 0xFF);
+        Eapol eapol = Eapol.parse(mpdu, headerLength);
+        if (eapol == null) return;
+
+        boolean toDs = (mpdu[1] & 0x01) != 0;
+        boolean fromDs = (mpdu[1] & 0x02) != 0;
+        String addr1 = Mac.text(Parser.slice(mpdu, 4, 6));
+        String addr2 = Mac.text(Parser.slice(mpdu, 10, 6));
+        String addr3 = Mac.text(Parser.slice(mpdu, 16, 6));
+        String bssid = toDs ? addr1 : (fromDs ? addr2 : addr3);
+        String station = toDs ? addr2 : addr1;
+        probes.associate(station, bssid);
+
+        AccessPoint ap = scan.get(bssid);
+        String ssid = ap == null ? "" : ap.ssid;
+        String line = handshakes.feed(bssid, station, ssid, eapol);
+        if (line == null) return;
+        try {
+            java.io.File saved = Vault.save(context, "capture_" + bssid.replace(':', '-') + ".22000",
+                    (line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            emit(event("capture_saved").put("file", saved.getName())
+                    .put("bssid", bssid).put("count", Vault.list(context).size()));
+        } catch (Exception e) {
+            error("cannot save the capture: " + e.getMessage());
+        }
+    }
+
+    private WifiChip openChip(String path) throws Exception {
+        WifiChip adapter = chip;
+        if (adapter != null) return adapter;
+        adapter = new Rtl8187Chip(context, path);
+        adapter.open();
+        chip = adapter;
+        return adapter;
+    }
+
+    /** Start one campaign against one BSSID on the open adapter. */
+    private void attack(JSONObject command) throws Exception {
+        if (campaign != null) {
+            error("an attack is already running");
+            return;
+        }
+        String kind = command.optString("kind");
+        String bssid = command.optString("bssid");
+        if (bssid.isEmpty()) {
+            error("no target BSSID");
+            return;
+        }
+        String path = firstSupportedDevice();
+        if (path == null) {
+            error("no supported adapter is attached");
+            return;
+        }
+        WifiChip adapter = openChip(path);
+        AccessPoint target = scan.get(bssid);
+        if (target != null && target.channel > 0) adapter.setChannel(target.channel);
+
+        JSONObject options = command.optJSONObject("options");
+        Campaign starting;
+        switch (kind) {
+            case "deauth":
+                starting = new DeauthCampaign(adapter, bssid, options);
+                break;
+            case "decloak":
+                starting = new DecloakCampaign(adapter, bssid, options, probes, scan);
+                break;
+            default:
+                error(kind + " is not available yet");
+                return;
+        }
+
+        campaign = starting;
+        campaignKind = kind;
+        campaignBssid = bssid;
+        emit(event("attack_started").put("kind", kind).put("bssid", bssid));
+        Campaign running = starting;
+        worker.execute(() -> {
+            boolean ok = true;
+            String summary = "";
+            try {
+                running.start(event -> emitQuietly(event));
+                summary = kind + " finished";
+            } catch (Exception e) {
+                ok = false;
+                summary = e.getMessage();
+            } finally {
+                campaign = null;
+                JSONObject done = event("attack_done");
+                try {
+                    done.put("ok", ok).put("kind", kind).put("summary", summary);
+                } catch (Exception ignored) {
+                    // Both values are plain types.
+                }
+                emitQuietly(done);
+            }
+        });
+    }
+
+    private void stopAttack() {
+        Campaign running = campaign;
+        campaign = null;
+        if (running != null) running.stop();
+        emitQuietly(event("attack_stopped"));
+    }
+
+    private void attackStatus() {
+        JSONObject status = event("attack_status");
+        try {
+            status.put("running", campaign != null);
+            status.put("kind", campaignKind == null ? JSONObject.NULL : campaignKind);
+            status.put("bssid", campaignBssid == null ? JSONObject.NULL : campaignBssid);
+        } catch (Exception ignored) {
+            // Every value is a plain type.
+        }
+        emitQuietly(status);
     }
 
     private void stopScan() {

@@ -70,6 +70,16 @@ public final class Parser {
         return ap;
     }
 
+    /** The SSID a probe request asks for, or {@code null} when it is the wildcard or empty. */
+    public static String probeRequestSsid(byte[] frame) {
+        if (frame == null || frame.length < 24) return null;
+        int fc0 = frame[0] & 0xFF;
+        if (!Frame.isManagement(fc0) || Frame.subtype(fc0) != Frame.SUBTYPE_PROBE_REQ) return null;
+        Ie.Element ssid = Ie.first(Ie.parse(frame, 24), Ie.SSID);
+        if (ssid == null || ssid.body.length == 0) return null;
+        return new String(ssid.body, StandardCharsets.UTF_8);
+    }
+
     /** Reads the RSN element body: ciphers, AKMs and the PMF capability bits. */
     private static void readRsn(AccessPoint ap, byte[] body) {
         if (body.length < 8) return;
