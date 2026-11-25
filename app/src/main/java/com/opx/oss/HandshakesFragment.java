@@ -341,7 +341,8 @@ public class HandshakesFragment extends Fragment
         } catch (org.json.JSONException ignored) {
             // Three plain values.
         }
-        bridge.attack("eviltwin", apBssid, options);
+        // opx_ap hosts the open AP, its DHCP/DNS and the portal; wifi4 stays the backend.
+        bridge.attack("portal", apBssid, options);
     }
 
     /** A password was checked against the capture; only a match closes the portal. */

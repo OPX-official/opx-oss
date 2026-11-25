@@ -609,6 +609,7 @@ public final class NativeEngine {
         if (wifi4Attached) {
             // wifi4's vault is where its handshakes live; its own verdict also saves a match.
             try {
+                wifi4Configure();
                 JSONObject reply = new JSONObject(PythonChip.backendText("verify_psk", bssid, psk));
                 ok = reply.optBoolean("ok");
                 any = reply.optBoolean("have_handshake");
@@ -1657,6 +1658,10 @@ public final class NativeEngine {
                 return;
             case "eviltwin":
                 // EvilTwinInput: the modal's twin/punter cards, BSSID, channel and punt cycle.
+                wifi4Attack(mapped, bssid, command.optJSONObject("options"));
+                return;
+            case "portal":
+                // The AP crack mode: an open AP we host ourselves, with its own DHCP/DNS/portal.
                 wifi4Attack(mapped, bssid, command.optJSONObject("options"));
                 return;
             default:

