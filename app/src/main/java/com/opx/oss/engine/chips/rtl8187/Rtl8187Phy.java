@@ -50,6 +50,68 @@ public final class Rtl8187Phy {
         }
     }
 
+    /** Read one RF register: always the bit-bang protocol, on every silicon revision. */
+    public int readRf(int address) throws IOException {
+        int outputRegister = transport.read16(Rtl8187Regs.REG_RFPINSOUTPUT);
+        int enableRegister = transport.read16(Rtl8187Regs.REG_RFPINSENABLE);
+        int selectRegister = transport.read16(Rtl8187Regs.REG_RFPINSSELECT);
+        outputRegister &= ~0xF;
+
+        transport.write16(Rtl8187Regs.REG_RFPINSENABLE, enableRegister | 0x000F);
+        transport.write16(Rtl8187Regs.REG_RFPINSSELECT, selectRegister | 0x000F);
+
+        transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, outputRegister | (1 << 2));
+        sleepMicros(4);
+        transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, outputRegister);
+        sleepMicros(5);
+
+        for (int bit = 4; bit >= 0; bit--) {
+            int value = outputRegister | ((address >>> bit) & 1);
+            if ((bit & 1) == 0) {
+                transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, value);
+                sleepMicros(1);
+            }
+            transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, value | (1 << 1));
+            sleepMicros(2);
+            transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, value | (1 << 1));
+            sleepMicros(2);
+            if ((bit & 1) != 0) {
+                transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, value);
+                sleepMicros(1);
+            }
+        }
+
+        transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, outputRegister | (1 << 3) | (1 << 1));
+        sleepMicros(2);
+        transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, outputRegister | (1 << 3));
+        sleepMicros(2);
+        transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, outputRegister | (1 << 3));
+        sleepMicros(2);
+
+        int out = 0;
+        for (int bit = 11; bit >= 0; bit--) {
+            transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, outputRegister | (1 << 3));
+            sleepMicros(1);
+            for (int pulse = 0; pulse < 3; pulse++) {
+                transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT,
+                        outputRegister | (1 << 3) | (1 << 1));
+                sleepMicros(2);
+            }
+            if ((transport.read16(Rtl8187Regs.REG_RFPINSINPUT) & (1 << 1)) != 0) {
+                out |= 1 << bit;
+            }
+            transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, outputRegister | (1 << 3));
+            sleepMicros(2);
+        }
+
+        transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, outputRegister | (1 << 3) | (1 << 2));
+        sleepMicros(2);
+        transport.write16(Rtl8187Regs.REG_RFPINSENABLE, enableRegister);
+        transport.write16(Rtl8187Regs.REG_RFPINSSELECT, selectRegister);
+        transport.write16(Rtl8187Regs.REG_RFPINSOUTPUT, 0x03A0);
+        return out;
+    }
+
     /** Stop the radio: the RF register every variant uses to shut the front end down. */
     public void stop() throws IOException {
         writeRf(RF_STOP_REGISTER, RF_STOP_VALUE);

@@ -5,9 +5,12 @@ import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.util.Log;
 
+import com.opx.oss.AppLog;
 import com.opx.oss.UsbHostBridge;
 import com.opx.oss.engine.capture.HandshakeBook;
 import com.opx.oss.engine.chips.ChipCatalog;
+import com.opx.oss.engine.chips.WifiChip;
+import com.opx.oss.engine.chips.rtl8187.Rtl8187Chip;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -41,6 +44,7 @@ public final class NativeEngine {
     private final ScanBook scan = new ScanBook();
     private final HandshakeBook handshakes = new HandshakeBook();
     private final ScanEngine scanEngine = new ScanEngine(scan);
+    private volatile WifiChip chip;
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "opx-native-engine");
         thread.setDaemon(true);
@@ -110,13 +114,10 @@ public final class NativeEngine {
                     targets();
                     break;
                 case "scan":
-                    // The scan needs the adapter's driver; until a chip is brought up there is
-                    // nothing to tune and no frames to fold in, so say exactly that.
-                    error("scan needs the adapter driver, which is not in this build yet");
+                    scan(command.optBoolean("seconds", 0));
                     break;
                 case "stop_scan":
-                    scanEngine.stop();
-                    emit(event("scan_done").put("count", scan.size()));
+                    stopScan();
                     break;
                 case "captures":
                     emit(event("captures").put("captures", Vault.toJson(context)));
@@ -128,6 +129,7 @@ public final class NativeEngine {
                     emit(event("attack_status").put("running", false));
                     break;
                 case "stop":
+                    stopScan();
                     emit(event("stopped"));
                     shutdown();
                     break;
@@ -159,6 +161,89 @@ public final class NativeEngine {
             devices.put(entry);
         }
         emit(event("devices").put("devices", devices).put("usb", usbState()));
+    }
+
+    /** Tune the adapter across the plan and fold every beacon it hears into the book. */
+    private void scan(int seconds) throws Exception {
+        if (scanEngine.isRunning()) {
+            error("a scan is already running");
+            return;
+        }
+        String path = firstSupportedDevice();
+        if (path == null) {
+            error("no supported adapter is attached");
+            return;
+        }
+        scan.clear();
+        chip = new Rtl8187Chip(context, path);
+        chip.open();
+        AppLog.info("OpxEngine", "adapter up: " + chip.name() + " " + chip.mac());
+
+        scanEngine.setPlan(true, false);
+        scanEngine.start();
+        emit(event("scan_started").put("adapter", chip.name()));
+        chip.startReceive(scanEngine::feed);
+
+        Thread hop = new Thread(() -> {
+            while (scanEngine.isRunning()) {
+                int next = scanEngine.nextChannel();
+                try {
+                    chip.setChannel(next);
+                } catch (Exception e) {
+                    if (scanEngine.isRunning()) error("channel " + next + ": " + e.getMessage());
+                    scanEngine.stop();
+                    break;
+                }
+                try {
+                    Thread.sleep(120);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            emitQuietly(event("scan_done").put("count", scan.size())
+                    .put("frames", scanEngine.frames()));
+        }, "opx-scan-hop");
+        hop.setDaemon(true);
+        hop.start();
+
+        if (seconds > 0) {
+            worker.execute(() -> {
+                try {
+                    Thread.sleep(seconds * 1000L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                stopScan();
+            });
+        }
+    }
+
+    private void stopScan() {
+        boolean wasRunning = scanEngine.isRunning();
+        scanEngine.stop();
+        WifiChip stopping = chip;
+        chip = null;
+        if (stopping != null) stopping.close();
+        if (!wasRunning) emitQuietly(event("scan_done").put("count", scan.size()));
+    }
+
+    /** The device path of the first attached adapter the engine has a driver for. */
+    private String firstSupportedDevice() {
+        UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
+        try {
+            for (String path : UsbFd.list()) {
+                UsbDevice device = manager == null ? null : device(manager, path);
+                if (device == null) continue;
+                ChipCatalog.Entry entry = ChipCatalog.resolve(
+                        device.getVendorId(), device.getProductId());
+                if (entry != null && "rtl8187".equals(entry.family)) return path;
+            }
+        } catch (Exception e) {
+            AppLog.info("OpxEngine", "cannot ask the bridge for devices: " + e.getMessage());
+        }
+        return null;
     }
 
     /** Every AP with the attacks the engine can actually run against it. */
@@ -234,6 +319,14 @@ public final class NativeEngine {
         try {
             emit(event("error").put("message", message));
         } catch (Exception ignored) {
+            // Nothing further to report.
+        }
+    }
+
+    private void emitQuietly(JSONObject event) {
+        try {
+            emit(event);
+        } catch (RuntimeException ignored) {
             // Nothing further to report.
         }
     }
