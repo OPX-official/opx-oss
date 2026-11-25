@@ -85,5 +85,18 @@
     <color name="opx_muted">@color/grey</color>
     <color name="opx_green">@color/green</color>
 
+
+    <!-- Intro screen, light theme. values-night overrides these; lint requires every color that
+         exists in a qualified folder to have a base declaration, or a non-night device crashes. -->
+    <color name="intro_ink">#0B1220</color>
+    <color name="intro_line_1">#1565C0</color>
+    <color name="intro_line_2">#304FFE</color>
+    <color name="intro_line_3">#0B1220</color>
+    <color name="intro_chip_bg">#0D1565C0</color>
+    <color name="intro_dot">#33000000</color>
+    <color name="intro_dot_active">#1565C0</color>
+    <color name="intro_surface">#E6FFFFFF</color>
+    <color name="intro_outline">#331565C0</color>
+
     <color name="ic_launcher_background">#1565C0</color>
 </resources>
