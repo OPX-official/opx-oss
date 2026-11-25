@@ -23,6 +23,7 @@ import threading
 import time
 import traceback
 from collections import deque
+from pathlib import Path
 
 import opx_driver_host as host
 import usb_shim
@@ -50,6 +51,16 @@ _campaign = None
 _kind = None
 _bssid = None
 _lock = threading.RLock()
+
+#: wifi4's vault (capture index + cracking jobs) and its AP watcher, built lazily.
+#: The watcher is what turns a completed 4-way in wifi4's sink into a saved capture.
+_vault = None
+_watcher = None
+_captures_dir = None
+_job_id = None
+_default_password_count = None
+#: True once the finished campaign's key (WEP/WPS) has been written to the vault.
+_campaign_saved = False
 
 #: Every campaign this build exposes, by the name the app's protocol uses.
 _CAMPAIGN_KEYS = ("deauth", "pmkid", "pin", "pbc", "decloak", "wep")
@@ -199,6 +210,247 @@ def _ap_row(ap, clients_by_bssid=None) -> dict:
     }
 
 
+def set_captures_dir(path):
+    """Point wifi4's vault at the app's own files directory.
+
+    ``Config.captures_dir`` is a relative ``"captures"`` in the desktop build, which is the
+    process's cwd; on Android that is not a writable place, so every save the vault attempted
+    failed. The app passes an absolute path (``filesDir/captures``) before any other call.
+    """
+    global _captures_dir, _vault, _watcher
+    if not path:
+        return False
+    from wifi4.persist.config import Config
+
+    target = str(path)
+    Path(target).mkdir(parents=True, exist_ok=True)
+    if _captures_dir is not None and _captures_dir != target:
+        # A different directory means a different index; rebuild both halves.
+        _vault = None
+        _watcher = None
+    Config.captures_dir = target
+    _captures_dir = target
+    return True
+
+
+def _vault_state():
+    """wifi4's ``Vault`` and ``ApWatcher``, built on first use (no card needed)."""
+    global _vault, _watcher
+    with _lock:
+        if _vault is None:
+            from wifi4.watchers.ap_watcher import ApWatcher
+            from wifi4.persist.vault import Vault
+
+            _vault = Vault()
+            _watcher = ApWatcher(_vault)
+        return _vault, _watcher
+
+
+def poll_captures():
+    """Let wifi4's AP watcher save the handshakes/PMKIDs its sink completed.
+
+    This is wifi4's own write path (``ApWatcher`` -> ``Vault.save_handshake``), so the file
+    names, the dedupe and the auto-crack hook are the ones its console produces. Returns the
+    newly saved captures as JSON, so the app can announce them.
+    """
+    if _array is None:
+        return json.dumps([])
+    _, watcher = _vault_state()
+    saved = []
+    for event in watcher.poll(_array):
+        result = getattr(event, "save_result", None)
+        if result is None or not getattr(result, "was_new", False):
+            continue
+        kind = "pmkid" if type(event).__name__ == "PmkidCaptured" else "handshake"
+        saved.append({"kind": kind, "ssid": getattr(event, "ssid", None) or "",
+                      "bssid": getattr(event, "bssid", ""), "path": str(result.path)})
+    return json.dumps(saved)
+
+
+def captures():
+    """wifi4's capture index and recovered credentials, as the app's ``captures`` event."""
+    from wifi4.models import CaptureType
+
+    vault, _ = _vault_state()
+    rows = []
+    credentials = []
+    seen_credentials = set()
+    total_bytes = 0
+    cracked = 0
+    ordered = sorted(vault.all_captures(), key=lambda c: c.timestamp, reverse=True)
+    newest_capture = {}
+    for capture in ordered:
+        if capture.type in (CaptureType.HS, CaptureType.PMKID):
+            newest_capture.setdefault((capture.bssid or "").lower(), Path(capture.path).name)
+    for capture in ordered:
+        try:
+            size = Path(capture.path).stat().st_size
+        except OSError:
+            size = 0
+        total_bytes += size
+        bssid = (capture.bssid or "").lower()
+        if capture.type in (CaptureType.HS, CaptureType.PMKID):
+            try:
+                keys = [key.value for key in vault.ap_state(bssid).keys
+                        if key.type == CaptureType.WPA_PSK and key.value]
+            except Exception:
+                keys = []
+            if keys:
+                cracked += 1
+            rows.append({
+                "id": Path(capture.path).name,
+                "path": capture.path,
+                "ssid": capture.ssid or "",
+                "bssid": bssid,
+                "kind": "pmkid" if capture.type == CaptureType.PMKID else "handshake",
+                "when": int(capture.timestamp or 0),
+                "size": size,
+                "keys": keys,
+            })
+            continue
+        if not capture.value:
+            continue
+        kind = capture.type.value.lower()
+        identity = (kind, bssid, capture.value)
+        if identity in seen_credentials:
+            continue
+        seen_credentials.add(identity)
+        credentials.append({
+            "id": Path(capture.path).name,
+            "path": capture.path,
+            "ssid": capture.ssid or "",
+            "bssid": bssid,
+            "kind": kind,
+            "value": capture.value,
+            "pin": getattr(capture, "pin", None) or "",
+            "when": int(capture.timestamp or 0),
+            "capture": newest_capture.get(bssid, ""),
+        })
+    from wifi4.persist.config import Config
+
+    return json.dumps({"captures": rows, "credentials": credentials, "count": len(rows),
+                       "cracked": cracked, "bytes": total_bytes,
+                       "directory": Config.captures_dir})
+
+
+def _find_capture(capture):
+    """The persisted capture a file name/path from the app names."""
+    vault, _ = _vault_state()
+    wanted = str(capture or "")
+    for entry in vault.all_captures():
+        if Path(entry.path).name == wanted or str(entry.path) == wanted:
+            return entry
+    return None
+
+
+def crack_tools():
+    """The cracking tools this build can start, in wifi4's own words."""
+    global _default_password_count
+    if _default_password_count is None:
+        try:
+            from wifi4.crack.passwords import DEFAULT_PASSWORDS_PATH
+
+            _default_password_count = sum(1 for _ in DEFAULT_PASSWORDS_PATH.open(
+                encoding="utf-8", errors="ignore"))
+        except Exception:
+            _default_password_count = 0
+    from wifi4.persist.config import Config
+
+    hashcat_path = getattr(Config.hashcat, "path", None)
+    tools = [
+        {"tool": "cpu_crack", "label": "CPU Crack",
+         "description": "Built-in CPU cracker (WPA/WPA2/PMKID)", "available": True,
+         "default_passwords": {"available": _default_password_count > 0,
+                               "count": _default_password_count}},
+        {"tool": "hashcat", "label": "Hashcat",
+         "description": "Hashcat -m 22000", "available": bool(hashcat_path),
+         "reason": "" if hashcat_path else "hashcat is not installed for this build",
+         "default_passwords": {"available": _default_password_count > 0,
+                               "count": _default_password_count}},
+    ]
+    return json.dumps({"tools": tools, "rules": False})
+
+
+def crack_start(capture, tool="cpu_crack", wordlists=None, default_passwords=True,
+                ssid_passwords=True, probed_ssids=False):
+    """Queue one of wifi4's cracking jobs for a saved capture."""
+    global _job_id
+    from wifi4.crack.hc22000_format import read_hc22000
+
+    vault, _ = _vault_state()
+    entry = _find_capture(capture)
+    if entry is None:
+        raise ValueError(f"no saved capture called {capture!r}")
+    lines = [raw for raw, _ in read_hc22000(entry.path)]
+    if not lines:
+        raise ValueError(f"{Path(entry.path).name} holds no hashlines")
+    name = tool if tool in vault.manager.tools else "cpu_crack"
+    if isinstance(wordlists, str):
+        # The app sends its wordlist paths as one JSON array string (JSONArray does not cross
+        # the Java/Python boundary as a list).
+        try:
+            wordlists = json.loads(wordlists) if wordlists.strip() else []
+        except ValueError:
+            wordlists = [wordlists]
+    config = {
+        "wordlists": [str(path) for path in (wordlists or [])],
+        "default_passwords": bool(default_passwords),
+        "ap_ssid_passwords": bool(ssid_passwords),
+        "probed_ssid_passwords": bool(probed_ssids),
+        "extra_passwords": [],
+    }
+    _job_id = vault.manager.submit_job(name, entry, config, lines)
+    return True
+
+
+def crack_poll():
+    """Advance wifi4's job queue and report the capture job's state."""
+    vault, _ = _vault_state()
+    vault.manager.poll_jobs()
+    job = vault.manager.jobs.get(_job_id) if _job_id else None
+    if job is None:
+        return json.dumps({"running": False, "done": True, "ok": False,
+                           "message": "no cracking job is queued"})
+    running = job.status.value.lower() in ("queued", "running")
+    keys = []
+    bssid = job_bssid(vault, job)
+    if bssid:
+        try:
+            keys = [key.value for key in vault.ap_state(bssid).keys
+                    if key.type.value == "wpa_psk" and key.value]
+        except Exception:
+            keys = []
+    if job.key and job.key not in keys:
+        keys.append(job.key)
+    return json.dumps({
+        "running": running,
+        "done": not running,
+        "ok": job.status.value.lower() == "success" and bool(job.key),
+        "status": job.status.value,
+        "percent": job.percent,
+        "message": job.progress_msg or "",
+        "detail": job.detail or "",
+        "keys": keys,
+        "key": job.key,
+    })
+
+
+def job_bssid(vault, job):
+    """The BSSID a queued job cracks (its capture may already be gone)."""
+    try:
+        return vault.manager.job_bssid(job) or ""
+    except Exception:
+        return ""
+
+
+def crack_stop():
+    """Ask wifi4 to stop the running cracking job."""
+    vault, _ = _vault_state()
+    if not _job_id:
+        return False
+    return bool(vault.manager.stop_job(_job_id))
+
+
 def targets():
     """Every AP wifi4's sink has seen, as JSON (the app's ``network`` row shape)."""
     if _array is None:
@@ -216,7 +468,7 @@ def targets():
 
 def attack(kind, bssid=None, **options):
     """Run wifi4's ``kind`` campaign against ``bssid``; True when it took the radio."""
-    global _campaign, _kind, _bssid
+    global _campaign, _kind, _bssid, _campaign_saved
     attach()
     if kind not in _CAMPAIGN_KEYS:
         raise ValueError(f"no wifi4 campaign called {kind!r}")
@@ -240,6 +492,7 @@ def attack(kind, bssid=None, **options):
         started = host._run(_launch(campaign), timeout=30.0)
         if started:
             _campaign, _kind, _bssid = campaign, kind, (str(bssid).lower() if bssid else None)
+            _campaign_saved = False
         return bool(started)
 
 
@@ -249,7 +502,7 @@ async def _launch(campaign):
 
 
 def stop_attack():
-    global _campaign, _kind, _bssid
+    global _campaign, _kind, _bssid, _campaign_saved
     campaign = _campaign
     if campaign is None:
         return False
@@ -259,7 +512,9 @@ def stop_attack():
         # A campaign that refuses to unwind still gives the radio back: request_stop is sync.
         campaign.request_stop()
         traceback.print_exc()
-    _campaign, _kind, _bssid = None, None, None
+    # A stop after the key was found still keeps it, like the console's finish handler.
+    _reap_campaign(force=True)
+    _campaign, _kind, _bssid, _campaign_saved = None, None, None, False
     return True
 
 
@@ -269,13 +524,66 @@ async def _stop(campaign):
     return True
 
 
+def _save_campaign_result(campaign, kind):
+    """Write a finished campaign's key the way wifi4's own screen does.
+
+    WEP keys and WPS credentials are not saved by the backend in wifi4: its console saves them
+    from the screen that ran the campaign (``focus_v2/screen.py``). This app has no such screen,
+    so this is that step: the same ``Vault.save_wep_key`` / ``save_wps_pin`` / ``save_wps_pbc``.
+    """
+    target = getattr(campaign, "target", None)
+    if target is None:
+        return False
+    vault, _ = _vault_state()
+    saved = False
+    try:
+        if kind == "wep":
+            key = getattr(campaign, "recovered_key", None)
+            if key:
+                vault.save_wep_key(target, key)
+                saved = True
+        elif kind == "pin":
+            state = getattr(campaign, "state", None)
+            pin = getattr(state, "found_pin", None) if state is not None else None
+            if pin is not None:
+                psk = getattr(state, "found_psk", None)
+                target.wps_pin = pin
+                target.wps_pin_psk = psk
+                vault.save_wps_pin(target, pin, psk)
+                saved = True
+        elif kind == "pbc":
+            outcome = getattr(campaign, "outcome", None)
+            result = getattr(outcome, "result", None) if outcome is not None else None
+            if result is not None and getattr(result, "name", "") == "SUCCESS" and outcome.psk:
+                target.wps_pbc_psk = outcome.psk
+                vault.save_wps_pbc(target, outcome.psk)
+                saved = True
+    except Exception:
+        traceback.print_exc()
+    return saved
+
+
+def _reap_campaign(force=False):
+    """Save the running campaign's result once it is done (or when ``force``d on a stop)."""
+    global _campaign_saved
+    campaign = _campaign
+    if campaign is None or _campaign_saved:
+        return False
+    if not force and not campaign.done:
+        return False
+    _campaign_saved = True
+    return _save_campaign_result(campaign, _kind)
+
+
 def attack_status():
     campaign = _campaign
+    saved = _reap_campaign()
     return json.dumps({
         "running": bool(campaign is not None and not campaign.done),
         "kind": _kind,
         "bssid": _bssid,
         "done": bool(campaign is None or campaign.done),
+        "saved": saved,
     })
 
 

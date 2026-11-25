@@ -150,6 +150,10 @@ public class HandshakesFragment extends Fragment
             render(event);
         } else if ("capture_saved".equals(name)) {
             requestCaptures();
+        } else if ("crack_done".equals(name)) {
+            // The recovered key is in the vault now: the row's CRACKED pill and the saved
+            // passwords list both come from this same event.
+            requestCaptures();
         } else if ("error".equals(name) && crackDialog != null && crackDialog.isShowing()) {
             String message = event.optString("message");
             if (!message.isEmpty()) Snackbar.make(requireView(), message, Snackbar.LENGTH_LONG).show();

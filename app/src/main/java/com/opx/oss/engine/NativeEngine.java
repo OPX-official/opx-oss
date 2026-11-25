@@ -91,6 +91,10 @@ public final class NativeEngine {
     private volatile int wifi4Count;
     /** Last signal emitted per BSSID, so a poll only pushes rows that actually changed. */
     private final java.util.Map<String, Integer> wifi4Sent = new java.util.HashMap<>();
+    /** True once wifi4's vault knows where the app keeps its captures. */
+    private volatile boolean wifi4Configured;
+    /** One capture watcher per attached card; it turns wifi4's saves into capture_saved events. */
+    private volatile boolean wifi4VaultWatch;
 
     private NativeEngine(Context context, Listener listener) {
         this.context = context;
@@ -213,30 +217,21 @@ public final class NativeEngine {
                     wifi4Status();
                     break;
                 case "captures":
-                    emit(event("captures").put("captures", Vault.toJson(context)));
+                    captures();
                     break;
-                case "crack_tools": {
-                    JSONObject tools = event("crack_tools");
-                    tools.put("tools", new JSONArray().put("cpu_crack"))
-                            .put("available", !cracking)
-                            .put("rules", true);
-                    emit(tools);
+                case "crack_tools":
+                    crackTools();
                     break;
-                }
                 case "cpu_crack":
                 case "crack":
-                    crack(command);
+                    if (!wifi4Crack(command)) crack(command);
                     break;
                 case "stop_crack":
-                    cracking = false;
-                    emitQuietly(event("crack_stopped"));
+                    stopCrack();
                     break;
-                case "crack_status": {
-                    JSONObject status = event("crack_status");
-                    status.put("running", cracking);
-                    emit(status);
+                case "crack_status":
+                    crackStatus();
                     break;
-                }
                 case "attack":
                     if (wifi4Attached) {
                         wifi4AttackCommand(command);
@@ -402,6 +397,13 @@ public final class NativeEngine {
         Handshake stored = handshakes.get(bssid, station);
         if (stored != null && ap != null) stored.sha256 = ap.akms.contains("PSK-SHA256");
         if (line == null) return;
+        if (wifi4Attached) {
+            // wifi4's AP watcher owns the vault while it holds the card: it writes the
+            // aggregate .hc22000 file next to the recovered keys, so a second copy here would
+            // only split the same handshake across two directories. The in-memory book above
+            // still feeds the live Verify check.
+            return;
+        }
         try {
             java.io.File saved = Vault.save(context, "capture_" + bssid.replace(':', '-') + ".22000",
                     (line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -749,7 +751,7 @@ public final class NativeEngine {
      */
     private boolean wifi4ScanStart(int seconds, double interval) {
         try {
-            PythonChip.ensurePython(context);
+            wifi4Configure();
             if (!PythonChip.backendBool("start_scan", null, interval)) return false;
         } catch (Throwable failed) {
             AppLog.error("OpxEngine", failed);
@@ -757,6 +759,7 @@ public final class NativeEngine {
         }
         wifi4Attached = true;
         wifi4Scanning = true;
+        startWifi4VaultWatch();
         wifi4Count = 0;
         synchronized (wifi4Sent) {
             wifi4Sent.clear();
@@ -825,7 +828,7 @@ public final class NativeEngine {
      * goes out, so a 250 ms poll fills the list as frames arrive without re-sending everything.
      */
     private int wifi4Refresh(boolean force) {
-        PythonChip.ensurePython(context);
+        wifi4Configure();
         String json = PythonChip.backendText("targets");
         JSONArray rows;
         try {
@@ -869,7 +872,8 @@ public final class NativeEngine {
 
     /** Run one of wifi4's campaigns ({@code deauth}, {@code pmkid}, {@code pin}, …). */
     private void wifi4Attack(String kind, String bssid) {
-        PythonChip.ensurePython(context);
+        wifi4Configure();
+        startWifi4VaultWatch();
         boolean running = PythonChip.backendBool("attack", kind,
                 bssid == null || bssid.isEmpty() ? null : bssid);
         if (running) {
@@ -880,7 +884,7 @@ public final class NativeEngine {
                 // Two plain strings.
             }
             emitQuietly(started);
-            watchWifi4Campaign(kind);
+            watchWifi4Campaign(kind, bssid);
         }
         JSONObject reply = event("wifi4_attack");
         try {
@@ -896,7 +900,7 @@ public final class NativeEngine {
      * The app's monitor closes on {@code attack_done}, which only the Java campaigns emit: poll
      * wifi4's campaign status until it reports not running and close the monitor with it.
      */
-    private void watchWifi4Campaign(String kind) {
+    private void watchWifi4Campaign(String kind, String target) {
         Thread watcher = new Thread(() -> {
             PythonChip.ensurePython(context);
             java.util.Map<String, Integer> before = new java.util.HashMap<>();
@@ -914,6 +918,17 @@ public final class NativeEngine {
                     JSONObject status = new JSONObject(json == null || json.isEmpty()
                             ? "{}" : json);
                     boolean running = status.optBoolean("running");
+                    if (status.optBoolean("saved")) {
+                        // A WEP key or WPS credential the campaign recovered just reached the
+                        // vault; the screens refresh their capture/credential lists from this.
+                        JSONObject savedEvent = event("capture_saved");
+                        try {
+                            savedEvent.put("bssid", target == null ? "" : target).put("kind", kind);
+                        } catch (Exception ignored) {
+                            // Two plain strings.
+                        }
+                        emitQuietly(savedEvent);
+                    }
                     JSONObject snapshot = new JSONObject(PythonChip.backendText("progress"));
                     JSONObject counters = snapshot.optJSONObject("counters");
                     // wifi4's counters are cumulative: the graph needs the per-second delta.
@@ -1019,6 +1034,231 @@ public final class NativeEngine {
         emitQuietly(reply);
     }
 
+    // -- wifi4's vault: captures, credentials and cracking ---------------------------------
+
+    /**
+     * wifi4's ``Config.captures_dir`` is relative in its desktop build, which is not a writable
+     * place on Android; every save it attempted there failed. The app hands it an absolute
+     * directory in its own files tree once per attached session.
+     */
+    private void wifi4Configure() {
+        if (wifi4Configured) return;
+        PythonChip.ensurePython(context);
+        java.io.File directory = new java.io.File(context.getFilesDir(), "captures");
+        if (!directory.isDirectory() && !directory.mkdirs()) {
+            AppLog.info("OpxEngine", "cannot create the captures directory: " + directory);
+        }
+        if (PythonChip.backendBool("set_captures_dir", directory.getAbsolutePath())) {
+            wifi4Configured = true;
+        }
+    }
+
+    /** The saved captures and the keys wifi4 recovered, straight from its vault index. */
+    private void captures() {
+        try {
+            wifi4Configure();
+            JSONObject reply = new JSONObject(PythonChip.backendText("captures"));
+            reply.put("event", "captures");
+            emitQuietly(reply);
+            return;
+        } catch (Throwable failed) {
+            AppLog.error("OpxEngine", failed);
+        }
+        JSONObject reply = event("captures");
+        try {
+            JSONArray files = Vault.toJson(context);
+            long bytes = 0;
+            for (int i = 0; i < files.length(); i++) {
+                JSONObject file = files.optJSONObject(i);
+                if (file != null) bytes += file.optLong("size");
+            }
+            reply.put("captures", new JSONArray()).put("credentials", new JSONArray())
+                    .put("count", 0).put("cracked", 0).put("bytes", bytes)
+                    .put("directory", Vault.dir(context).getAbsolutePath());
+        } catch (Exception ignored) {
+            // Plain values only.
+        }
+        emitQuietly(reply);
+    }
+
+    /** Which cracking tools this build can start, and the password sources behind them. */
+    private void crackTools() {
+        try {
+            wifi4Configure();
+            JSONObject reply = new JSONObject(PythonChip.backendText("crack_tools"));
+            reply.put("event", "crack_tools").put("available", !cracking);
+            emitQuietly(reply);
+            return;
+        } catch (Throwable failed) {
+            AppLog.error("OpxEngine", failed);
+        }
+        JSONObject reply = event("crack_tools");
+        try {
+            JSONObject cpu = new JSONObject();
+            cpu.put("tool", "cpu_crack")
+                    .put("description", "Built-in CPU cracker (WPA/WPA2/PMKID)")
+                    .put("available", true);
+            JSONObject hashcat = new JSONObject();
+            hashcat.put("tool", "hashcat").put("description", "Hashcat -m 22000")
+                    .put("available", false)
+                    .put("reason", "hashcat is not installed for this build");
+            reply.put("tools", new JSONArray().put(cpu).put(hashcat)).put("rules", false);
+        } catch (Exception ignored) {
+            // Plain values only.
+        }
+        emitQuietly(reply);
+    }
+
+    /**
+     * Queue one of wifi4's cracking jobs for a saved capture. False when the backend is not
+     * importable, so the caller can fall back to the Java cracker.
+     */
+    private boolean wifi4Crack(JSONObject command) {
+        String capture = command.optString("capture");
+        if (capture.isEmpty()) return false;
+        boolean started;
+        try {
+            wifi4Configure();
+            JSONArray wordlists = command.optJSONArray("wordlists");
+            started = PythonChip.backendBool("crack_start", capture,
+                    command.optString("tool", "cpu_crack"),
+                    wordlists == null ? "[]" : wordlists.toString(),
+                    command.optBoolean("default_passwords", true),
+                    command.optBoolean("ssid_passwords", true),
+                    command.optBoolean("probed_ssids", false));
+        } catch (Throwable failed) {
+            // No wifi4 backend here: the Java cracker is the fallback.
+            AppLog.error("OpxEngine", failed);
+            return false;
+        }
+        JSONObject reply = event("crack_started");
+        try {
+            reply.put("capture", capture).put("tool", command.optString("tool", "cpu_crack"));
+        } catch (Exception ignored) {
+            // Two plain strings.
+        }
+        emitQuietly(reply);
+        if (started) {
+            cracking = true;
+            watchWifi4Crack(capture);
+        } else {
+            JSONObject done = event("crack_done");
+            try {
+                done.put("capture", capture).put("ok", false).put("keys", new JSONArray())
+                        .put("message", "wifi4 could not start the cracking job");
+            } catch (Exception ignored) {
+                // Plain values.
+            }
+            emitQuietly(done);
+        }
+        return true;
+    }
+
+    /** wifi4's job queue only answers polls: turn them into crack_progress/crack_done events. */
+    private void watchWifi4Crack(String capture) {
+        Thread watcher = new Thread(() -> {
+            for (int i = 0; i < 7200; i++) {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException stopped) {
+                    return;
+                }
+                try {
+                    JSONObject status = new JSONObject(PythonChip.backendText("crack_poll"));
+                    JSONObject progress = event("crack_progress");
+                    progress.put("capture", capture)
+                            .put("percent", status.isNull("percent")
+                                    ? JSONObject.NULL : status.opt("percent"))
+                            .put("message", status.optString("message", ""))
+                            .put("detail", status.optString("detail", ""));
+                    emitQuietly(progress);
+                    if (status.optBoolean("done")) {
+                        JSONObject done = event("crack_done");
+                        JSONArray keys = status.optJSONArray("keys");
+                        done.put("capture", capture).put("ok", status.optBoolean("ok"))
+                                .put("keys", keys == null ? new JSONArray() : keys)
+                                .put("message", status.optString("message", ""));
+                        emitQuietly(done);
+                        cracking = false;
+                        return;
+                    }
+                } catch (Throwable broken) {
+                    AppLog.error("OpxEngine", broken);
+                    cracking = false;
+                    return;
+                }
+            }
+            cracking = false;
+        }, "wifi4-crack-watch");
+        watcher.setDaemon(true);
+        watcher.start();
+    }
+
+    private void stopCrack() {
+        cracking = false;
+        try {
+            wifi4Configure();
+            PythonChip.backendBool("crack_stop");
+        } catch (Throwable failed) {
+            AppLog.error("OpxEngine", failed);
+        }
+        emitQuietly(event("crack_stopping"));
+    }
+
+    private void crackStatus() {
+        JSONObject reply = event("crack_status");
+        boolean running = cracking;
+        try {
+            wifi4Configure();
+            running = new JSONObject(PythonChip.backendText("crack_poll"))
+                    .optBoolean("running", running);
+        } catch (Throwable failed) {
+            AppLog.error("OpxEngine", failed);
+        }
+        try {
+            reply.put("running", running);
+        } catch (Exception ignored) {
+            // One plain boolean.
+        }
+        emitQuietly(reply);
+    }
+
+    /**
+     * Poll wifi4's AP watcher while the card is attached: it saves the handshakes and PMKIDs the
+     * sink completed (with wifi4's dedupe and auto-crack), so its saves become capture_saved.
+     */
+    private void startWifi4VaultWatch() {
+        if (wifi4VaultWatch) return;
+        wifi4VaultWatch = true;
+        Thread watch = new Thread(() -> {
+            while (wifi4VaultWatch) {
+                try {
+                    Thread.sleep(1500);
+                } catch (InterruptedException stopped) {
+                    return;
+                }
+                if (!wifi4Attached) return;
+                try {
+                    JSONArray saved = new JSONArray(PythonChip.backendText("poll_captures"));
+                    for (int i = 0; i < saved.length(); i++) {
+                        JSONObject entry = saved.optJSONObject(i);
+                        if (entry == null) continue;
+                        emitQuietly(event("capture_saved")
+                                .put("file", entry.optString("path"))
+                                .put("bssid", entry.optString("bssid"))
+                                .put("ssid", entry.optString("ssid"))
+                                .put("kind", entry.optString("kind")));
+                    }
+                } catch (Throwable broken) {
+                    AppLog.error("OpxEngine", broken);
+                    return;
+                }
+            }
+        }, "wifi4-vault-watch");
+        watch.setDaemon(true);
+        watch.start();
+    }
+
     /** wifi4's encryption text folded into the app's pill buckets, without a Java AP object. */
     private static String bucketFor(String encryption) {
         String text = encryption == null ? "" : encryption;
@@ -1074,6 +1314,8 @@ public final class NativeEngine {
         wifi4Attached = false;
         wifi4Scanning = false;
         wifi4Count = 0;
+        wifi4Configured = false;
+        wifi4VaultWatch = false;
         synchronized (wifi4Sent) {
             wifi4Sent.clear();
         }
@@ -1199,6 +1441,7 @@ public final class NativeEngine {
 
     /** wifi4's table with the app's attack list, so the target sheet reads wifi4's clients. */
     private void wifi4TargetsAsTargets() {
+        wifi4Configure();
         String json = PythonChip.backendText("targets");
         JSONArray rows;
         try {
