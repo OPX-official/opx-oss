@@ -3,6 +3,7 @@ package com.opx.oss.engine;
 import android.content.Context;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
+import android.util.Log;
 
 import com.opx.oss.UsbHostBridge;
 
@@ -104,7 +105,10 @@ public final class NativeEngine {
                     emit(event("targets").put("targets", new JSONArray()));
                     break;
                 case "captures":
-                    emit(event("captures").put("captures", new JSONArray()));
+                    emit(event("captures").put("captures", Vault.toJson(context)));
+                    break;
+                case "crack_tools":
+                    emit(event("crack_tools").put("tools", new JSONArray().put("cpu_crack")));
                     break;
                 case "attack_status":
                     emit(event("attack_status").put("running", false));
@@ -146,6 +150,9 @@ public final class NativeEngine {
             runtime.put("kind", "native");
             runtime.put("engine", VERSION);
             runtime.put("usb", usbState());
+            String selfCheck = SelfCheck.run();
+            runtime.put("selfcheck", selfCheck == null ? "ok" : selfCheck);
+            if (selfCheck != null) Log.w("OpxEngine", "self check failed: " + selfCheck);
         } catch (Exception ignored) {
             // The caller still gets the event.
         }
