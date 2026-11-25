@@ -10,8 +10,8 @@ android {
         applicationId "com.opx.oss"
         // Android 6.0 and up, 32- and 64-bit ABIs alike.
         minSdk 23
-        // Must stay at 28: Android 10+ refuses to execve() files inside the app home directory for
-        // apps targeting 29+, and the whole OPX OSS runtime runs from <files>.
+        // Kept at 28 so the shared-storage export folder stays an ordinary runtime permission;
+        // the engine itself runs in this process and never executes a file.
         targetSdk 28
         // Android only installs a build over an existing app whose versionCode is higher, so CI
         // derives it from the workflow run number. A hand-edited constant meant two builds of
@@ -81,5 +81,4 @@ dependencies {
     // Stryker's Lottie animations (wifi_scan, usb_stick, settings_gears, router, connection).
     implementation 'com.airbnb.android:lottie:6.7.1'
     // Untars the packaged userland payloads (the archive ships tar.gz trees, not zips).
-    implementation 'org.apache.commons:commons-compress:1.27.1'
 }

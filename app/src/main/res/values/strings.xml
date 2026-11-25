@@ -3,35 +3,6 @@
     <string name="app_name">OPX OSS</string>
 
     <!-- First-run welcome, Stryker's intro with this app's four steps. -->
-    <string name="intro_welcome_title">Welcome to OPX OSS</string>
-    <string name="intro_welcome_body">The wireless engine, its USB host bridge and the guided interface in one app — no terminal and no companion app.</string>
-    <string name="intro_permissions_title">Permissions, once</string>
-    <string name="intro_permissions_body">Location powers WiFi scanning, storage keeps captures and logs, notifications show the engine. Grant what your phone allows — setup continues without them, and only the features that need one stay off.</string>
-    <string name="intro_download_title">Download the engine</string>
-    <string name="intro_download_body">The app is small by design. It detects a 32-bit or 64-bit phone, downloads only that runtime, verifies every file, and resumes where it stopped if the connection drops.</string>
-    <string name="intro_engine_title">The engine installs itself</string>
-    <string name="intro_engine_body">The verified runtime unpacks into the app\'s own private directory. This happens once; later launches reuse the installed tree.</string>
-    <string name="intro_ready_title">Ready to scan</string>
-    <string name="intro_ready_body">The engine stays warm in the background, so every screen sees the same state — and WiFi works the moment you open it.</string>
-    <string name="intro_next">Continue</string>
-    <string name="intro_skip">Skip</string>
-    <string name="intro_skip_to_setup">Skip to setup</string>
-    <string name="intro_start">Get started</string>
-    <string name="intro_grant">Grant permissions</string>
-    <string name="intro_open_settings">Open app settings</string>
-    <string name="intro_retry">Retry</string>
-    <string name="intro_start_download">Start download</string>
-    <string name="intro_download_wait">Preparing the download…</string>
-    <string name="intro_download_progress">%1$d%% · %2$s</string>
-    <string name="intro_download_ready">Runtime verified — ready to install</string>
-    <string name="intro_installing">Installing the verified runtime…</string>
-    <string name="intro_download_error">Download failed: %1$s</string>
-    <string name="intro_download_unknown">unknown error</string>
-    <string name="intro_eyebrow_install">Installation</string>
-    <string name="intro_show_details">Show details</string>
-    <string name="intro_log_title">Installation log</string>
-    <string name="intro_download_file">%1$d of %2$d · %3$s</string>
-    <string name="intro_download_done">Runtime verified · %1$s</string>
     <string name="notification_state_downloading">Downloading runtime… %1$d%% · %2$s</string>
     <string name="drawer_open">Open menu</string>
     <string name="drawer_close">Close menu</string>
@@ -42,18 +13,18 @@
     <string name="nav_section_essentials">ESSENTIALS</string>
     <string name="nav_section_wireless">WIRELESS</string>
     <string name="nav_section_about">ABOUT</string>
-    <string name="nav_footer">Native runtime · authorized testing only</string>
+    <string name="nav_footer">Native engine · authorized testing only</string>
 
     <string name="home_title">OPX OSS</string>
     <string name="home_subtitle">All-in-one wireless toolkit. No terminal, no second app: the engine runs inside OPX OSS.</string>
     <string name="home_runtime_title">Runtime</string>
     <string name="home_section_runtime">Runtime</string>
-    <string name="home_runtime_ready">Native runtime</string>
-    <string name="home_runtime_path">%1$s · python · libusb</string>
+    <string name="home_runtime_ready">Native engine</string>
+    <string name="home_runtime_path">%1$s · native engine</string>
     <string name="home_module_logs_body">Every engine and USB line, with a copy button.</string>
     <string name="home_footer">The wireless engine and its USB bridge in one native app</string>
-    <string name="home_runtime_value">Not installed yet</string>
-    <string name="home_runtime_body">The verified userland (python, the wifi4 engine and the USB bridge) downloads once on first launch.</string>
+    <string name="home_runtime_value">Ready</string>
+    <string name="home_runtime_body">The engine, its chip drivers and the USB bridge are inside the app; nothing is downloaded on first launch.</string>
     <string name="home_modules_title">Quick access</string>
     <string name="home_tools_title">TOOLS</string>
     <string name="home_tool_wifi">WiFi scanner</string>
@@ -63,7 +34,7 @@
     <string name="home_tool_logs">Logs</string>
     <string name="home_tool_logs_body">Every engine line</string>
     <string name="home_tool_settings">Settings</string>
-    <string name="home_tool_settings_body">Runtime and options</string>
+    <string name="home_tool_settings_body">Engine and options</string>
     <string name="home_recent_title">RECENT</string>
     <string name="home_recent_hs">Captured handshakes</string>
     <string name="home_recent_hs_body">Open the captures the engine saved</string>
@@ -95,7 +66,7 @@
     <string name="wifi_iface_label">Interface</string>
     <string name="wifi_chipset_label">Chipset</string>
     <string name="wifi_engine_label">Engine</string>
-    <string name="wifi_state_not_ready">Installing runtime…</string>
+    <string name="wifi_state_not_ready">Starting the engine…</string>
     <string name="wifi_state_ready">Ready</string>
     <string name="wifi_state_failed">Engine error</string>
     <string name="wifi_state_no_adapter">No USB adapter</string>
@@ -141,22 +112,22 @@
     <string name="logs_subject">OPX OSS logs</string>
 
     <string name="notification_channel_name">OPX engine</string>
-    <string name="notification_channel_description">Keeps the OPX engine and the installed runtime running.</string>
+    <string name="notification_channel_description">Keeps the OPX engine running.</string>
     <string name="notification_title">OPX OSS</string>
     <string name="notification_state_starting">Starting the engine…</string>
-    <string name="notification_state_installing">Installing the verified runtime…</string>
+    <string name="notification_state_installing">Starting the engine…</string>
     <string name="notification_state_failed">Engine error — open the app for details</string>
     <string name="notification_state_ready">Engine ready</string>
     <string name="notification_action_exit">Exit</string>
 
     <string name="nav_settings">Settings</string>
     <string name="settings_title">Settings</string>
-    <string name="settings_subtitle">Runtime, engine and log controls for this install</string>
+    <string name="settings_subtitle">Engine, storage and log controls for this install</string>
     <string name="settings_section_runtime">RUNTIME</string>
     <string name="settings_section_engine">ENGINE</string>
     <string name="settings_section_storage">STORAGE</string>
     <string name="settings_section_diagnostics">DIAGNOSTICS</string>
-    <string name="settings_prefix">Prefix</string>
+    <string name="settings_prefix">Capture directory</string>
     <string name="settings_arch">Architecture</string>
     <string name="settings_state">Engine state</string>
     <string name="settings_version">App version</string>
@@ -164,7 +135,7 @@
     <string name="settings_restart_body">Stops the engine process and starts a fresh one</string>
     <string name="settings_restarted">Restarting the engine…</string>
     <string name="settings_storage">Storage access</string>
-    <string name="settings_storage_body">Links shared storage into the runtime home</string>
+    <string name="settings_storage_body">Exports captures to shared storage</string>
     <string name="settings_storage_granted">Granted</string>
     <string name="settings_storage_missing">Not granted</string>
     <string name="settings_storage_ready">Storage links rebuilt</string>
@@ -367,7 +338,7 @@
     <string name="hs_password_copied">Password copied</string>
 
     <string name="hc_title">Crack handshake</string>
-    <string name="hc_subtitle">wifi4\'s own cracker: CPU crack, or hashcat when a GPU build is installed</string>
+    <string name="hc_subtitle">The engine's own cracker: a wordlist or a mask, run on this device</string>
     <string name="hc_tool">TOOL</string>
     <string name="hc_tool_cpu">CPU Crack</string>
     <string name="hc_tool_gpu">Hashcat (GPU)</string>
@@ -395,7 +366,7 @@
     <string name="about_title">About</string>
     <string name="about_version_value">Version %1$s</string>
     <string name="about_version_unknown">Version unknown</string>
-    <string name="about_body">OPX OSS is one app: the wireless engine, its USB host bridge and the guided interface. Everything it needs is installed from within the app — there is no separate terminal and no companion app.</string>
+    <string name="about_body">OPX OSS is one app: the wireless engine, its USB host bridge and the guided interface. Everything it needs is inside the app — there is no separate terminal, runtime or companion app.</string>
     <string name="about_license">Licensed under the GNU GPL v3.0. wifi4 is based on wifit3 by derv82.</string>
     <string name="about_section_what">What it is</string>
     <string name="about_section_legal">Legal</string>

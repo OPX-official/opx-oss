@@ -59,22 +59,14 @@ public final class UsbAutoConnect {
                 AppLog.error("UsbAutoConnect", e);
             }
         }
-        // The card may already be plugged in from before this process started. First-run
-        // setup owns the prompt, so nothing appears behind the intro.
-        if (!IntroActivity.isShowing() && introSeen(app)) ensurePermission(app);
-    }
-
-    private static boolean introSeen(Context context) {
-        return context.getSharedPreferences("opx", Context.MODE_PRIVATE)
-                .getBoolean("intro_seen", false);
-    }
-
-    /** The first launch's slides are over (or the app came back to a screen): ask if needed. */
-    public static void resume(Context context) {
-        if (context == null || IntroActivity.isShowing()) return;
-        Context app = context.getApplicationContext();
-        if (!introSeen(app)) return;
+        // The card may already be plugged in from before this process started.
         ensurePermission(app);
+    }
+
+    /** The app came back to a screen: ask for any attached adapter that needs permission. */
+    public static void resume(Context context) {
+        if (context == null) return;
+        ensurePermission(context.getApplicationContext());
     }
 
     /**
@@ -148,8 +140,6 @@ public final class UsbAutoConnect {
             }
             AppLog.info("UsbAutoConnect", "adapter attached"
                     + (device == null ? "" : ": " + device.getDeviceName()));
-            // The intro owns the first launch; its end (MainActivity.onResume) asks instead.
-            if (IntroActivity.isShowing()) return;
             ensurePermission(app);
         }
     }

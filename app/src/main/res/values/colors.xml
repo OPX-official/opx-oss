@@ -20,7 +20,6 @@
     <color name="row_locked">#61757575</color>
 
     <!-- Intro install slide: the progress track and the install-log palette. -->
-    <color name="intro_track">#1F1565C0</color>
     <color name="log_text">#E6E6E6</color>
     <color name="log_ok">#66BB6A</color>
     <color name="log_warn">#FFCA28</color>
@@ -48,15 +47,6 @@
     <color name="welcome_line_3">#FFFFFF</color>
     <color name="welcome_logo_tile">#EAF1FB</color>
     <color name="welcome_logo_stroke">#D3E2F7</color>
-    <color name="intro_ink">#1565C0</color>
-    <color name="intro_line_1">#A6C8FF</color>
-    <color name="intro_line_2">#7FB3F0</color>
-    <color name="intro_line_3">#FFFFFF</color>
-    <color name="intro_chip_bg">#140A2540</color>
-    <color name="intro_dot">#33002E5C</color>
-    <color name="intro_dot_active">#1565C0</color>
-    <color name="intro_surface">#E6FFFFFF</color>
-    <color name="intro_outline">#2A0A2540</color>
     <color name="thanks_text">#0B2B45</color>
     <color name="thanks_text_dim">#42708F</color>
     <color name="thanks_chip_fill">#14000000</color>

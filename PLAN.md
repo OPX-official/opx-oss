@@ -330,4 +330,14 @@
 
 পাঁচটি ক্যাম্পেইন (`deauth`, `decloak`, `pmkid`, `wep`, `eviltwin`/`captive`) এখন `attack_started` → প্রগ্রেস → `attack_done` পর্যন্ত যায়; WPS-এর ক্রিপ্টো/পিন/কোডেক/রেজিস্ট্রার আলাদা লেয়ার হিসেবে তৈরি ও স্ব-যাচাইকৃত।
 
-**বাকি ফেজ (M6):** উপরের ৬ নম্বর সেকশনের তালিকা অনুযায়ী।
+### M6 — সম্পন্ন (বিল্ড/রিলিজ বাদে)
+
+- [x] **রানটাইম কোড শূন্য:** `RuntimeDownloadManager` (৭৫৪), `InstallLogDialog`, `IntroActivity` (৫৩০), `IntroBackgroundView`, চারটি intro লেআউট, `assets/python`, `tools/gen-usb-ids.py`, `commons-compress` নির্ভরতা — সব বাদ।
+- [x] **`OpxRuntime` পুনর্লিখিত:** ৮৩৪ → ৯২ লাইন; শুধু ডিরেক্টরি, ABI, স্টোরেজ পারমিশন। `install`/`repair`/`run`/`environment`/`probe` আর নেই, `runCommand`/`CommandCallback`-ও নেই (কোনো কলার ছিল না)।
+- [x] **`OpxService`:** ডাউনলোড, wake lock, Wi-Fi lock, নেটওয়ার্ক auto-resume, ডাউনলোড প্রগ্রেস নোটিফিকেশন — সব বাদ; শুধু ডিরেক্টরি প্রস্তুত → `STATE_READY`।
+- [x] **UI সত্য কথা বলে:** intro স্ট্রিং/রঙ/লেআউট মুছে, “python · libusb”, “downloads once”, “installing the runtime” ধাঁচের লেখা “native engine”/“starting the engine”-এ বদলানো।
+- [x] **ডক্স:** `AUDIT.md` (মডিউল-ভিত্তিক ফিডেলিটি), README-তে নতুন লেয়ার টেবিল ও সতর্কতা।
+- [x] **USB অটুট:** `UsbHostBridge.java`-এ ডিফ = ০।
+- [ ] **রিলিজ/বিল্ড:** নির্দেশ অনুযায়ী **ইচ্ছাকৃতভাবে বন্ধ** — ব্যবহারকারী বললে তখনই `assembleDebug`/`assembleRelease` ও রিলিজ।
+
+**বাকি (শুধু অনুমতি পেলে):** APK বিল্ড ও রিলিজ; রেডিওতে আসল টেস্ট।
