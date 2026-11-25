@@ -414,8 +414,16 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 if (!hint.isEmpty() && !"null".equals(hint)) text.append("\n\n").append(hint);
             }
             usbDiag.setText(text.toString());
-            ifaceValue.setText(adapters == 0
-                    ? getString(R.string.wifi_state_no_adapter) : "wlan0");
+            if (adapters == 0) {
+                ifaceValue.setText(R.string.wifi_state_no_adapter);
+                ifaceMeta.setText("—");
+            } else {
+                // Once the engine opens a chip it names the interface ("wifi4"); until then the
+                // placeholder stands in, and the INTERFACE cell gets the same name as the header.
+                String live = connectedIface.isEmpty() ? "wlan0" : connectedIface;
+                ifaceValue.setText(live);
+                ifaceMeta.setText(live);
+            }
         } else if ("usb_attached".equals(name)) {
             // Plugging the card in anywhere in the app lands here: the interface is already up.
             String iface = event.optString("iface", "wlan0");

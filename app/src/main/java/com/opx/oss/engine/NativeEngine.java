@@ -133,8 +133,7 @@ public final class NativeEngine {
                     emit(event("ready").put("version", VERSION).put("runtime", runtime()));
                     break;
                 case "status":
-                    emit(event("status").put("iface", JSONObject.NULL).put("connected", false)
-                            .put("usb", usbState()));
+                    emit(statusEvent());
                     break;
                 case "config":
                     emit(event("config").put("dfs", command.optBoolean("dfs", false)));
@@ -373,6 +372,9 @@ public final class NativeEngine {
         // ChipRegistry's open() already ran the staged bring-up, so this only caches it.
         adapter = opened;
         chip = adapter;
+        // The card is up now: tell the screens which interface is carrying the radio, so the
+        // Wi-Fi card stops showing a dash in its INTERFACE cell while a scan runs.
+        emitQuietly(statusEvent());
         return adapter;
     }
 
@@ -754,6 +756,28 @@ public final class NativeEngine {
             // The caller still gets the event.
         }
         return runtime;
+    }
+
+    /**
+     * The radio as it is right now. {@code iface} is the name the open chip answers to; with no
+     * chip there is nothing to name, so {@code connected} is false and the UI keeps its dash.
+     */
+    private JSONObject statusEvent() {
+        JSONObject status = event("status");
+        WifiChip live = chip;
+        try {
+            if (live == null) {
+                status.put("iface", JSONObject.NULL).put("connected", false);
+            } else {
+                status.put("iface", live.name()).put("connected", true);
+                String mac = live.mac();
+                if (mac != null && !mac.isEmpty()) status.put("mac", mac);
+            }
+            status.put("usb", usbState());
+        } catch (Exception ignored) {
+            // Every value is a plain type.
+        }
+        return status;
     }
 
     private JSONObject usbState() {

@@ -60,6 +60,41 @@ replaced image is refused.
   kept intact.
 - No old runtime's name, path or dependency appears anywhere in the shipped system.
 
+## Known gaps — fix pending
+
+Measured 2026-11-25 against the vendored `wifi4/chips` tree: **379 unique `vid:pid` pairs across
+22 families** are selectable, and only **RTL8188FTV** has been proven on a real phone so far
+(bring-up, `scan`, 19 APs). The gaps below are why the rest cannot be claimed to work yet; none
+of them is a driver bug, all are in our Android layer.
+
+- **`usb_shim._Configuration.__getitem__` rejects `(interface, alternate)` tuples.** PyUSB
+  supports `cfg[(0, 0)]`; ours does `self._interfaces[index]`, so it raises
+  `TypeError: list indices must be integers or slices, not tuple`. Read at bring-up by
+  `mt7601u/transport.py:101`, `mt76x0u/transport.py:138`, `mt76x2u/transport.py:211`,
+  `rtl8192cu/transport.py:18`, `rtl8192fu/transport.py:19`, `rtl8187/tx.py:213`. Blocked
+  families: **MT7601U, MT7610U, MT7612U, RTL8187L, RTL8192CU, RTL8192FU**.
+- **`Device.speed` is missing.** `rtl8192cu/transport.py:38` (`is_high_speed()`) and
+  `rtl8814au_dkms/driver.py:71` read it; libusb already knows the answer
+  (`libusb_get_device_speed`), so expose it as a property instead of inventing a value.
+- **`Device.clear_halt(ep)` is missing.** Used by `mt7921au/firmware.py:56-58` on vendor-interface
+  claim, plus `rtl8188eus`, `ar9271_v2`, `rtl8822bu`, `rtl8814au_dkms` (those four guard with
+  try/except, so today it only silently degrades).
+- **`usb.util.find_descriptor` returns an endpoint-less stub.** `rtl8187/tx.py:214` asks for
+  `bEndpointAddress=0x02` and reads `wMaxPacketSize`; the current stub has none, so RTL8187 TX
+  cannot pad `URB_ZERO_PACKET`. It should search the real `_Interface`'s endpoints.
+- **`_registry()` runs before `usb_shim.install()`.** `opx_driver_host.start()` resolves the
+  family first, and `rt3572`/`rt5572` import `usb` at module level, so both packages fail to
+  import and are dropped from the table: `148f:3572` and `148f:5572` (Panda PAU09, wifi4 grade B)
+  answer `no driver claimed`. Install/register the shim modules before building the registry, or
+  make those two `__init__.py` files lazy.
+- **Ambiguous ids.** `2357:0137` is claimed by both `mt76x2u` and `rtl8822cu`; the later import
+  wins, so which driver runs is arbitrary. The DKMS/mainline twins resolve correctly except
+  RTL8814AU, where `rtw88_8814au` (mainline) wins although wifi4's default is the DKMS port.
+
+Beyond the shim: wifi4's own matrix grades RT2500USB and RTL8814AU **D**, leaves RTL8192CU
+**ungraded** and RT3572 **untested**, and notes that 4T4R cards (RTL8922AU) starve RX on USB 3 —
+so even after the fixes, "every chipset" is not the same claim as "every chipset well".
+
 ## Build
 
 The build is not run automatically. When you ask for an APK, it is:
