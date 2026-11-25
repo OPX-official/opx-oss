@@ -9,6 +9,9 @@ import com.opx.oss.engine.crypto.Sha1;
 import com.opx.oss.engine.crypto.Sha256;
 import com.opx.oss.engine.crypto.WpaKeys;
 import com.opx.oss.engine.crack.CpuCracker;
+import com.opx.oss.engine.crack.WpsPins;
+import com.opx.oss.engine.crypto.Aes;
+import com.opx.oss.engine.dot11.wsc.WscCrypto;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -52,6 +55,18 @@ public final class SelfCheck {
         expect(failures, "pmkid", "88787e90d6da43df43aff21fca3a3df6",
                 hex(WpaKeys.pmkid(WpaKeys.pmk("opx-selfcheck", bytes("OPX-SelfCheck")),
                         new byte[]{2, 0, 0, 0, 0, 1}, new byte[]{2, 0, 0, 0, 0, 2})));
+        // FIPS-197 appendix C.1, and the WSC key derivation over an all-zero key.
+        expect(failures, "aes-128", "69c4e0d86a7b0430d8cdb78070b4c55a",
+                hex(new Aes(hexBytes("000102030405060708090a0b0c0d0e0f"))
+                        .encryptBlock(hexBytes("00112233445566778899aabbccddeeff"))));
+        expect(failures, "wsc-kdf", "09b364567c2ed3e9b517d70240603766e38f4098b16345dcc674beb319b68ab8",
+                hex(WscCrypto.copy(WscCrypto.kdf(new byte[32], 80), 0, 32)));
+        expect(failures, "wsc-dh", "3803188372c4464b68b267a41431e7583ba86108b53901bb77b1f5992f2f99c3",
+                hex(WscCrypto.copy(WscCrypto.toFixed(
+                        WscCrypto.DH_PRIME.valueOf(2).pow(12345).mod(WscCrypto.DH_PRIME), 192), 0, 32)));
+        expect(failures, "wps-pin-checksum", "7",
+                Integer.toString(WscCrypto.pinChecksum(1234567)));
+        expect(failures, "wps-pin-spec", "12345670", WpsPins.finalize(1234567));
         expect(failures, "mask-count", "260",
                 Long.toString(CpuCracker.count("?d?l")));
         expect(failures, "mask-first", "0a", CpuCracker.expand("?d?l").next());
@@ -64,6 +79,14 @@ public final class SelfCheck {
 
     private static byte[] bytes(String text) {
         return text.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] hexBytes(String text) {
+        byte[] out = new byte[text.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = (byte) Integer.parseInt(text.substring(i * 2, i * 2 + 2), 16);
+        }
+        return out;
     }
 
     private static String hex(byte[] data) {
