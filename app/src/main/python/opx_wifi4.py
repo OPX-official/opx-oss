@@ -138,9 +138,24 @@ def stop_scan():
     return bool(host._run(run(), timeout=30.0))
 
 
-def _ap_row(ap) -> dict:
+def _clients_by_bssid():
+    """wifi4's live client table, grouped by the AP each client was last seen with."""
+    table = {}
+    try:
+        for client in _array.clients.values():
+            bssid = (getattr(client, "bssid", None) or "").lower()
+            if bssid:
+                table.setdefault(bssid, []).append(str(client.mac).lower())
+    except Exception:
+        traceback.print_exc()
+    return table
+
+
+def _ap_row(ap, clients_by_bssid=None) -> dict:
     """One wifi4 ``AccessPoint`` as the app's protocol describes a network."""
     channel = int(getattr(ap, "channel", 0) or 0)
+    bssid = (ap.bssid or "").lower()
+    clients = list((clients_by_bssid or {}).get(bssid, ()))
     return {
         "ssid": ap.ssid or "",
         "bssid": (ap.bssid or "").lower(),
@@ -163,7 +178,8 @@ def _ap_row(ap) -> dict:
         "chipset": getattr(ap, "chipset", None),
         "beacons": int(getattr(ap, "beacons", 0) or 0),
         "handshakes": len(getattr(ap, "handshakes", {}) or {}),
-        "clients": len(getattr(getattr(ap, "identity", None), "clients", ()) or ()),
+        "clients": len(clients),
+        "clients_list": clients,
     }
 
 
@@ -172,9 +188,10 @@ def targets():
     if _array is None:
         return json.dumps([])
     rows = []
+    clients = _clients_by_bssid()
     for ap in _array.get_access_points():
         try:
-            rows.append(_ap_row(ap))
+            rows.append(_ap_row(ap, clients))
         except Exception:  # one odd AP must not hide the rest
             traceback.print_exc()
     rows.sort(key=lambda row: row.get("signal") or -100, reverse=True)

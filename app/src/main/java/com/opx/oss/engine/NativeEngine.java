@@ -89,6 +89,8 @@ public final class NativeEngine {
     /** True while wifi4's backend is the one hopping the card for a scan. */
     private volatile boolean wifi4Scanning;
     private volatile int wifi4Count;
+    /** Last signal emitted per BSSID, so a poll only pushes rows that actually changed. */
+    private final java.util.Map<String, Integer> wifi4Sent = new java.util.HashMap<>();
 
     private NativeEngine(Context context, Listener listener) {
         this.context = context;
@@ -734,6 +736,9 @@ public final class NativeEngine {
         wifi4Attached = true;
         wifi4Scanning = true;
         wifi4Count = 0;
+        synchronized (wifi4Sent) {
+            wifi4Sent.clear();
+        }
         JSONObject begun = event("scan_started");
         try {
             begun.put("adapter", "wifi4").put("backend", "wifi4");
@@ -747,7 +752,8 @@ public final class NativeEngine {
             while (wifi4Scanning && System.currentTimeMillis() < deadline) {
                 wifi4Count = wifi4Refresh();
                 try {
-                    Thread.sleep(1000);
+                    // wifi4's sink updates per frame; poll fast enough that the list behaves live.
+                    Thread.sleep(250);
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     break;
@@ -789,6 +795,14 @@ public final class NativeEngine {
 
     /** Emit wifi4's AP table as network rows; returns how many rows it holds. */
     private int wifi4Refresh() {
+        return wifi4Refresh(false);
+    }
+
+    /**
+     * Emit wifi4's rows. Without {@code force} only a new AP or a signal that moved by 3 dBm
+     * goes out, so a 250 ms poll fills the list as frames arrive without re-sending everything.
+     */
+    private int wifi4Refresh(boolean force) {
         PythonChip.ensurePython(context);
         String json = PythonChip.backendText("targets");
         JSONArray rows;
@@ -799,18 +813,26 @@ public final class NativeEngine {
             return 0;
         }
         JSONArray out = new JSONArray();
-        for (int i = 0; i < rows.length(); i++) {
-            JSONObject row = rows.optJSONObject(i);
-            if (row == null) continue;
-            try {
-                JSONObject network = new JSONObject(row.toString());
-                network.put("event", "network");
-                network.put("vendor", row.optString("vendor", ""));
-                network.put("security", bucketFor(row.optString("privacy")));
-                out.put(network);
-                emitQuietly(network);
-            } catch (Exception ignored) {
-                // One malformed row must not hide the rest.
+        synchronized (wifi4Sent) {
+            for (int i = 0; i < rows.length(); i++) {
+                JSONObject row = rows.optJSONObject(i);
+                if (row == null) continue;
+                try {
+                    JSONObject network = new JSONObject(row.toString());
+                    network.put("event", "network");
+                    network.put("vendor", row.optString("vendor", ""));
+                    network.put("security", bucketFor(row.optString("privacy")));
+                    out.put(network);
+                    String bssid = row.optString("bssid").toLowerCase(java.util.Locale.US);
+                    int signal = row.optInt("signal", -100);
+                    Integer before = wifi4Sent.get(bssid);
+                    if (force || before == null || Math.abs(before - signal) >= 3) {
+                        wifi4Sent.put(bssid, signal);
+                        emitQuietly(network);
+                    }
+                } catch (Exception ignored) {
+                    // One malformed row must not hide the rest.
+                }
             }
         }
         JSONObject reply = event("wifi4_targets");
@@ -949,6 +971,11 @@ public final class NativeEngine {
 
     /** Every AP with the attacks the engine can actually run against it. */
     private void targets() throws Exception {
+        if (wifi4Attached) {
+            // The card is driven by wifi4's array: its table is the truth, clients included.
+            wifi4TargetsAsTargets();
+            return;
+        }
         JSONArray targets = new JSONArray();
         for (AccessPoint ap : scan.list()) {
             JSONObject entry = ap.toJson();
@@ -980,6 +1007,58 @@ public final class NativeEngine {
             targets.put(entry);
         }
         emit(event("targets").put("targets", targets).put("handshakes", handshakes.size()));
+    }
+
+    /** wifi4's table with the app's attack list, so the target sheet reads wifi4's clients. */
+    private void wifi4TargetsAsTargets() {
+        String json = PythonChip.backendText("targets");
+        JSONArray rows;
+        try {
+            rows = new JSONArray(json == null || json.isEmpty() ? "[]" : json);
+        } catch (Exception broken) {
+            error("wifi4 targets: " + broken.getMessage());
+            return;
+        }
+        JSONArray out = new JSONArray();
+        int handshakeCount = 0;
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.optJSONObject(i);
+            if (row == null) continue;
+            try {
+                row.put("security", bucketFor(row.optString("privacy")));
+                row.put("attacks", attacksFor(row));
+                handshakeCount += row.optInt("handshakes");
+                out.put(row);
+            } catch (Exception ignored) {
+                // One malformed row must not hide the rest.
+            }
+        }
+        JSONObject reply = event("targets");
+        try {
+            reply.put("targets", out).put("handshakes", handshakeCount).put("backend", "wifi4");
+        } catch (Exception ignored) {
+            // Plain values.
+        }
+        emitQuietly(reply);
+    }
+
+    /** The attacks the app offers for one wifi4 row, by the same rules as the Java path. */
+    private static JSONArray attacksFor(JSONObject row) {
+        JSONArray attacks = new JSONArray();
+        String encryption = row.optString("privacy");
+        attacks.put("deauth");
+        if (row.optBoolean("hidden")) attacks.put("decloak");
+        if ("WEP".equals(encryption)) {
+            attacks.put("wep");
+        } else if (encryption.startsWith("WPA2") || encryption.startsWith("WPA3")) {
+            attacks.put("pmkid");
+        }
+        if (row.optBoolean("wps")) attacks.put("wps");
+        if (!row.optString("ssid", "").isEmpty()) {
+            attacks.put("eviltwin");
+            attacks.put("captive");
+        }
+        return attacks;
     }
 
     private JSONObject runtime() {
