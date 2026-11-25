@@ -265,6 +265,10 @@ PYAPT
     > "$WORK/prune-$arch.log" 2>&1 || { cat "$WORK/prune-$arch.log"; exit 1; }
   grep -E '^  (drop|pruned|clean)' "$WORK/prune-$arch.log" | tail -4
 
+  # What the upstream tree installs as its own banner and mirror list is not OPX OSS's to
+  # ship: the runtime's welcome text and package sources name this app.
+  python3 "$ROOT/tools/rebrand-runtime.py" "$merge/$PREFIX_REL"
+
   # Drop the build-only half before packing: headers, static archives, man pages, docs and
   # python's own test suite. See tools/prune-size.py; the same pass runs on the bootstrap.
   tree_kb="$(du -sk "$merge" | cut -f1)"
@@ -282,6 +286,7 @@ PYAPT
     "$OUT/base/bootstrap/bootstrap-$arch.zip" > "$WORK/prune-boot-$arch.log" 2>&1 \
     || { cat "$WORK/prune-boot-$arch.log"; exit 1; }
   grep -E '^  (drop|pruned|clean)' "$WORK/prune-boot-$arch.log" | tail -4
+  python3 "$ROOT/tools/rebrand-runtime.py" "$OUT/base/bootstrap/bootstrap-$arch.zip"
   printf '  payload  %s (%s debs)\n' "payload/$arch/opx-base_${VERSION}_${arch}.tar.gz" "$debian_count"
   printf '  bootstrap bootstrap-%s.zip\n' "$arch"
 done
