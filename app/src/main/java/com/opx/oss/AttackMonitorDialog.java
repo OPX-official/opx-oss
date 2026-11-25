@@ -77,7 +77,7 @@ final class AttackMonitorDialog {
     private boolean finished;
 
     /** The rates the sparkline draws, in the same order as its labelled series. */
-    private static final String[] RATE_KEYS = {"inject", "deauth", "eapol"};
+    private static final String[] RATE_KEYS = {"inject", "data", "eapol", "beacon"};
     private final float[] rateShown = new float[RATE_KEYS.length];
     private Runnable rateAnim;
 
@@ -132,13 +132,16 @@ final class AttackMonitorDialog {
         anim.playAnimation();
 
         rateView.setAccent(ContextCompat.getColor(context, R.color.stryker_accent));
-        // Three rates, one plot: every line carries its own colour and its name above the peak.
+        // wifi4's dashboard classes share the one plot: injection, data, EAPOL and beacons, each
+        // line in its own colour with its name above the peak.
         rateView.setSeries(
                 new String[]{context.getString(R.string.wifi_rate_inject),
-                        context.getString(R.string.wifi_rate_deauth),
-                        context.getString(R.string.wifi_rate_eapol)},
+                        context.getString(R.string.wifi_rate_data),
+                        context.getString(R.string.wifi_rate_eapol),
+                        context.getString(R.string.wifi_rate_beacon)},
                 new int[]{ContextCompat.getColor(context, R.color.stryker_accent),
-                        Color.parseColor("#FF7043"), Color.parseColor("#66BB6A")});
+                        Color.parseColor("#FF7043"), Color.parseColor("#66BB6A"),
+                        Color.parseColor("#AB47BC")});
         buildStagesFor(this.kind);
 
         tabProgress.setOnClickListener(v -> showTab(true));

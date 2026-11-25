@@ -226,10 +226,15 @@ public final class NativeEngine {
                     break;
                 }
                 case "attack":
-                    attack(command);
+                    if (wifi4Attached) {
+                        wifi4AttackCommand(command);
+                    } else {
+                        attack(command);
+                    }
                     break;
                 case "stop_attack":
-                    stopAttack();
+                    if (wifi4Attached) wifi4StopAttack();
+                    else stopAttack();
                     break;
                 case "attack_status":
                     attackStatus();
@@ -850,6 +855,16 @@ public final class NativeEngine {
         PythonChip.ensurePython(context);
         boolean running = PythonChip.backendBool("attack", kind,
                 bssid == null || bssid.isEmpty() ? null : bssid);
+        if (running) {
+            JSONObject started = event("attack_started");
+            try {
+                started.put("kind", kind).put("bssid", bssid);
+            } catch (Exception ignored) {
+                // Two plain strings.
+            }
+            emitQuietly(started);
+            watchWifi4Campaign(kind);
+        }
         JSONObject reply = event("wifi4_attack");
         try {
             reply.put("running", running).put("kind", kind)
@@ -858,6 +873,84 @@ public final class NativeEngine {
             // Plain types.
         }
         emitQuietly(reply);
+    }
+
+    /**
+     * The app's monitor closes on {@code attack_done}, which only the Java campaigns emit: poll
+     * wifi4's campaign status until it reports not running and close the monitor with it.
+     */
+    private void watchWifi4Campaign(String kind) {
+        Thread watcher = new Thread(() -> {
+            PythonChip.ensurePython(context);
+            java.util.Map<String, Integer> before = new java.util.HashMap<>();
+            long startedAt = System.currentTimeMillis();
+            String[] keys = {"inject", "data", "eapol", "beacon"};
+            for (int i = 0; i < 7200; i++) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException stopped) {
+                    return;
+                }
+                try {
+                    String json = PythonChip.backendText("attack_status");
+                    JSONObject status = new JSONObject(json == null || json.isEmpty()
+                            ? "{}" : json);
+                    boolean running = status.optBoolean("running");
+                    JSONObject snapshot = new JSONObject(PythonChip.backendText("progress"));
+                    JSONObject counters = snapshot.optJSONObject("counters");
+                    // wifi4's counters are cumulative: the graph needs the per-second delta.
+                    JSONObject rates = new JSONObject();
+                    JSONArray metrics = new JSONArray();
+                    long seconds = Math.max(1, (System.currentTimeMillis() - startedAt) / 1000);
+                    metrics.put(metric("elapsed", "ELAPSED", seconds + "s"));
+                    for (String key : keys) {
+                        int now = counters == null ? 0 : counters.optInt(key);
+                        Integer was = before.put(key, now);
+                        if (was != null) rates.put(key, Math.max(0, now - was));
+                        metrics.put(metric(key, rateLabel(key), String.valueOf(now)));
+                    }
+                    JSONObject entry = event("attack_progress");
+                    entry.put("kind", kind).put("rates", rates).put("metrics", metrics);
+                    JSONArray lines = snapshot.optJSONArray("lines");
+                    if (lines != null) entry.put("lines", lines);
+                    emitQuietly(entry);
+                    if (!running) {
+                        JSONObject done = event("attack_done");
+                        done.put("ok", true).put("kind", kind).put("summary", kind + " finished");
+                        emitQuietly(done);
+                        return;
+                    }
+                } catch (Exception broken) {
+                    AppLog.error("OpxEngine", broken);
+                    return;
+                }
+            }
+        }, "wifi4-attack-watch");
+        watcher.setDaemon(true);
+        watcher.start();
+    }
+
+    private static JSONObject metric(String key, String label, String value) {
+        JSONObject row = new JSONObject();
+        try {
+            row.put("key", key).put("label", label).put("value", value);
+        } catch (Exception ignored) {
+            // Three plain strings.
+        }
+        return row;
+    }
+
+    private String rateLabel(String key) {
+        switch (key) {
+            case "inject":
+                return context.getString(com.opx.oss.R.string.wifi_rate_inject);
+            case "data":
+                return context.getString(com.opx.oss.R.string.wifi_rate_data);
+            case "eapol":
+                return context.getString(com.opx.oss.R.string.wifi_rate_eapol);
+            default:
+                return context.getString(com.opx.oss.R.string.wifi_rate_beacon);
+        }
     }
 
     private void wifi4StopAttack() {
@@ -980,15 +1073,15 @@ public final class NativeEngine {
         for (AccessPoint ap : scan.list()) {
             JSONObject entry = ap.toJson();
             JSONArray attacks = new JSONArray();
-            attacks.put("deauth");
-            if (ap.hidden) attacks.put("decloak");
+            attacks.put(attackEntry("deauth", true, ""));
+            if (ap.hidden) attacks.put(attackEntry("decloak", true, ""));
             if ("WEP".equals(ap.encryption)) {
-                attacks.put("wep");
+                attacks.put(attackEntry("wep", true, ""));
             } else if (ap.encryption.startsWith("WPA2") || ap.encryption.startsWith("WPA3")) {
-                attacks.put("pmkid");
+                attacks.put(attackEntry("pmkid", true, ""));
             }
             if (ap.wps) {
-                attacks.put("wps");
+                attacks.put(attackEntry("wps", true, ""));
                 try {
                     java.util.List<String> pins = WpsPins.forTarget(WpsPinDb.load(context),
                             Mac.of(ap.bssid), ap.ssid, null, null);
@@ -1000,8 +1093,8 @@ public final class NativeEngine {
                 }
             }
             if (!ap.ssid.isEmpty()) {
-                attacks.put("eviltwin");
-                attacks.put("captive");
+                attacks.put(attackEntry("eviltwin", true, ""));
+                attacks.put(attackEntry("captive", true, ""));
             }
             entry.put("attacks", attacks);
             targets.put(entry);
@@ -1042,23 +1135,60 @@ public final class NativeEngine {
         emitQuietly(reply);
     }
 
-    /** The attacks the app offers for one wifi4 row, by the same rules as the Java path. */
-    private static JSONArray attacksFor(JSONObject row) {
+    /**
+     * The attacks wifi4's own campaigns can run against one of its rows: deauth, decloak (hidden),
+     * PMKID (WPA2/WPA3) and the WPS PIN. WEP, Evil Twin and the captive portal are the Java
+     * campaigns, which cannot share the card while wifi4's array holds it.
+     */
+    private JSONArray attacksFor(JSONObject row) {
         JSONArray attacks = new JSONArray();
         String encryption = row.optString("privacy");
-        attacks.put("deauth");
-        if (row.optBoolean("hidden")) attacks.put("decloak");
-        if ("WEP".equals(encryption)) {
-            attacks.put("wep");
-        } else if (encryption.startsWith("WPA2") || encryption.startsWith("WPA3")) {
-            attacks.put("pmkid");
+        attacks.put(attackEntry("deauth", true, ""));
+        if (row.optBoolean("hidden")) attacks.put(attackEntry("decloak", true, ""));
+        if (encryption.startsWith("WPA2") || encryption.startsWith("WPA3")) {
+            attacks.put(attackEntry("pmkid", true, ""));
         }
-        if (row.optBoolean("wps")) attacks.put("wps");
-        if (!row.optString("ssid", "").isEmpty()) {
-            attacks.put("eviltwin");
-            attacks.put("captive");
+        if (row.optBoolean("wps")) {
+            boolean locked = row.optBoolean("wps_locked");
+            attacks.put(attackEntry("wps", !locked,
+                    locked ? context.getString(com.opx.oss.R.string.wifi_attack_wps_locked) : ""));
         }
         return attacks;
+    }
+
+    /** One attack as the target sheet reads it: a kind, a label, and whether it can start. */
+    private static JSONObject attackEntry(String kind, boolean enabled, String reason) {
+        JSONObject entry = new JSONObject();
+        try {
+            entry.put("kind", kind).put("enabled", enabled)
+                    .put("reason", reason == null ? "" : reason);
+        } catch (Exception ignored) {
+            // Four plain values cannot fail to serialize.
+        }
+        return entry;
+    }
+
+    /** The UI's attack command, run on wifi4's campaigns while wifi4 holds the card. */
+    private void wifi4AttackCommand(JSONObject command) {
+        String kind = command.optString("kind");
+        String bssid = command.optString("bssid");
+        if (bssid.isEmpty()) {
+            error("no target BSSID");
+            return;
+        }
+        String mapped = "wps".equals(kind) ? "pin" : kind;
+        switch (mapped) {
+            case "deauth":
+            case "pmkid":
+            case "pin":
+            case "pbc":
+            case "decloak":
+                wifi4Attack(mapped, bssid);
+                return;
+            default:
+                error(kind + " runs on the Java engine, which wifi4's array is holding the card from");
+                return;
+        }
     }
 
     private JSONObject runtime() {

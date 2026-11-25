@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 import traceback
 
 import opx_driver_host as host
@@ -255,9 +256,31 @@ def attack_status():
     })
 
 
+def progress():
+    """The running campaign's status lines and wifi4's own packet counters for its target.
+
+    ``WlanSink`` tallies every frame it hears and ``PacketStats.record_tx`` tallies every frame a
+    campaign injects, so these counters are the same ones wifi4's dashboard graph draws from.
+    """
+    out = {"lines": [], "counters": {}, "kind": _kind, "bssid": _bssid}
+    campaign = _campaign
+    if campaign is None or _array is None:
+        return json.dumps(out)
+    try:
+        target = getattr(campaign, "target", None)
+        bssid = (getattr(target, "bssid", None) or _bssid or "").lower()
+        if hasattr(campaign, "status_under_dash"):
+            out["lines"] = [str(line) for line in campaign.status_under_dash(_array, time.time())]
+        if bssid:
+            snapshot = _array.packet_stats.snapshot(bssid)
+            out["counters"] = {str(k): int(v) for k, v in snapshot.items()}
+    except Exception:
+        traceback.print_exc()
+    return json.dumps(out)
+
+
 def campaigns():
     return json.dumps(list(_CAMPAIGN_KEYS))
-
 
 def available():
     """True when the backend's packages are vendored and importable (no card needed)."""
