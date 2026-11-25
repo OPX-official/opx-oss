@@ -12,6 +12,7 @@ import com.opx.oss.engine.crack.CpuCracker;
 import com.opx.oss.engine.crack.WpsPins;
 import com.opx.oss.engine.crypto.Aes;
 import com.opx.oss.engine.dot11.wsc.WscCrypto;
+import com.opx.oss.engine.dot11.wsc.WscMessage;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -67,6 +68,12 @@ public final class SelfCheck {
         expect(failures, "wps-pin-checksum", "7",
                 Integer.toString(WscCrypto.pinChecksum(1234567)));
         expect(failures, "wps-pin-spec", "12345670", WpsPins.finalize(1234567));
+        WscMessage m1 = WscMessage.m1(new byte[6], new byte[192], new byte[16], 0x0008);
+        expect(failures, "wsc-roundtrip", m1.ids().toString(),
+                WscMessage.parse(m1.body()).ids().toString());
+        m1.authenticate(new byte[32], new byte[]{1});
+        expect(failures, "wsc-authenticator", "true",
+                Boolean.toString(m1.authentic(new byte[32], new byte[]{1})));
         expect(failures, "mask-count", "260",
                 Long.toString(CpuCracker.count("?d?l")));
         expect(failures, "mask-first", "0a", CpuCracker.expand("?d?l").next());
