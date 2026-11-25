@@ -257,7 +257,7 @@
 - [x] **রিলিজ বন্ধ:** `.github/workflows/build.yml` থেকে দুটি রিলিজ-স্টেপ বাদ, `latest` রিলিজ ও ট্যাগ মুছে ফেলা — প্রজেক্ট শেষ না হওয়া পর্যন্ত Releases খালি, শুধু রান-আর্টিফ্যাক্ট।
 - [ ] ডিভাইসে `devices` → `open` → bulk I/O পরীক্ষা (ফোনে দেখতে হবে)।
 
-### M2 — চলছে (আনুমানিক ৮৫%)
+### M2 — সম্পন্ন (ডিভাইস-টেস্ট বাদে)
 
 - [x] **ক্রিপ্টো নিজের হাতে:** `engine/crypto/{Sha1,Sha256,Hmac,Pbkdf2,Rc4,Crc32}.java` — কোনো বাইরের হ্যাশ লাইব্রেরি নেই।
 - [x] **WPA কী-স্কেডুল:** `engine/crypto/WpaKeys.java` — PMK (PBKDF2 4096), PRF-512 → PTK/KCK, EAPOL MIC (HMAC-SHA1-128), PMKID — রেফারেন্স `crack/wpa_psk.py` ও `dot11/wpa.py` অনুযায়ী।
@@ -277,7 +277,10 @@
 - [x] **RTL8187 MAC ব্রিং-আপ:** `chips/rtl8187/Rtl8187Mac.java` — anaparam, soft reset (CMD/EEPROM লোড অপেক্ষা), FE18 magic, pin defaults, RF timing/para, page-1 tail, `start()` (RX_CONF/MAR/CW/TX_CONF/CMD ল্যাচ)।
 - [x] **RTL8187 RF + চ্যানেল:** `chips/rtl8187/Rtl8187Phy.java` — PHY ৪-বাইট উইন্ডো, RF বিট-ব্যাং ও 8051 পাথ, সিন্থ টেবিল (ch 1–14), `configChannel()` (TX_CONF MAC-loopback ব্র্যাকেট সহ), RF stop।
 - [x] **বিল্ড সবুজ:** রান **#45627284768** (`13757bf`)।
-- [ ] RF init টেবিল (rtl8225z2 সিকোয়েন্স) → `WifiChip` ইমপ্লিমেন্টেশন (`Rtl8187Chip`) → `scan`/`stop_scan` লাইভ ইন-প্রসেস।
+- [x] **RF init:** `chips/rtl8187/Rtl8225z2.java` — z2 সিকোয়েন্স (০x০–০xF, rxgain ৯১ সারি, ক্যালিব্রেশন রিট্রাই, AGC ১২৮, OFDM ৪০, CCK ২৭, সেনসিটিভিটি রো, TX-power কার্ভ), `Rtl8187Phy.readRf()` বিট-ব্যাং রিড।
+- [x] **চিপ ইমপ্লিমেন্টেশন:** `chips/rtl8187/Rtl8187Chip.java` — EEPROM MAC, asic rev, `initHw`, `start`, `setChannel` (TX-power + config), `transmit` (সিকোয়েন্স + ডিস্ক্রিপ্টর), RX থ্রেড → `FrameSink`।
+- [x] **স্ক্যান লাইভ:** `NativeEngine.scan()` — প্রথম সাপোর্টেড অ্যাডাপ্টার খোলে, `ScanEngine` চ্যানেল প্ল্যানে হপ করে, বেকন ফোলে, `scan_started`/`scan_done` ইভেন্ট; `stop_scan` অ্যাডাপ্টার বন্ধ করে।
+- [x] **বিল্ড সবুজ:** রান **#45628614182** (`9fb53d7`)।
 - [ ] চিপসেট ড্রাইভার বাকি পরিবার — যেগুলোর ব্রিং-আপে ভেন্ডর ফার্মওয়্যার ব্লব লাগে সেগুলো আমাদের কোডে সম্ভব নয় (নিচের সীমা দেখো)।
 - [ ] **ফার্মওয়্যার সীমা (গুরুত্বপূর্ণ):** রেফারেন্সের AR9271/RT5370/mt76/RTL8xxxU ব্রিং-আপ কার্ডে ভেন্ডর ফার্মওয়্যার ব্লব পাঠায়; বাইরের বাইনারি নিষিদ্ধ হওয়ায় ওই পরিবারগুলোর ব্লব আমাদের নিজের কোডে লেখা সম্ভব নয়। ফার্মওয়্যার-মুক্ত পরিবার (RTL8187, RT2500) নিয়ে ড্রাইভার শুরু হবে, তারপর বাকিগুলো।
 
