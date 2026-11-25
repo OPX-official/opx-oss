@@ -42,9 +42,6 @@ import java.util.Map;
  */
 final class AttackMonitorDialog {
 
-    private static final long RATE_STEP_MS = 60L;
-    private static final int RATE_STEPS = 8;
-
     private final Context context;
     private final Dialog dialog;
     private final LottieAnimationView anim;
@@ -61,8 +58,7 @@ final class AttackMonitorDialog {
     private final TextView tabTerminal;
     private final LinearLayout stages;
     private final LinearLayout metrics;
-    private final SparklineView rateView;
-    private final View rateBlock;
+    private final PacketMeter meter;
     private final View progressScroll;
     private final View consoleScroll;
     private final com.google.android.material.button.MaterialButton stop;
@@ -75,11 +71,6 @@ final class AttackMonitorDialog {
     private final Map<String, TextView> metricValues = new LinkedHashMap<>();
     private final StringBuilder log = new StringBuilder();
     private boolean finished;
-
-    /** The rates the sparkline draws, in the same order as its labelled series. */
-    private static final String[] RATE_KEYS = {"inject", "data", "eapol", "beacon"};
-    private final float[] rateShown = new float[RATE_KEYS.length];
-    private Runnable rateAnim;
 
     AttackMonitorDialog(Context context, String kind, String ssid, String bssid, int channel) {
         this.context = context;
@@ -109,8 +100,7 @@ final class AttackMonitorDialog {
         tabTerminal = content.findViewById(R.id.attack_tab_terminal);
         stages = content.findViewById(R.id.attack_stages);
         metrics = content.findViewById(R.id.attack_metrics);
-        rateView = content.findViewById(R.id.attack_rate);
-        rateBlock = content.findViewById(R.id.attack_rate_block);
+        meter = new PacketMeter(context, content.findViewById(R.id.attack_meter), this.kind);
         progressScroll = content.findViewById(R.id.attack_body_scroll);
         consoleScroll = content.findViewById(R.id.attack_console_scroll);
         stop = content.findViewById(R.id.attack_stop);
@@ -131,17 +121,6 @@ final class AttackMonitorDialog {
         anim.setRepeatCount(-1);
         anim.playAnimation();
 
-        rateView.setAccent(ContextCompat.getColor(context, R.color.stryker_accent));
-        // wifi4's dashboard classes share the one plot: injection, data, EAPOL and beacons, each
-        // line in its own colour with its name above the peak.
-        rateView.setSeries(
-                new String[]{context.getString(R.string.wifi_rate_inject),
-                        context.getString(R.string.wifi_rate_data),
-                        context.getString(R.string.wifi_rate_eapol),
-                        context.getString(R.string.wifi_rate_beacon)},
-                new int[]{ContextCompat.getColor(context, R.color.stryker_accent),
-                        Color.parseColor("#FF7043"), Color.parseColor("#66BB6A"),
-                        Color.parseColor("#AB47BC")});
         buildStagesFor(this.kind);
 
         tabProgress.setOnClickListener(v -> showTab(true));
@@ -245,6 +224,7 @@ final class AttackMonitorDialog {
     }
 
     void dismiss() {
+        meter.stop();
         handler.removeCallbacksAndMessages(null);
         dialog.dismiss();
     }
@@ -315,8 +295,8 @@ final class AttackMonitorDialog {
             }
         }
 
-        JSONObject rates = progress.optJSONObject("rates");
-        if (rates != null) animateRates(rates);
+        // wifi4's own per-class counters: each row of the meter rises on its own.
+        meter.update(progress.optJSONObject("rates"));
     }
 
     private StageRow addStage(String key, String label, String state) {
@@ -374,7 +354,10 @@ final class AttackMonitorDialog {
             case "deauth":
                 return R.drawable.deauth;
             case "eapol":
+            case "wep_iv":
                 return R.drawable.key;
+            case "data":
+                return R.drawable.wifi;
             case "clients":
                 return R.drawable.devices;
             case "beacon":
@@ -386,39 +369,6 @@ final class AttackMonitorDialog {
             default:
                 return R.drawable.bolt;
         }
-    }
-
-    /**
-     * The engine samples once a second; Stryker's monitor pushes several points per second, so the
-     * graph rises smoothly instead of stepping. Each new rate is drawn in a short ramp, which is
-     * what gives the injection line its heartbeat look.
-     */
-    /**
-     * Each of the engine's rates gets its own ramp, so the three lines move together instead of
-     * as one summed line whose height said nothing about which frame type was going out.
-     */
-    private void animateRates(JSONObject rates) {
-        if (finished) return;
-        if (rateAnim != null) handler.removeCallbacks(rateAnim);
-        final float[] from = rateShown.clone();
-        final float[] to = new float[RATE_KEYS.length];
-        if (rates != null) {
-            for (int i = 0; i < RATE_KEYS.length; i++) to[i] = (float) rates.optDouble(RATE_KEYS[i], 0);
-        }
-        final int[] step = {0};
-        rateAnim = new Runnable() {
-            @Override
-            public void run() {
-                step[0]++;
-                float t = Math.min(1f, step[0] / (float) RATE_STEPS);
-                for (int i = 0; i < RATE_KEYS.length; i++) {
-                    rateShown[i] = from[i] + (to[i] - from[i]) * t;
-                    rateView.push(i, rateShown[i]);
-                }
-                if (step[0] < RATE_STEPS) handler.postDelayed(this, RATE_STEP_MS);
-            }
-        };
-        handler.post(rateAnim);
     }
 
     private void appendLog(String line) {
@@ -494,7 +444,7 @@ final class AttackMonitorDialog {
         anim.setRepeatCount(0);
         anim.setAnimation(ok ? R.raw.confetti : R.raw.error);
         anim.playAnimation();
-        animateRates(null);
+        meter.idle();
         primary.setVisibility(View.GONE);
 
         String text = context.getString(ok ? R.string.wifi_attack_done_ok : R.string.wifi_attack_done_fail,

@@ -223,11 +223,14 @@
                             android:textColor="@color/grey"
                             android:textSize="10sp" />
 
-                        <com.opx.oss.SparklineView
-                            android:id="@+id/attack_rate"
+                        <!-- wifi4's packet dashboard: one labelled row per frame class, each
+                             on its own scale, each rising when that class goes out. -->
+                        <LinearLayout
+                            android:id="@+id/attack_meter"
                             android:layout_width="match_parent"
-                            android:layout_height="56dp"
-                            android:layout_marginTop="4dp" />
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:orientation="vertical" />
                     </LinearLayout>
 
                     <com.airbnb.lottie.LottieAnimationView

@@ -916,7 +916,9 @@ public final class NativeEngine {
             PythonChip.ensurePython(context);
             java.util.Map<String, Integer> before = new java.util.HashMap<>();
             long startedAt = System.currentTimeMillis();
-            String[] keys = {"inject", "data", "eapol", "beacon"};
+            // wifi4's dashboard classes: the three rate lines the meter draws, plus EAPOL and
+            // the WEP IV counter (the same two rows wifi4 swaps by encryption family).
+            String[] keys = {"data", "inject", "deauth", "eapol", "wep_iv"};
             int logSeen = 0;
             for (int i = 0; i < 7200; i++) {
                 try {
@@ -950,8 +952,11 @@ public final class NativeEngine {
                     for (String key : keys) {
                         int now = counters == null ? 0 : counters.optInt(key);
                         Integer was = before.put(key, now);
-                        if (was != null) rates.put(key, Math.max(0, now - was));
-                        metrics.put(metric(key, rateLabel(key), String.valueOf(now)));
+                        int rate = was == null ? 0 : Math.max(0, now - was);
+                        rates.put(key, rate);
+                        // The chips above the meter carry the same number its row draws, so the
+                        // top of the screen says which class is running and how fast.
+                        metrics.put(metric(key, rateLabel(key), rate + "/s"));
                     }
                     // wifi4's campaigns log instead of emitting events: forward the new lines so
                     // the monitor's Terminal tab shows what the backend is doing.
@@ -1009,8 +1014,12 @@ public final class NativeEngine {
                 return context.getString(com.opx.oss.R.string.wifi_rate_inject);
             case "data":
                 return context.getString(com.opx.oss.R.string.wifi_rate_data);
+            case "deauth":
+                return context.getString(com.opx.oss.R.string.wifi_rate_deauth);
             case "eapol":
                 return context.getString(com.opx.oss.R.string.wifi_rate_eapol);
+            case "wep_iv":
+                return context.getString(com.opx.oss.R.string.wifi_rate_wep_iv);
             default:
                 return context.getString(com.opx.oss.R.string.wifi_rate_beacon);
         }

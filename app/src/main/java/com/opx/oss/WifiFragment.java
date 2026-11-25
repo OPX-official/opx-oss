@@ -106,6 +106,12 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
 
     // The running-attack card.
     private View attackCard;
+    // The live meter: wifi4's per-class rows, on screen while a campaign is injecting.
+    private View liveCard;
+    private TextView liveKindView;
+    private TextView liveMeta;
+    private PacketMeter liveMeter;
+    private String liveKind = "";
     private LottieAnimationView attackAnim;
     private TextView attackTitle;
     private TextView attackSub;
@@ -178,6 +184,9 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         adapter.setOnNetworkClick(this::openTarget);
 
         attackCard = view.findViewById(R.id.wifi_attack_card);
+        liveCard = view.findViewById(R.id.wifi_live_card);
+        liveKindView = view.findViewById(R.id.wifi_live_kind);
+        liveMeta = view.findViewById(R.id.wifi_live_meta);
         attackAnim = view.findViewById(R.id.wifi_attack_anim);
         attackTitle = view.findViewById(R.id.wifi_attack_title);
         attackSub = view.findViewById(R.id.wifi_attack_sub);
@@ -467,6 +476,10 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 captiveDialog = null;
             }
             if (attackCard != null) attackCard.setVisibility(View.GONE);
+            if (liveMeter != null) liveMeter.stop();
+            liveMeter = null;
+            liveKind = "";
+            if (liveCard != null) liveCard.setVisibility(View.GONE);
         } else if ("status".equals(name)) {
             boolean connected = event.optBoolean("connected");
             String iface = event.optString("iface", "");
@@ -563,6 +576,11 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         } else if ("attack_progress".equals(name)) {
             if (!attackRunning) return;
             if (attackMonitor != null) attackMonitor.onEvent(event);
+            if (liveMeter != null) {
+                JSONObject liveProgress = event.optJSONObject("progress");
+                liveMeter.update(liveProgress == null
+                        ? null : liveProgress.optJSONObject("rates"));
+            }
             JSONArray lines = event.optJSONArray("lines");
             StringBuilder text = new StringBuilder();
             if (lines != null) {
@@ -577,6 +595,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             renderAttackLines();
         } else if ("attack_done".equals(name)) {
             if (attackMonitor != null) attackMonitor.onEvent(event);
+            if (liveMeter != null) liveMeter.idle();
             if (captiveDialog != null) captiveDialog.dismiss();
             onAttackDone(event);
         } else if ("psk_verified".equals(name)) {
@@ -1105,6 +1124,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     public void onDestroyView() {
         if (attackMonitor != null) attackMonitor.dismiss();
         attackMonitor = null;
+        if (liveMeter != null) liveMeter.stop();
+        liveMeter = null;
         if (captiveDialog != null) captiveDialog.dismiss();
         captiveDialog = null;
         if (evilTwinDialog != null) evilTwinDialog.dismiss();
@@ -1121,6 +1142,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         attackTitle.setText(attackTitleRes(kind));
         String name = ssid == null || ssid.isEmpty() ? getString(R.string.wifi_hidden_ssid) : ssid;
         attackSub.setText(String.format("%s · %s", name, bssid));
+        showLiveMeter(kind, name, bssid);
         attackLines.setVisibility(View.GONE);
         attackResult.setVisibility(View.GONE);
         attackStop.setText(R.string.wifi_attack_stop);
@@ -1131,6 +1153,22 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             attackAnim.playAnimation();
         }
         attackCard.setVisibility(View.VISIBLE);
+    }
+
+    /**
+     * The live meter above the list: wifi4's own per-class rows (DATA / INJECT / DEAUTH plus
+     * EAPOL, or WEP IV on a WEP target), each with the rate it is running at.
+     */
+    private void showLiveMeter(String kind, String name, String bssid) {
+        if (liveCard == null) return;
+        if (liveMeter == null || !kind.equals(liveKind)) {
+            liveMeter = new PacketMeter(requireContext(),
+                    liveCard.findViewById(R.id.wifi_live_meter), kind);
+            liveKind = kind;
+        }
+        if (liveKindView != null) liveKindView.setText(attackTitleRes(kind));
+        if (liveMeta != null) liveMeta.setText(getString(R.string.wifi_live_meta, name, bssid));
+        liveCard.setVisibility(View.VISIBLE);
     }
 
     private void renderAttackLines() {

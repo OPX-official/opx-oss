@@ -255,12 +255,16 @@
     <string name="wifi_attack_tab_progress">Progress</string>
     <string name="wifi_attack_tab_terminal">Terminal</string>
     <string name="wifi_attack_copy_log">Copy log</string>
-    <string name="wifi_attack_rate_label">Live frame rates · injection, deauth and EAPOL per second</string>
+    <string name="wifi_attack_rate_label">Live frame rates · each row rises when its class goes out</string>
     <string name="wifi_rate_inject">INJECT</string>
     <string name="wifi_rate_deauth">DEAUTH</string>
     <string name="wifi_rate_eapol">EAPOL</string>
     <string name="wifi_rate_data">DATA</string>
     <string name="wifi_rate_beacon">BEACON</string>
+    <string name="wifi_rate_wep_iv">WEP IV</string>
+    <string name="wifi_live_title">LIVE</string>
+    <string name="wifi_live_hint">Data, injection and deauth per second, with EAPOL on its own row</string>
+    <string name="wifi_live_meta">%1$s · %2$s</string>
     <string name="wifi_stage_radio">Taking the radio</string>
     <string name="wifi_stage_target">Locked on the target</string>
     <string name="wifi_stage_deauth">Deauthenticating clients</string>
