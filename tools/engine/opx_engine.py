@@ -570,6 +570,10 @@ class Engine:
         self._cancel_attach_retry()
         self._stop_passive()
         campaign = self.campaign
+        draining = campaign is not None and not campaign.done
+        if self.iface is None and self.array is None and not draining and not self.scanning:
+            # Already detached: one unplug is one event, however many receivers report it.
+            return
         if campaign is not None and not campaign.done:
             try:
                 campaign.request_stop()
@@ -947,16 +951,25 @@ class Engine:
             await asyncio.sleep(1.0)
         if campaign.stopped:
             await asyncio.sleep(0.1)
+        saved = []
         try:
-            self.harvest(getattr(campaign, "ap", None))
+            saved.extend(self.harvest(getattr(campaign, "ap", None)))
             if kind in ("eviltwin", "captive"):
                 # The client's M2 lands on the twin's BSSID, not the real AP's row.
                 twin = getattr(campaign, "twin_bssid", None)
                 if twin and self.array is not None:
-                    self.harvest(pool_access_points(self.array).get(str(twin).lower()))
+                    saved.extend(self.harvest(
+                        pool_access_points(self.array).get(str(twin).lower())))
         except Exception:  # noqa: BLE001
             pass
+        if saved:
+            # A capture the closing sweep just wrote is a capture: the campaign's own flag
+            # only counts frames it saw while it was running.
+            emit("capture_saved", count=len(saved), paths=saved[:8])
         outcome = self.campaign_outcome(campaign, kind)
+        if saved and not outcome.get("ok"):
+            outcome["ok"] = True
+            outcome["summary"] = "handshake captured"
         self._save_campaign_credentials(campaign, kind, outcome)
         emit("attack_done", kind=kind, stopped=bool(campaign.stopped), **outcome)
 
@@ -1009,7 +1022,9 @@ class Engine:
             broadcast = getattr(campaign, "bcast_sent", 0) or 0
             return {
                 "ok": captured,
-                "summary": "handshake captured" if captured else "no new handshake captured",
+                # "yet": the passive saver keeps watching and files a handshake that a
+                # roaming client produces after the attack stopped.
+                "summary": "handshake captured" if captured else "no handshake captured yet",
                 "detail": f"deauth {acked}/{sent} acked, {broadcast} broadcast",
             }
         if kind == "pmkid":

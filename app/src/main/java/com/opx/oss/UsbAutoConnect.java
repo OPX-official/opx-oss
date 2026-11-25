@@ -35,6 +35,8 @@ public final class UsbAutoConnect {
     /** Devices whose prompt was declined in this process: no prompt on every screen change. */
     private static final Set<String> denied = new HashSet<>();
     private static long lastAttachAt;
+    /** Both receivers see the same unplug: one teardown per event is enough. */
+    private static long lastDetachAt;
     private static boolean registered;
 
     private UsbAutoConnect() {
@@ -91,6 +93,9 @@ public final class UsbAutoConnect {
         Context app = context.getApplicationContext();
         String action = intent.getAction();
         if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
+            long now = System.currentTimeMillis();
+            if (now - lastDetachAt < 1500) return;
+            lastDetachAt = now;
             UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
             if (device != null) requested.remove(device.getDeviceName());
             AppLog.info("UsbAutoConnect", "adapter detached");

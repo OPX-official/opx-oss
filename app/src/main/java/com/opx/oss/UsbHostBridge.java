@@ -58,6 +58,8 @@ public final class UsbHostBridge {
     private Thread acceptThread;
     private LocalServerSocket server;
     private volatile boolean running;
+    /** Last device list the engine was told about: the poller asks every second. */
+    private volatile String lastListed;
 
     private UsbHostBridge(Context context) {
         this.context = context;
@@ -195,7 +197,12 @@ public final class UsbHostBridge {
             JSONObject response = new JSONObject();
             JSONArray devices = new JSONArray();
             for (String path : devicePaths()) devices.put(path);
-            AppLog.info(TAG, "list -> " + devices);
+            // One line per change instead of one per poll: the engine asks about once a second.
+            String listed = devices.toString();
+            if (!listed.equals(lastListed)) {
+                lastListed = listed;
+                AppLog.info(TAG, "list -> " + listed);
+            }
             response.put("ok", true);
             response.put("devices", devices);
             write(socket, response);
