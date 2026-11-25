@@ -15,6 +15,7 @@ import com.opx.oss.engine.attacks.DecloakCampaign;
 import com.opx.oss.engine.attacks.PmkidCampaign;
 import com.opx.oss.engine.capture.Handshake;
 import com.opx.oss.engine.capture.Verify;
+import com.opx.oss.engine.crack.CpuCracker;
 import com.opx.oss.engine.chips.WifiChip;
 import com.opx.oss.engine.chips.firmware.FirmwareStore;
 import com.opx.oss.engine.chips.rtl8187.Rtl8187Chip;
@@ -57,6 +58,12 @@ public final class NativeEngine {
     private final HandshakeBook handshakes = new HandshakeBook();
     private final ScanEngine scanEngine = new ScanEngine(scan);
     private final ProbeBook probes = new ProbeBook();
+    private final ExecutorService cracker = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "opx-crack");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private volatile boolean cracking;
     private final java.util.Set<String> silenced =
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
     private volatile WifiChip chip;
@@ -161,9 +168,26 @@ public final class NativeEngine {
                 case "captures":
                     emit(event("captures").put("captures", Vault.toJson(context)));
                     break;
-                case "crack_tools":
-                    emit(event("crack_tools").put("tools", new JSONArray().put("cpu_crack")));
+                case "crack_tools": {
+                    JSONObject tools = event("crack_tools");
+                    tools.put("tools", new JSONArray().put("cpu_crack"))
+                            .put("available", !cracking);
+                    emit(tools);
                     break;
+                }
+                case "cpu_crack":
+                    crack(command);
+                    break;
+                case "stop_crack":
+                    cracking = false;
+                    emitQuietly(event("crack_stopped"));
+                    break;
+                case "crack_status": {
+                    JSONObject status = event("crack_status");
+                    status.put("running", cracking);
+                    emit(status);
+                    break;
+                }
                 case "attack":
                     attack(command);
                     break;
@@ -324,6 +348,80 @@ public final class NativeEngine {
         adapter.open();
         chip = adapter;
         return adapter;
+    }
+
+    /**
+     * Search a wordlist or a mask against every capture for one network. Progress and the
+     * result are events; {@code stop_crack} ends the search early.
+     */
+    private void crack(JSONObject command) throws Exception {
+        if (cracking) {
+            error("a search is already running");
+            return;
+        }
+        String bssid = command.optString("bssid");
+        java.util.List<Handshake> targets = new java.util.ArrayList<>();
+        for (Handshake handshake : handshakes.list()) {
+            if (!bssid.isEmpty() && !bssid.equalsIgnoreCase(handshake.bssid)) continue;
+            if (handshake.eapolLine() != null || handshake.pmkidLine() != null) targets.add(handshake);
+        }
+        if (targets.isEmpty()) {
+            error("no crackable capture for that network");
+            return;
+        }
+
+        String file = command.optString("file");
+        String mask = command.optString("mask");
+        java.util.Iterator<String> candidates;
+        long total;
+        if (!file.isEmpty()) {
+            java.io.File list = new java.io.File(file);
+            if (!list.isFile()) {
+                error("no such wordlist: " + file);
+                return;
+            }
+            candidates = CpuCracker.wordlist(list);
+            total = -1;
+        } else {
+            if (mask.isEmpty()) mask = "?d?d?d?d?d?d?d?d";
+            candidates = CpuCracker.expand(mask);
+            total = CpuCracker.count(mask);
+        }
+
+        cracking = true;
+        JSONObject started = event("crack_started");
+        started.put("targets", targets.size()).put("total", total);
+        emit(started);
+
+        java.util.Iterator<String> source = candidates;
+        long expected = total;
+        cracker.execute(() -> {
+            try {
+                CpuCracker.Match match = CpuCracker.crack(targets, source, expected,
+                        (tried, all, candidate) -> {
+                            JSONObject progress = event("crack_progress");
+                            try {
+                                progress.put("tried", tried).put("total", all)
+                                        .put("percent", all > 0 ? (tried * 100) / all : -1)
+                                        .put("last", candidate == null ? "" : candidate);
+                            } catch (Exception ignored) {
+                                // Plain types only.
+                            }
+                            emitQuietly(progress);
+                        },
+                        () -> !cracking);
+                JSONObject done = event("crack_done");
+                done.put("ok", match != null);
+                done.put("psk", match == null ? JSONObject.NULL : match.psk);
+                done.put("tried", match == null ? 0 : match.tried);
+                done.put("seconds", match == null ? 0 : match.millis / 1000);
+                emitQuietly(done);
+            } catch (Exception e) {
+                error("the search failed: " + e.getMessage());
+            } finally {
+                cracking = false;
+            }
+        });
     }
 
     /** Write one hashline to the vault and announce it, whoever captured it. */
@@ -638,6 +736,8 @@ public final class NativeEngine {
 
     private void shutdown() {
         stopped = true;
+        cracking = false;
         worker.shutdownNow();
+        cracker.shutdownNow();
     }
 }

@@ -30,6 +30,7 @@ public final class Verify {
     /** True when a raw 64-hex PMK produces the captured MIC. */
     public static boolean pmk(Handshake handshake, byte[] pmk) {
         if (handshake == null || pmk == null || pmk.length != 32) return false;
+        if (handshake.mic == null || handshake.eapol == null) return false;
         byte[] kck = WpaKeys.kck(pmk, Mac.of(handshake.bssid), Mac.of(handshake.station),
                 handshake.anonce, handshake.snonce);
         return Arrays.equals(WpaKeys.mic(kck, handshake.eapol), handshake.mic);
