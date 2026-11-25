@@ -293,6 +293,10 @@
 - [x] **ক্যাপচার পাইপলাইন:** রেডিওর প্রতিটি ডেটা ফ্রেম → `Eapol` → `HandshakeBook` → **ভল্টে `.22000` লাইন** (একবার) + `capture_saved`; probe request → probe book; `probed` কমান্ড।
 - [x] **প্রোটোকল:** `attack`/`stop_attack`/`attack_status` — `attack_started`/`attack_log`/`attack_progress`/`attack_done`/`attack_stopped` নাম আগের চুক্তি মতো।
 - [x] **বিল্ড সবুজ:** রান **#45629910588** (`d4570a2`)।
-- [ ] PMKID ক্যাম্পেইন (assoc + M1 থেকে PMKID), `verify_psk`, `deauth_client`/`deauth_all`/`silence`/`chop` কমান্ড।
+- [x] **PMKID:** `engine/attacks/PmkidCampaign.java` — AP-এর RSN एलिमेंट নকল করে সিন্থেটিক ক্লায়েন্ট দিয়ে assoc, প্রতি রাউন্ডে নতুন MAC, M1-এর PMKID পড়ে ভল্টে `.22000` লাইন + `capture_saved`। (AP-এর আসল RSN এখন `AccessPoint.rsnIe`-তে রাখা হয়।)
+- [x] **পাসফ্রেজ যাচাই:** `engine/capture/Verify.java` — নিজের `WpaKeys` দিয়ে PMK→KCK→MIC, `psk`/`pmk` দুটোই; `verify_psk` কমান্ড → `psk_verified {ok, have_handshake}`।
+- [x] **ছোট কমান্ড:** `deauth_client` (এক স্টেশনে burst), `deauth_all`, `silence {on}`, `chop {on}` — সবই খোলা অ্যাডাপ্টরে, লগ/ইভেন্ট সহ।
+- [x] **বিল্ড সবুজ:** রান **#45632049347** (`7489266`)।
+- [ ] বাকি: WEP (ARP replay + PTW), evil twin + captive portal, PMKID/হ্যান্ডশেক ক্র্যাকার (`cpu_crack`), WPS পিন।
 
 **বাকি ফেজ (M4–M6):** উপরের ৬ নম্বর সেকশনের তালিকা অনুযায়ী।
