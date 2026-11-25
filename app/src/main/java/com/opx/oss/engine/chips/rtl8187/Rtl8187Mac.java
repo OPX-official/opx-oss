@@ -13,6 +13,11 @@ public final class Rtl8187Mac {
         void run() throws IOException;
     }
 
+    /** The radio's own shutdown, run in the middle of the MAC stop sequence. */
+    public interface RadioStop {
+        void run() throws IOException;
+    }
+
     private final Rtl8187Transport transport;
 
     public Rtl8187Mac(Rtl8187Transport transport) {
@@ -21,11 +26,17 @@ public final class Rtl8187Mac {
 
     /** Power the analogue block on, inside the window the card expects for it. */
     public void setAnaparam() throws IOException {
+        setAnaparam(true);
+    }
+
+    /** Power the analogue block up or down; shutdown writes the off value in the same window. */
+    public void setAnaparam(boolean on) throws IOException {
         transport.write8(Rtl8187Regs.REG_EEPROM_CMD, Rtl8187Regs.EEPROM_CMD_CONFIG);
         int config3 = transport.read8(Rtl8187Regs.REG_CONFIG3) | Rtl8187Regs.CONFIG3_ANAPARAM_WRITE;
         transport.write8(Rtl8187Regs.REG_CONFIG3, config3);
-        transport.write32(Rtl8187Regs.REG_ANAPARAM, Rtl8187Regs.ANAPARAM_ON);
-        transport.write32(Rtl8187Regs.REG_ANAPARAM2, Rtl8187Regs.ANAPARAM2_ON);
+        transport.write32(Rtl8187Regs.REG_ANAPARAM,
+                on ? Rtl8187Regs.ANAPARAM_ON : Rtl8187Regs.ANAPARAM_OFF);
+        if (on) transport.write32(Rtl8187Regs.REG_ANAPARAM2, Rtl8187Regs.ANAPARAM2_ON);
         transport.write8(Rtl8187Regs.REG_CONFIG3,
                 config3 & ~Rtl8187Regs.CONFIG3_ANAPARAM_WRITE);
         transport.write8(Rtl8187Regs.REG_EEPROM_CMD, Rtl8187Regs.EEPROM_CMD_NORMAL);
@@ -163,6 +174,45 @@ public final class Rtl8187Mac {
         transport.write8(Rtl8187Regs.REG_CMD,
                 command | Rtl8187Regs.CMD_TX_ENABLE | Rtl8187Regs.CMD_RX_ENABLE);
         return rxConfig;
+    }
+
+    /**
+     * The monitor/filter write mac80211 issues after start(): FCS failures and control frames are
+     * switched on and the monitor bit is set, which is what makes the card hand up every frame it
+     * hears instead of only its own BSS. Returns the new RX_CONF.
+     */
+    public int configureFilter(int rxConfig) throws IOException {
+        rxConfig ^= Rtl8187Regs.RX_CONF_FCS;
+        rxConfig ^= Rtl8187Regs.RX_CONF_CTRL;
+        rxConfig |= Rtl8187Regs.RX_CONF_MONITOR;
+        transport.write32(Rtl8187Regs.REG_RX_CONF, rxConfig);
+        return rxConfig;
+    }
+
+    /** Shutdown: stop interrupts, stop the queues, stop the radio, power the analogue down. */
+    public void stop(RadioStop rfStop) throws IOException {
+        transport.write16(Rtl8187Regs.REG_INT_MASK, 0);
+
+        int command = transport.read8(Rtl8187Regs.REG_CMD);
+        command &= ~Rtl8187Regs.CMD_TX_ENABLE;
+        command &= ~Rtl8187Regs.CMD_RX_ENABLE;
+        transport.write8(Rtl8187Regs.REG_CMD, command & 0xFF);
+
+        rfStop.run();
+        setAnaparam(false);
+
+        transport.write8(Rtl8187Regs.REG_EEPROM_CMD, Rtl8187Regs.EEPROM_CMD_CONFIG);
+        int config4 = transport.read8(Rtl8187Regs.REG_CONFIG4);
+        transport.write8(Rtl8187Regs.REG_CONFIG4, config4 | Rtl8187Regs.CONFIG4_VCOOFF);
+        transport.write8(Rtl8187Regs.REG_EEPROM_CMD, Rtl8187Regs.EEPROM_CMD_NORMAL);
+    }
+
+    /** The hardware radio switch: GPIO0's bit is cleared, then read back on GPIO1. */
+    public boolean isRadioEnabled(int mask) throws IOException {
+        int gpio = transport.read8(Rtl8187Regs.REG_GPIO0);
+        transport.write8(Rtl8187Regs.REG_GPIO0, gpio & ~mask & 0xFF);
+        gpio = transport.read8(Rtl8187Regs.REG_GPIO1);
+        return (gpio & mask) != 0;
     }
 
     private static void sleep(int millis) {

@@ -48,6 +48,18 @@ public final class Rtl8187Regs {
     /** TX descriptor bits (the 12-byte rtl8187_tx_hdr). */
     public static final int TX_FLAG_NO_ENC = 1 << 15;
     public static final int TX_FLAG_MOREFRAG = 1 << 17;
+
+    /** EEPROM word addresses (93cx6 words, not bytes). */
+    public static final int EEPROM_TXPWR_BASE = 0x05;
+    public static final int EEPROM_MAC_ADDR = 0x07;
+    public static final int EEPROM_TXPWR_CHAN_1 = 0x16;
+    public static final int EEPROM_TXPWR_CHAN_6 = 0x1B;
+    public static final int EEPROM_TXPWR_CHAN_4 = 0x3D;
+    public static final int EEPROM_SELECT_GPIO = 0x3B;
+
+    /** Which GPIO bit carries the hardware radio switch, by board. */
+    public static final int RFKILL_MASK_8187_89_97 = 0x2;
+    public static final int RFKILL_MASK_8198 = 0x4;
     public static final int RETRY_COUNT = 7;
     public static final int TX_HDR_SIZE = 12;
 
@@ -78,6 +90,7 @@ public final class Rtl8187Regs {
     public static final int REG_RF_TIMING = CSR_BASE + 0x8C;
     public static final int REG_GP_ENABLE = CSR_BASE + 0x90;
     public static final int REG_GPIO0 = CSR_BASE + 0x91;
+    public static final int REG_GPIO1 = CSR_BASE + 0x92;
     public static final int REG_TX_AGC_CTL = CSR_BASE + 0x9C;
     public static final int REG_WPA_CONF = CSR_BASE + 0xB0;
     public static final int REG_CW_CONF = CSR_BASE + 0xBC;
@@ -104,9 +117,14 @@ public final class Rtl8187Regs {
 
     public static final int CONFIG3_ANAPARAM_WRITE = 1 << 6;
     public static final int ANAPARAM_ON = 0xA0000A59;
+    public static final int ANAPARAM_OFF = 0xA00BEB59;
     public static final int ANAPARAM2_ON = 0x860C7312;
+    public static final int CONFIG4_VCOOFF = 1 << 7;
 
+    public static final int RX_CONF_MONITOR = 1 << 0;
     public static final int RX_CONF_NICMAC = 1 << 1;
+    public static final int RX_CONF_FCS = 1 << 5;
+    public static final int RX_CONF_CTRL = 1 << 19;
     public static final int RX_CONF_BROADCAST = 1 << 3;
     public static final int RX_CONF_DATA = 1 << 18;
     public static final int RX_CONF_MGMT = 1 << 20;

@@ -22,7 +22,8 @@ import com.opx.oss.engine.crack.WpsPinDb;
 import com.opx.oss.engine.crack.WpsPins;
 import com.opx.oss.engine.chips.WifiChip;
 import com.opx.oss.engine.chips.firmware.FirmwareStore;
-import com.opx.oss.engine.chips.rtl8187.Rtl8187Chip;
+import com.opx.oss.engine.chips.ChipRegistry;
+import com.opx.oss.engine.chips.Driver;
 import com.opx.oss.engine.dot11.Eapol;
 import com.opx.oss.engine.dot11.Mac;
 import com.opx.oss.engine.dot11.Parser;
@@ -360,8 +361,13 @@ public final class NativeEngine {
     private WifiChip openChip(String path) throws Exception {
         WifiChip adapter = chip;
         if (adapter != null) return adapter;
-        adapter = new Rtl8187Chip(context, path);
-        adapter.open();
+        UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
+        UsbDevice device = manager == null ? null : device(manager, path);
+        if (device == null) throw new java.io.IOException("no USB device at " + path);
+        Driver opened = ChipRegistry.open(context, device.getVendorId(),
+                device.getProductId(), path);
+        // ChipRegistry's open() already ran the staged bring-up, so this only caches it.
+        adapter = opened;
         chip = adapter;
         return adapter;
     }
@@ -679,9 +685,10 @@ public final class NativeEngine {
             for (String path : UsbFd.list()) {
                 UsbDevice device = manager == null ? null : device(manager, path);
                 if (device == null) continue;
-                ChipCatalog.Entry entry = ChipCatalog.resolve(
-                        device.getVendorId(), device.getProductId());
-                if (entry != null && "rtl8187".equals(entry.family)) return path;
+                if (ChipRegistry.hasDriver(context, device.getVendorId(),
+                        device.getProductId())) {
+                    return path;
+                }
             }
         } catch (Exception e) {
             AppLog.info("OpxEngine", "cannot ask the bridge for devices: " + e.getMessage());

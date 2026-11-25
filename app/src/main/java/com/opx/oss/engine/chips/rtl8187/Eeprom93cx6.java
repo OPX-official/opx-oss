@@ -43,14 +43,49 @@ public final class Eeprom93cx6 {
         return out;
     }
 
-    /** Sixteen-bit words 1..3 hold the station address, low byte first. */
+    /** Sixteen-bit words 0x07..0x09 hold the station address, low byte first. */
     public byte[] mac() throws IOException {
-        int[] words = read(1, 3);
+        int[] words = read(Rtl8187Regs.EEPROM_MAC_ADDR, 3);
         return new byte[]{
                 (byte) (words[0] & 0xFF), (byte) ((words[0] >> 8) & 0xFF),
                 (byte) (words[1] & 0xFF), (byte) ((words[1] >> 8) & 0xFF),
                 (byte) (words[2] & 0xFF), (byte) ((words[2] >> 8) & 0xFF)
         };
+    }
+
+    /**
+     * The per-channel TX power bytes: channels 1-6 from words 0x16-0x18, 7-10 from 0x3D-0x3E,
+     * 11-14 from 0x1B-0x1C. Each byte is cck in the low nibble and ofdm in the high.
+     */
+    public int[] txPowerValues() throws IOException {
+        int[] values = new int[14];
+        int index = 0;
+        for (int i = 0; i < 3; i++) {
+            int word = read(Rtl8187Regs.EEPROM_TXPWR_CHAN_1 + i);
+            values[index++] = word & 0xFF;
+            values[index++] = (word >> 8) & 0xFF;
+        }
+        for (int i = 0; i < 2; i++) {
+            int word = read(Rtl8187Regs.EEPROM_TXPWR_CHAN_4 + i);
+            values[index++] = word & 0xFF;
+            values[index++] = (word >> 8) & 0xFF;
+        }
+        for (int i = 0; i < 2; i++) {
+            int word = read(Rtl8187Regs.EEPROM_TXPWR_CHAN_6 + i);
+            values[index++] = word & 0xFF;
+            values[index++] = (word >> 8) & 0xFF;
+        }
+        return values;
+    }
+
+    /** The two-nibble TX power correction applied on top of every channel's value (z2 only). */
+    public int txpwrBase() throws IOException {
+        return read(Rtl8187Regs.EEPROM_TXPWR_BASE);
+    }
+
+    /** Board strap word 0x3B; its high byte selects the 0x8198 rfkill mask. */
+    public int selectGpio() throws IOException {
+        return read(Rtl8187Regs.EEPROM_SELECT_GPIO);
     }
 
     private void start() throws IOException {

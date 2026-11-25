@@ -29,20 +29,22 @@ import java.util.concurrent.TimeUnit;
  */
 public final class UsbTransport implements Closeable {
 
-    private static final String ACTION_PERMISSION = "com.opx.oss.action.USB_PERMISSION";
+    static final String ACTION_PERMISSION = "com.opx.oss.action.USB_PERMISSION";
     private static final long PERMISSION_WAIT_MS = 120_000L;
 
     private final UsbDeviceConnection connection;
     private final UsbInterface claimed;
     private final UsbEndpoint in;
     private final UsbEndpoint out;
+    private final int productId;
 
     private UsbTransport(UsbDeviceConnection connection, UsbInterface claimed,
-                         UsbEndpoint in, UsbEndpoint out) {
+                         UsbEndpoint in, UsbEndpoint out, int productId) {
         this.connection = connection;
         this.claimed = claimed;
         this.in = in;
         this.out = out;
+        this.productId = productId;
     }
 
     /** Open {@code name} (the bridge's device path) for frame I/O. */
@@ -93,7 +95,7 @@ public final class UsbTransport implements Closeable {
             connection.close();
             throw new IOException("could not claim the interface of " + name);
         }
-        return new UsbTransport(connection, claimed, in, out);
+        return new UsbTransport(connection, claimed, in, out, device.getProductId());
     }
 
     /** Path of the device the bridge would name, if it is still attached. */
@@ -108,6 +110,16 @@ public final class UsbTransport implements Closeable {
 
     public int bulkOut(byte[] data, int timeoutMs) {
         return connection.bulkTransfer(out, data, data.length, timeoutMs);
+    }
+
+    /** The bulk-out endpoint's packet size: whether a transfer needs a terminating short packet. */
+    public int maxPacketOut() {
+        return out.getMaxPacketSize();
+    }
+
+    /** The card's USB product id, which selects the board-specific rfkill mask. */
+    public int productId() {
+        return productId;
     }
 
     /** A vendor control request (register reads/writes, channel selection, firmware checks). */
@@ -137,6 +149,11 @@ public final class UsbTransport implements Closeable {
             if (name.equals(device.getDeviceName())) return device;
         }
         return null;
+    }
+
+    /** Shared permission path for the fd-only handle. */
+    static boolean ensurePermission(Context context, UsbManager manager, UsbDevice device) {
+        return requestPermission(context, manager, device);
     }
 
     /** Ask Android for the app-wide permission the bridge asks for, and wait for the answer. */

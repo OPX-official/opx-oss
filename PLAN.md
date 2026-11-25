@@ -278,7 +278,7 @@
 - [x] **RTL8187 MAC ব্রিং-আপ:** `chips/rtl8187/Rtl8187Mac.java` — anaparam, soft reset (CMD/EEPROM লোড অপেক্ষা), FE18 magic, pin defaults, RF timing/para, page-1 tail, `start()` (RX_CONF/MAR/CW/TX_CONF/CMD ল্যাচ)।
 - [x] **RTL8187 RF + চ্যানেল:** `chips/rtl8187/Rtl8187Phy.java` — PHY ৪-বাইট উইন্ডো, RF বিট-ব্যাং ও 8051 পাথ, সিন্থ টেবিল (ch 1–14), `configChannel()` (TX_CONF MAC-loopback ব্র্যাকেট সহ), RF stop।
 - [x] **বিল্ড সবুজ:** রান **#45627284768** (`13757bf`)।
-- [x] **RF init:** `chips/rtl8187/Rtl8225z2.java` — z2 সিকোয়েন্স (০x০–০xF, rxgain ৯১ সারি, ক্যালিব্রেশন রিট্রাই, AGC ১২৮, OFDM ৪০, CCK ২৭, সেনসিটিভিটি রো, TX-power কার্ভ), `Rtl8187Phy.readRf()` বিট-ব্যাং রিড।
+- [x] **RF init:** `chips/rtl8187/Rtl8225.java` — BCD ও z2 দুই ভ্যারিয়েন্ট (probe: RF reg 8/9 = 0x588/0x700 → z2), প্রত্যেকটির নিজস্ব init/TX-power সূত্র; সব টেবিল `Rtl8225Tables.java`-এ রেফারেন্স থেকে হুবহু জেনারেট করা (BCD rxgain/agc/gain/threshold/tx-power, z2 rxgain/gain_bg/tx-power), `Rtl8187Phy.readRf()` বিট-ব্যাং রিড।
 - [x] **চিপ ইমপ্লিমেন্টেশন:** `chips/rtl8187/Rtl8187Chip.java` — EEPROM MAC, asic rev, `initHw`, `start`, `setChannel` (TX-power + config), `transmit` (সিকোয়েন্স + ডিস্ক্রিপ্টর), RX থ্রেড → `FrameSink`।
 - [x] **স্ক্যান লাইভ:** `NativeEngine.scan()` — প্রথম সাপোর্টেড অ্যাডাপ্টার খোলে, `ScanEngine` চ্যানেল প্ল্যানে হপ করে, বেকন ফোলে, `scan_started`/`scan_done` ইভেন্ট; `stop_scan` অ্যাডাপ্টার বন্ধ করে।
 - [x] **বিল্ড সবুজ:** রান **#45628614182** (`9fb53d7`)।

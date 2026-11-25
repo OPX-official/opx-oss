@@ -50,6 +50,7 @@ public final class ChipCatalog {
         put(0x0BDA, 0xB822, "RTL8822BU", "rtl88xxau", "rtl8822bu");
         put(0x0BDA, 0xB82C, "RTL8822CU", "rtl88xxau", "rtl8822cu");
         put(0x0BDA, 0x8192, "RTL8192FU", "rtl8xxxu", "rtl8192fu");
+        put(0x0BDA, 0xF179, "RTL8188FTV", "rtl8188ftv", "rtl8188ftv_dkms");
         put(0x0BDA, 0xA891, "RTL8922AU", "rtl88xxau", "rtl8922au");
     }
 
