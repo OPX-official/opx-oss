@@ -10,7 +10,7 @@
     <string name="intro_download_title">Download the engine</string>
     <string name="intro_download_body">The app is small by design. It detects a 32-bit or 64-bit phone, downloads only that runtime, verifies every file, and resumes where it stopped if the connection drops.</string>
     <string name="intro_engine_title">The engine installs itself</string>
-    <string name="intro_engine_body">The verified runtime unpacks into the app's own private directory. This happens once; later launches reuse the installed tree.</string>
+    <string name="intro_engine_body">The verified runtime unpacks into the app\'s own private directory. This happens once; later launches reuse the installed tree.</string>
     <string name="intro_ready_title">Ready to scan</string>
     <string name="intro_ready_body">The engine stays warm in the background, so every screen sees the same state — and WiFi works the moment you open it.</string>
     <string name="intro_next">Continue</string>
