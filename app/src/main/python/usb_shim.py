@@ -124,9 +124,12 @@ def _raise(code, what):
 
 
 class _Endpoint:
-    def __init__(self, address, packet_size=64):
+    def __init__(self, address, packet_size=64, attributes=0, interval=0):
         self.bEndpointAddress = address
         self.wMaxPacketSize = packet_size
+        self.bmAttributes = attributes
+        self.bInterval = interval
+        self.bDescriptorType = 5
 
 
 class Device:
@@ -138,6 +141,50 @@ class Device:
         self.idProduct = product
         self._claimed = set()
         self._lib = _lib()
+        self._configurations = None
+        self._active_configuration = None
+
+    # USB descriptor tree --------------------------------------------------
+    # The drivers walk the device as PyUSB presents it (for cfg in dev: for intf in cfg: ...),
+    # so the tree is read from the device's own descriptors rather than made up.
+    def _descriptor(self, kind, index=0, length=255):
+        try:
+            data = self.ctrl_transfer(0x80, 0x06, (kind << 8) | index, 0, length, 1000)
+        except USBError:
+            return b""
+        return bytes(data) if isinstance(data, (bytes, bytearray)) else b""
+
+    def configurations(self):
+        return self._load_configurations()
+
+    def _load_configurations(self):
+        if self._configurations is not None:
+            return self._configurations
+        configs = []
+        device = self._descriptor(0x01, 0, 18)
+        count = device[17] if len(device) >= 18 else 1
+        for index in range(max(1, count)):
+            head = self._descriptor(0x02, index, 9)
+            if len(head) < 9:
+                continue
+            total = int.from_bytes(head[2:4], "little")
+            blob = self._descriptor(0x02, index, total) if total > 9 else head
+            parsed = _parse_configuration(blob, index)
+            if parsed is not None:
+                configs.append(parsed)
+        if not configs:
+            configs = [_Configuration()]
+        self._configurations = configs
+        return configs
+
+    def __iter__(self):
+        return iter(self._load_configurations())
+
+    def __len__(self):
+        return len(self._load_configurations())
+
+    def __getitem__(self, index):
+        return self._load_configurations()[index]
 
     # PyUSB surface -------------------------------------------------------
     def read(self, endpoint, size_or_buffer, timeout=None):
@@ -177,7 +224,7 @@ class Device:
             _raise(rc, "control read")
             if length == 0:
                 return 0
-            return bytes(bytearray(buf[:length]))
+            return bytes(bytearray(buf[:rc])) if rc > 0 else b""
         payload = bytes(data_or_wLength)
         buf = (ctypes.c_ubyte * max(len(payload), 1)).from_buffer_copy(payload or b"\x00")
         rc = lib.libusb_control_transfer(
@@ -186,11 +233,40 @@ class Device:
         _raise(rc, "control write")
         return rc
 
-    def set_configuration(self, _configuration=None):
+    def set_configuration(self, configuration=None):
+        value = None if configuration is None else int(
+            getattr(configuration, "bConfigurationValue", configuration))
+        active = self._current_configuration_value()
+        if value is not None and value == active:
+            self._active_configuration = self._find_configuration(value)
+            return None
+        target = value if value is not None else (
+            self._load_configurations()[0].bConfigurationValue)
+        rc = self._lib.libusb_control_transfer(
+            self._handle, 0x00, 0x09, target, 0, None, 0, 1000)
+        _raise(rc, "set configuration")
+        self._active_configuration = self._find_configuration(target)
         return None
 
+    def _find_configuration(self, value):
+        for config in self._load_configurations():
+            if config.bConfigurationValue == value:
+                return config
+        return self._load_configurations()[0]
+
+    def _current_configuration_value(self):
+        try:
+            data = self.ctrl_transfer(0x80, 0x08, 0, 0, 1, 1000)
+        except USBError:
+            return None
+        return data[0] if isinstance(data, (bytes, bytearray)) and data else None
+
     def get_active_configuration(self):
-        return _Configuration()
+        if self._active_configuration is None:
+            value = self._current_configuration_value()
+            self._active_configuration = (self._find_configuration(value)
+                                          if value is not None else self._load_configurations()[0])
+        return self._active_configuration
 
     def is_kernel_driver_active(self, _interface):
         return False
@@ -208,16 +284,88 @@ class Device:
 
 
 class _Configuration:
-    def __init__(self):
-        self.bConfigurationValue = 1
+    def __init__(self, value=1, index=0, interfaces=None, total_length=9,
+                 attributes=0x80, max_power=50):
+        self.bConfigurationValue = value
+        self.bConfigurationIndex = index
+        self.wTotalLength = total_length
+        self.bmAttributes = attributes
+        self.bMaxPower = max_power
+        self._interfaces = list(interfaces or ())
+        self.bNumInterfaces = len(self._interfaces)
+        self.bDescriptorType = 2
+
+    def __iter__(self):
+        return iter(self._interfaces)
+
+    def __len__(self):
+        return len(self._interfaces)
+
+    def __getitem__(self, index):
+        return self._interfaces[index]
 
     def set(self):
+        device = self.device
+        if device is not None:
+            device.set_configuration(self)
         return None
 
 
 class _Interface:
-    def __init__(self, number):
+    def __init__(self, number, alt=0, endpoints=None, interface_class=0,
+                 subclass=0, protocol=0):
         self.bInterfaceNumber = number
+        self.bAlternateSetting = alt
+        self.bInterfaceClass = interface_class
+        self.bInterfaceSubClass = subclass
+        self.bInterfaceProtocol = protocol
+        self._endpoints = list(endpoints or ())
+        self.bNumEndpoints = len(self._endpoints)
+        self.bDescriptorType = 4
+        self.device = None
+
+    def __iter__(self):
+        return iter(self._endpoints)
+
+    def __len__(self):
+        return len(self._endpoints)
+
+    def __getitem__(self, index):
+        return self._endpoints[index]
+
+    def index(self):
+        return self.bInterfaceNumber
+
+
+def _parse_configuration(blob, index=0):
+    """Turn a raw configuration descriptor into ``_Configuration``/``_Interface`` objects."""
+    if len(blob) < 9 or blob[1] != 2:
+        return None
+    total = int.from_bytes(blob[2:4], "little") or len(blob)
+    config = _Configuration(value=blob[5], index=index, total_length=total,
+                            attributes=blob[7], max_power=blob[8])
+    current = None
+    offset = 9
+    end = min(len(blob), total)
+    while offset + 2 <= end:
+        length = blob[offset]
+        if length < 2:
+            break
+        body = blob[offset:offset + length]
+        kind = body[1]
+        if kind == 4 and length >= 9:  # interface
+            current = _Interface(body[2], body[3], interface_class=body[5],
+                                 subclass=body[6], protocol=body[7])
+            config._interfaces.append(current)
+        elif kind == 5 and length >= 7 and current is not None:  # endpoint
+            current._endpoints.append(_Endpoint(
+                body[2], int.from_bytes(body[4:6], "little"), body[3], body[6]))
+        offset += length
+    config.bNumInterfaces = len(config._interfaces)
+    for interface in config._interfaces:
+        interface.bNumEndpoints = len(interface._endpoints)
+        interface.device = None
+    return config
 
 
 _MODULE = None
