@@ -176,61 +176,25 @@ public class OpxService extends Service {
     // ---------------------------------------------------------------- engine
 
     /**
-     * Installs the downloaded runtime on first launch and verifies it with a throwaway run,
-     * so a broken runtime is reported here instead of looking like a dead WiFi screen.
+     * Brings the engine's environment up. The engine itself lives in the app's own process now,
+     * so there is nothing to download, unpack or exec: the service only prepares the storage
+     * the captures are written to and reports ready.
      */
     private void startEngine() {
-        if (state == STATE_READY && OpxRuntime.isInstalled(this)) return;
+        if (state == STATE_READY) return;
         if (engineThread != null && engineThread.isAlive()) return;
-        if (!OpxRuntime.isInstalled(this) && !downloadAllowed(this)) {
-            // Do not create a thread that immediately exits: beginDownload() calls start()
-            // once permissions are in place, and only then may the network be touched.
-            setState(STATE_STARTING, null);
-            return;
-        }
-        AppLog.info("OpxService", "engine thread starting (installed=" + OpxRuntime.isInstalled(this) + ")");
+        AppLog.info("OpxService", "engine thread starting (native engine)");
         lastAttemptAt = System.currentTimeMillis();
 
         engineThread = new Thread(() -> {
             final Context context = getApplicationContext();
             try {
-                if (!OpxRuntime.isInstalled(context)) {
-                    setState(STATE_INSTALLING, null);
-                    // The APK is deliberately small: fetch the arch-correct bootstrap and
-                    // payloads before install. The downloader keeps its .part files, so a
-                    // killed process or a lost connection resumes instead of restarting.
-                    if (!OpxRuntime.hasSources(context)) {
-                        PowerManager.WakeLock wake = acquireDownloadWake();
-                        WifiManager.WifiLock wifi = acquireWifiLock();
-                        try {
-                            RuntimeDownloadManager.ensureDownloaded(context, snapshot -> {
-                                // Renew on every tick: a fixed timeout used to expire in the
-                                // middle of a slow 100+ MB download and let the CPU sleep.
-                                if (wake != null) wake.acquire(WAKE_TIMEOUT_MS);
-                                updateNotification();
-                            });
-                        } finally {
-                            if (wake != null && wake.isHeld()) wake.release();
-                            if (wifi != null && wifi.isHeld()) wifi.release();
-                        }
-                    }
-                    RuntimeDownloadManager.beginInstall("Unpacking the runtime");
-                    OpxRuntime.install(context, label -> {
-                        // The intro's install slide names each archive while it is untarred.
-                        RuntimeDownloadManager.installStep(label);
-                        updateNotification();
-                    });
-                }
-                OpxRuntime.repair(context);
                 OpxRuntime.setupStorage(context);
-                String failure = OpxRuntime.probe(context);
-                AppLog.info("OpxService", "probe " + (failure == null ? "OK" : "FAILED"));
                 if (exiting) return;
-                setState(failure == null ? STATE_READY : STATE_FAILED, failure);
+                setState(STATE_READY, null);
+                AppLog.info("OpxService", "engine ready (native)");
             } catch (Exception e) {
                 AppLog.error("OpxService", e);
-                RuntimeDownloadManager.reportError(e.getMessage());
-                RuntimeDownloadManager.invalidate(context);
                 if (exiting) return;
                 setState(STATE_FAILED, e.toString());
             }

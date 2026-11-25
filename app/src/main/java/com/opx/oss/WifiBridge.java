@@ -4,34 +4,33 @@ import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Log;
+
+import com.opx.oss.engine.NativeEngine;
+import com.opx.oss.engine.UsbFd;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Drives the headless wifi4 engine: one long-lived process inside the installed runtime,
- * spoken to with JSON lines. The WiFi screen never sees a shell and there is no terminal UI
+ * Drives the headless engine now that it lives in the app's own process: one JSON object per
+ * command in, one event out. The WiFi screen never sees a shell and there is no terminal UI
  * anywhere in the app.
  * <p>
  * Events arrive on the main thread:
  * <pre>
- *   {"event":"ready","version":"0.1.0"}
+ *   {"event":"ready","version":".."}
  *   {"event":"network","ssid":..,"bssid":..,"channel":..,"signal":..}
  *   {"event":"scan_done","count":7}
  *   {"event":"error","message":".."}
  * </pre>
- * Every line (stdout and stderr) is also written to the in-app log, so a failure always has
- * a visible reason.
+ * Every event and every command is also written to the in-app log, so a failure always has a
+ * visible reason.
  */
 public final class WifiBridge {
 
@@ -42,7 +41,7 @@ public final class WifiBridge {
     }
 
     private static final String TAG = "OpxWifiBridge";
-    private static final String SOCKET_NAME = "opx.usb";
+    private static final long USB_PROBE_INTERVAL_MS = 30_000L;
 
     private static WifiBridge instance;
 
@@ -50,17 +49,11 @@ public final class WifiBridge {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
 
-    private Process process;
-    private BufferedWriter stdin;
-    private Thread stdoutThread;
-    private Thread stderrThread;
+    private NativeEngine engine;
     private volatile boolean running;
     private volatile boolean userStopped;
-    private int restarts;
-    private long restartWindowStart;
-    /** Last time the opx-usb shim was run to explain an empty device list. */
+    /** Last time the bridge was asked to explain an empty device list. */
     private long lastUsbProbeAt;
-    private static final long USB_PROBE_INTERVAL_MS = 30_000L;
     /** A running session holds a partial wakelock; a scan has to outlive the screen. */
     private PowerManager.WakeLock wakeLock;
 
@@ -90,56 +83,32 @@ public final class WifiBridge {
         if (running) return;
         userStopped = false;
         if (OpxService.getState() != OpxService.STATE_READY) {
-            AppLog.info(TAG, "start() ignored: runtime not ready");
+            AppLog.info(TAG, "start() ignored: the engine service is not ready");
             return;
         }
 
         // The engine reaches the adapter through the in-app USB bridge, so it must be listening
-        // before the process asks for its first device. The shim it execs is repaired first:
-        // an installed prefix can still carry a #!/usr/bin/env line, which Android cannot exec.
-        OpxRuntime.ensureUsbShim(context);
+        // before the engine asks for its first device.
         UsbHostBridge.start(context);
         if (!UsbHostBridge.isListening()) {
             // The engine finds its adapter only through this socket: starting it without a
-            // bridge would run a process that can never see a card and log "no adapter" for
-            // the whole session instead of the real reason.
+            // bridge would leave a session that can never see a card and logs "no adapter" for
+            // as long as it runs instead of the real reason.
             AppLog.info(TAG, "engine not started: the USB bridge socket is not listening");
             notifyStopped("the USB bridge could not open; the engine was not started");
             return;
         }
         acquireWakeLock();
-        // pyusb needs the prefix's libusb visible; the shim must exist before python starts.
-        OpxRuntime.ensureSiteShim(context);
 
-        List<String> command = OpxRuntime.engineCommand(context);
-        ProcessBuilder builder = new ProcessBuilder(command);
-        builder.redirectErrorStream(false);
-        builder.environment().clear();
-        OpxRuntime.applyEnvironment(builder, context);
-        AppLog.info(TAG, "starting engine: " + String.join(" ", command));
-        try {
-            process = builder.start();
-        } catch (IOException e) {
-            Log.w(TAG, "cannot start the engine", e);
-            AppLog.error(TAG, e);
-            notifyStopped("cannot start the engine: " + e.getMessage());
-            return;
-        }
-
-        stdin = new BufferedWriter(new OutputStreamWriter(process.getOutputStream(),
-                StandardCharsets.UTF_8));
+        engine = NativeEngine.start(context, event -> {
+            AppLog.verbose(TAG, "event: " + event);
+            main.post(() -> deliver(event));
+        });
         running = true;
+        AppLog.info(TAG, "native engine started");
 
-        stdoutThread = new Thread(this::readEvents, "opx-engine-stdout");
-        stdoutThread.setDaemon(true);
-        stdoutThread.start();
-
-        stderrThread = new Thread(this::readErrors, "opx-engine-stderr");
-        stderrThread.setDaemon(true);
-        stderrThread.start();
-
-        // The engine only speaks after a command: the ready ping, then its settings, the
-        // adapter list and the status, so the WiFi screen always knows whether an adapter is there.
+        // The ready ping, then its settings, the adapter list and the status, so the WiFi screen
+        // always knows whether an adapter is there.
         send(json("cmd", "ping"));
         setDfs(context.getSharedPreferences(SettingsFragment.PREFS, Context.MODE_PRIVATE)
                 .getBoolean(SettingsFragment.PREF_DFS, false));
@@ -147,73 +116,11 @@ public final class WifiBridge {
         send(json("cmd", "status"));
     }
 
-    private void readEvents() {
-        Process started = process;
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(started.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                final String payload = line.trim();
-                if (payload.isEmpty()) continue;
-                try {
-                    final JSONObject event = new JSONObject(payload);
-                    AppLog.verbose(TAG, "event: " + payload);
-                    main.post(() -> deliver(event));
-                } catch (JSONException e) {
-                    AppLog.info(TAG, "non-JSON engine output: " + payload);
-                }
-            }
-        } catch (IOException e) {
-            AppLog.info(TAG, "engine stream closed");
-        } finally {
-            final boolean wasRunning = running;
-            running = false;
-            if (wasRunning) {
-                AppLog.info(TAG, "engine process exited");
-                releaseWakeLock();
-                main.post(() -> notifyStopped("the engine stopped"));
-                maybeRestart();
-            }
-        }
-    }
-
-    private void readErrors() {
-        Process started = process;
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(started.getErrorStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) AppLog.verbose(TAG, "stderr: " + line);
-        } catch (IOException ignored) {
-            // The process is gone; the stdout thread reports it.
-        }
-    }
-
-    /**
-     * Restarts an engine that died unexpectedly, at most three times per ten minutes so a
-     * crash loop cannot spin forever.
-     */
-    private void maybeRestart() {
-        if (userStopped) return;
-        long now = System.currentTimeMillis();
-        if (restartWindowStart == 0 || now - restartWindowStart > 10 * 60 * 1000L) {
-            restartWindowStart = now;
-            restarts = 0;
-        }
-        if (restarts >= 3) {
-            AppLog.info(TAG, "not restarting the engine again: three restarts in ten minutes");
-            return;
-        }
-        restarts++;
-        if (OpxService.getState() != OpxService.STATE_READY) return;
-        main.postDelayed(() -> {
-            AppLog.info(TAG, "restarting the engine after an unexpected exit");
-            start();
-        }, 2000);
-    }
-
     private void deliver(JSONObject event) {
-        if ("devices".equals(event.optString("event")) && event.optInt("count", 0) == 0) {
-            probeUsbShim();
+        if ("devices".equals(event.optString("event"))) {
+            int listed = event.optJSONArray("devices") == null
+                    ? 0 : event.optJSONArray("devices").length();
+            if (listed == 0) probeUsbBridge();
         }
         for (Listener listener : listeners) {
             try {
@@ -225,22 +132,22 @@ public final class WifiBridge {
     }
 
     /**
-     * Runs the shim the engine execs and logs its own output.
+     * Asks the bridge itself how it sees the USB bus and logs the answer.
      * <p>
-     * The engine sees no adapter through {@code opx-usb}; when the shim itself is the part that
-     * fails (a missing file, a broken interpreter line, a refused socket) the engine can only
-     * report an empty list. This runs the same command outside the engine, rate-limited, so the
-     * app's log names the failing layer instead of repeating "no adapter".
+     * When the engine reports no adapter, the failing layer is either the socket, the permission
+     * or the cable; this names which one, rate-limited, instead of repeating "no adapter".
      */
-    private void probeUsbShim() {
-        long now = android.os.SystemClock.elapsedRealtime();
+    private void probeUsbBridge() {
+        long now = SystemClock.elapsedRealtime();
         if (now - lastUsbProbeAt < USB_PROBE_INTERVAL_MS) return;
         lastUsbProbeAt = now;
         Thread probe = new Thread(() -> {
-            OpxRuntime.CommandResult result = OpxRuntime.run(context, "opx-usb", "-l");
-            String output = result.output.trim().replace("\n", " | ");
-            if (output.length() > 400) output = output.substring(0, 400) + "...";
-            AppLog.info(TAG, "opx-usb -l exited " + result.exitCode + ": " + output);
+            try {
+                AppLog.info(TAG, "bridge listening=" + UsbHostBridge.isListening()
+                        + " devices=" + UsbFd.list());
+            } catch (IOException e) {
+                AppLog.info(TAG, "cannot ask the USB bridge: " + e.getMessage());
+            }
         }, "opx-usb-probe");
         probe.setDaemon(true);
         probe.start();
@@ -258,25 +165,16 @@ public final class WifiBridge {
 
     /** Sends one command. Ignored when the engine is not running. */
     public synchronized void send(JSONObject command) {
-        if (!running || stdin == null) return;
+        if (!running || engine == null) return;
         AppLog.verbose(TAG, "send: " + command);
-        try {
-            stdin.write(command.toString());
-            stdin.write('\n');
-            stdin.flush();
-        } catch (IOException e) {
-            Log.w(TAG, "cannot write to the engine", e);
-            AppLog.error(TAG, e);
-            running = false;
-            notifyStopped("the engine is not accepting commands");
-        }
+        engine.send(command);
     }
 
     public void requestDevices() {
         send(json("cmd", "devices"));
     }
 
-    /** Applies the one wifi4 scanner preference the app exposes: DFS channel hopping. */
+    /** Applies the one scanner preference the app exposes: DFS channel hopping. */
     public void setDfs(boolean enabled) {
         JSONObject command = json("cmd", "config");
         try {
@@ -297,13 +195,13 @@ public final class WifiBridge {
         send(command);
     }
 
-    /** Cancels a running scan and keeps the adapter alive; {@link #stop()} ends the process. */
+    /** Cancels a running scan and keeps the adapter alive; {@link #stop()} ends the session. */
     public void stopScan() {
         send(json("cmd", "stop_scan"));
     }
 
     /**
-     * Asks the engine which attacks wifi4 offers for each AP in its sink. The reply is a
+     * Asks the engine which attacks it offers for each AP in its sink. The reply is a
      * {@code targets} event, so the app never guesses eligibility from the row labels.
      */
     public void requestTargets() {
@@ -315,7 +213,7 @@ public final class WifiBridge {
         attack(kind, bssid, null);
     }
 
-    /** Evil Twin/captive portal settings from the target sheet; null keeps wifi4's defaults. */
+    /** Evil Twin/captive portal settings from the target sheet; null keeps the defaults. */
     public void attack(String kind, String bssid, JSONObject options) {
         JSONObject command = json("cmd", "attack");
         try {
@@ -344,7 +242,7 @@ public final class WifiBridge {
         send(json("cmd", "stop_attack"));
     }
 
-    /** One client, one de-auth burst: the TUI's inline ✕ on its clients panel. */
+    /** One client, one de-auth burst: the inline ✕ on the clients panel. */
     public void deauthClient(String bssid, String client) {
         JSONObject command = json("cmd", "deauth_client");
         try {
@@ -356,7 +254,7 @@ public final class WifiBridge {
         send(command);
     }
 
-    /** Broadcast de-auth: the TUI's 'd' hotkey. */
+    /** Broadcast de-auth. */
     public void deauthAll(String bssid) {
         JSONObject command = json("cmd", "deauth_all");
         try {
@@ -367,7 +265,7 @@ public final class WifiBridge {
         send(command);
     }
 
-    /** wifi4's silenced list: campaigns off and captures ignored for that AP. */
+    /** The engine's silenced list: campaigns off and captures ignored for that AP. */
     public void setSilenced(String bssid, boolean silenced) {
         JSONObject command = json("cmd", "silence");
         try {
@@ -400,15 +298,15 @@ public final class WifiBridge {
         send(json("cmd", "captures"));
     }
 
-    /** Asks which cracking tools this runtime can actually start ({@code crack_tools}). */
+    /** Asks which cracking tools this build can actually start ({@code crack_tools}). */
     public void requestCrackTools() {
         send(json("cmd", "crack_tools"));
     }
 
     /**
-     * Runs one wifi4 cracking tool over one saved capture. {@code wordlists} are absolute paths
-     * the engine can read; the booleans select wifi4's default-password list, the AP's
-     * SSID-derived candidates and the SSIDs nearby clients probed for this session.
+     * Runs one cracking tool over one saved capture. {@code wordlists} are absolute paths the
+     * engine can read; the booleans select the default-password list, the AP's SSID-derived
+     * candidates and the SSIDs nearby clients probed for this session.
      */
     public void crack(String capture, String tool, List<String> wordlists,
                       boolean defaultPasswords, boolean ssidPasswords, boolean probedSsids) {
@@ -472,21 +370,12 @@ public final class WifiBridge {
         wakeLock = null;
     }
 
-    /** Shuts the engine process down. The next {@link #start()} spawns a fresh one. */
+    /** Shuts the engine down. The next {@link #start()} brings up a fresh session. */
     public synchronized void stop() {
         userStopped = true;
         running = false;
-        if (process != null) {
-            try {
-                stdin.write("{\"cmd\":\"stop\"}\n");
-                stdin.flush();
-            } catch (IOException | NullPointerException ignored) {
-                // The process may already be gone.
-            }
-            process.destroy();
-            process = null;
-        }
-        stdin = null;
+        NativeEngine.stop();
+        engine = null;
         UsbHostBridge.stop();
         releaseWakeLock();
         AppLog.info(TAG, "engine stopped by the app");

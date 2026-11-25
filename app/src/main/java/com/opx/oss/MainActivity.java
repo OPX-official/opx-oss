@@ -80,22 +80,11 @@ public class MainActivity extends AppCompatActivity implements OpxService.Listen
         rowAbout.setOnClickListener(v -> open(R.id.nav_about));
         rowSettings.setOnClickListener(v -> open(R.id.nav_settings));
 
-        // First launch belongs to the intro: it grants permissions and starts the download
-        // with OpxService.beginDownload(), so no network or install happens behind it.
-        boolean introSeen = getSharedPreferences("opx", MODE_PRIVATE)
-                .getBoolean("intro_seen", false);
-        boolean downloadStarted = getSharedPreferences("opx", MODE_PRIVATE)
-                .getBoolean("download_allowed", false);
-        if (introSeen || downloadStarted || OpxRuntime.isInstalled(this)) OpxService.start(this);
+        // The engine ships inside the APK, so the service starts on every launch: there is no
+        // runtime to download and no intro gate to wait behind.
+        OpxService.start(this);
 
-        if (savedInstanceState == null) {
-            open(R.id.nav_home);
-            // The intro owns the first launch: permissions and the runtime download happen
-            // there, and only its finish marks the setup as seen.
-            if (!getSharedPreferences("opx", MODE_PRIVATE).getBoolean("intro_seen", false)) {
-                startActivity(new Intent(this, IntroActivity.class));
-            }
-        }
+        if (savedInstanceState == null) open(R.id.nav_home);
     }
 
     private void decorate(View row, int iconRes, int titleRes) {
