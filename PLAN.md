@@ -241,7 +241,7 @@
 ### M1 — চলছে (আনুমানিক ৫০%)
 
 - [x] **ক্লিন স্লেট:** চলন্ত `Packages` রান #43 (`45615454874`) বাতিল; সব ১২টি রিলিজ ও ট্যাগ (`latest`, `v0.2.0-alpha.*`, `v0.1.0-alpha.*`) মুছে ফেলা — এখন শূন্য।
-- [x] **পুরনো বাইরের-নির্ভর পাইপলাইন বাদ:** `.github/workflows/packages.yml`, `tools/build-base.sh`, `tools/build-packages.sh`, `tools/fetch-packages.sh`, `tools/make-index.py`, `tools/merge-index.py`, `tools/select-debs.py`, `tools/patch-bootstraps.py`, `tools/patch-properties.py`, `tools/patch-wifi4.py`, `tools/prune-foreign.py`, `tools/prune-size.py`, `tools/rebrand-runtime.py`, `tools/republish-archive.sh`, `tools/scrub-names.py`, `tools/termux/`, `tools/engine/`, `tools/usb/`।
+- [x] **পুরনো বাইরের-নির্ভর পাইপলাইন বাদ:** `.github/workflows/packages.yml`, `tools/build-base.sh`, `tools/build-packages.sh`, `tools/fetch-packages.sh`, `tools/make-index.py`, `tools/merge-index.py`, `tools/select-debs.py`, `tools/patch-bootstraps.py`, `tools/patch-properties.py`, `tools/patch-wifi4.py`, `tools/prune-foreign.py`, `tools/prune-size.py`, `tools/rebrand-runtime.py`, `tools/republish-archive.sh`, `tools/scrub-names.py`, পুরনো GPU-ক্র্যাকার রেসিপি ফোল্ডার, `tools/engine/`, `tools/usb/`।
 - [x] **`engine/UsbFd.java`** — `opx.usb` ক্লায়েন্ট: `list`/`open`, SCM_RIGHTS ডেসক্রিপ্টর গ্রহণ, `OPX_USB_FD` নাম ধরে রাখা।
 - [x] **`engine/UsbTransport.java`** — নিজের USB ট্রান্সপোর্ট: `bulkIn`/`bulkOut`/`control`, ইন্টারফেস claim, পারমিশন-অপেক্ষা, close — libusb-এর কোনো অংশ নেই।
 - [x] **`engine/NativeEngine.java`** — ইন-প্রসেস লাইন প্রোটোকল: `ready`/`ping`/`status`/`config`/`devices`/`targets`/`captures`/`attack_status`/`stop`/`error`, একক ওয়ার্কার থ্রেড।
