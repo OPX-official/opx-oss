@@ -744,6 +744,7 @@ def _start_portal(ap, settings):
         raise ValueError("AP mode needs a network name")
     template = str(settings.get("template") or "default")
     template_path = str(settings.get("template_path") or "") or None
+    _ui_log(f"AP mode: '{ssid}' on {iface.name}, channel {getattr(ap, 'channel', '?')}")
     success_path = str(settings.get("success_path") or "") or None
 
     def verify(psk):

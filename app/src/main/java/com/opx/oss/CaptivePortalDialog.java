@@ -1,6 +1,8 @@
 package com.opx.oss;
 
 import android.app.Dialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
@@ -34,6 +36,8 @@ final class CaptivePortalDialog {
     private final Listener listener;
     private final EditText input;
     private final TextView status;
+    private final TextView logView;
+    private final StringBuilder lines = new StringBuilder();
     private final MaterialButton verify;
 
     CaptivePortalDialog(Context context, String ssid, Listener listener) {
@@ -97,10 +101,25 @@ final class CaptivePortalDialog {
         body.addView(input, inputParams);
 
         status = new TextView(context);
+        status.setText(R.string.portal_ap_starting);
         status.setTextColor(ContextCompat.getColor(context, R.color.grey));
         status.setTextSize(12);
         status.setPadding(0, dp(6), 0, 0);
         body.addView(status);
+
+        // A small terminal: the AP's own lines stay readable even after Verify writes status.
+        logView = new TextView(context);
+        logView.setTextColor(ContextCompat.getColor(context, R.color.grey));
+        logView.setTextSize(10);
+        logView.setTypeface(android.graphics.Typeface.MONOSPACE);
+        logView.setPadding(dp(8), dp(8), dp(8), dp(8));
+        logView.setBackgroundColor(Color.parseColor("#22000000"));
+        logView.setMaxLines(9);
+        logView.setVisibility(android.view.View.GONE);
+        LinearLayout.LayoutParams logParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        logParams.topMargin = dp(8);
+        body.addView(logView, logParams);
 
         LinearLayout actions = new LinearLayout(context);
         actions.setGravity(Gravity.END);
@@ -108,6 +127,24 @@ final class CaptivePortalDialog {
         LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         actionParams.topMargin = dp(8);
+
+        MaterialButton copyLog = new MaterialButton(context);
+        copyLog.setText(R.string.portal_ap_copy_log);
+        copyLog.setTextSize(10);
+        copyLog.setTextColor(ContextCompat.getColor(context, R.color.grey));
+        copyLog.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.TRANSPARENT));
+        copyLog.setOnClickListener(v -> {
+            ClipboardManager clipboard = (ClipboardManager) context
+                    .getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard == null) return;
+            String text = logText();
+            if (!status.getText().toString().isEmpty()) {
+                text = status.getText().toString() + "\n" + text;
+            }
+            clipboard.setPrimaryClip(ClipData.newPlainText("OPX AP log", text));
+            status.setText(R.string.portal_ap_log_copied);
+        });
+        actions.addView(copyLog);
 
         MaterialButton cancel = new MaterialButton(context);
         cancel.setText(R.string.wifi_captive_cancel);
@@ -141,6 +178,27 @@ final class CaptivePortalDialog {
 
     void dismiss() {
         if (dialog.isShowing()) dialog.dismiss();
+    }
+
+    /** One AP line, kept in a small scroll-free log the user can read or copy. */
+    void appendLog(String line) {
+        if (line == null || line.trim().isEmpty()) return;
+        lines.append(line.trim()).append('\n');
+        String[] parts = lines.toString().split("\n");
+        if (parts.length > 9) {
+            StringBuilder trimmed = new StringBuilder();
+            for (int i = parts.length - 9; i < parts.length; i++) {
+                trimmed.append(parts[i]).append('\n');
+            }
+            lines.setLength(0);
+            lines.append(trimmed);
+        }
+        logView.setText(lines.toString().trim());
+        logView.setVisibility(android.view.View.VISIBLE);
+    }
+
+    String logText() {
+        return lines.toString().trim();
     }
 
     /** Live AP state: what the engine is doing, or why the AP did not come up. */

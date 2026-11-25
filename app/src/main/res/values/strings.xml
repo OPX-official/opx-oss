@@ -371,6 +371,9 @@
     <string name="portal_ap_hint">Test a password (optional)</string>
     <string name="portal_ap_starting">Starting the AP… clients will see the portal.</string>
     <string name="portal_ap_failed">The AP stopped</string>
+    <string name="portal_ap_copy_log">COPY LOG</string>
+    <string name="portal_ap_log_copied">AP log copied</string>
+    <string name="portal_template_hint">Tap to browse 19 categories and 208 pages, or pick your own HTML file.</string>
     <string name="portal_template_choose">Choose template</string>
     <string name="portal_template_default">Default sign-in (OPX-wifi4)</string>
     <string name="portal_template_category">Choose a category</string>

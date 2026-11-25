@@ -88,6 +88,9 @@ public final class NativeEngine {
     private volatile boolean stopped;
     /** True once wifi4's own array has been attached, so a plain scan stop touches nothing. */
     private volatile boolean wifi4Attached;
+    // The portal/Evil Twin campaigns run in wifi4 even before a scan attached its array, so
+    // stop_attack must still reach wifi4 after they start.
+    private volatile boolean wifi4AttackRunning;
     /** True while wifi4's backend is the one hopping the card for a scan. */
     private volatile boolean wifi4Scanning;
     private volatile int wifi4Count;
@@ -235,15 +238,19 @@ public final class NativeEngine {
                 case "crack_status":
                     crackStatus();
                     break;
-                case "attack":
-                    if (wifi4Attached) {
+                case "attack": {
+                    // Portal and Evil Twin are wifi4 campaigns; the Java engine has no portal,
+                    // so routing them by "attached" silently turned Start AP into an error.
+                    String kind = command.optString("kind");
+                    if (wifi4Attached || "portal".equals(kind) || "eviltwin".equals(kind)) {
                         wifi4AttackCommand(command);
                     } else {
                         attack(command);
                     }
                     break;
+                }
                 case "stop_attack":
-                    if (wifi4Attached) wifi4StopAttack();
+                    if (wifi4Attached || wifi4AttackRunning) wifi4StopAttack();
                     else stopAttack();
                     break;
                 case "attack_status":
@@ -930,6 +937,7 @@ public final class NativeEngine {
         boolean running = PythonChip.backendBool("attack", kind,
                 bssid == null || bssid.isEmpty() ? null : bssid,
                 options == null ? "" : options.toString());
+        wifi4AttackRunning = running;
         if (running) {
             JSONObject started = event("attack_started");
             try {
@@ -1052,6 +1060,7 @@ public final class NativeEngine {
                         JSONArray foundKeys = status.optJSONArray("keys");
                         if (foundKeys != null) done.put("keys", foundKeys);
                         emitQuietly(done);
+                        wifi4AttackRunning = false;
                         return;
                     }
                 } catch (Exception broken) {
@@ -1092,6 +1101,7 @@ public final class NativeEngine {
     }
 
     private void wifi4StopAttack() {
+        wifi4AttackRunning = false;
         boolean stopped = false;
         try {
             stopped = PythonChip.backendBool("stop_attack");

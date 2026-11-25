@@ -504,6 +504,7 @@ class PortalAp:
 
     async def run(self) -> None:
         """Start serving and return, the way wifi4's campaigns start their own task."""
+        self.log(f"AP starting: '{self.ssid}' on CH {self.channel}")
         asyncio.create_task(self._serve())
 
     async def _serve(self) -> None:

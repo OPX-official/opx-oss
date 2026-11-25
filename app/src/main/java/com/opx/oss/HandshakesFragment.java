@@ -176,7 +176,14 @@ public class HandshakesFragment extends Fragment
             if (portalDialog != null) portalDialog.status(getString(R.string.portal_ap_starting));
         } else if ("attack_log".equals(name)) {
             // The AP's own lines ("AP 'x' up on CH 6", "leased 192.168.4.10", "portal …").
-            if (portalDialog != null) portalDialog.status(event.optString("line"));
+            if (portalDialog != null) {
+                String line = event.optString("line");
+                portalDialog.appendLog(line);
+                if (line.contains(" up on CH ") || line.startsWith("AP:")
+                        || line.startsWith("AP failed")) {
+                    portalDialog.status(line);
+                }
+            }
         } else if ("attack_done".equals(name)) {
             if (portalDialog != null) {
                 boolean ok = event.optBoolean("ok", true);
