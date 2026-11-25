@@ -4,6 +4,7 @@
     <item name="nav_home" type="id" />
     <item name="nav_wifi" type="id" />
     <item name="nav_handshakes" type="id" />
+    <item name="nav_credentials" type="id" />
     <item name="nav_logs" type="id" />
     <item name="nav_about" type="id" />
     <item name="nav_settings" type="id" />

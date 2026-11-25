@@ -313,6 +313,41 @@
     <string name="hs_key_wep">WEP key</string>
     <string name="hs_key_pin">PIN %1$s</string>
     <string name="hs_key_copied">Key copied</string>
+
+    <!-- Saved passwords: the recovered keys, their details and where they came from. -->
+    <string name="nav_credentials">Saved passwords</string>
+    <string name="home_tool_creds">Saved passwords</string>
+    <string name="home_tool_creds_body">Keys and PINs your attacks recovered</string>
+    <string name="cred_title">Saved passwords</string>
+    <string name="cred_subtitle">Every key, PIN and WEP key wifi4 recovered, with how it was cracked.</string>
+    <string name="cred_section_saved">RECOVERED CREDENTIALS</string>
+    <string name="cred_status_count">%1$d saved</string>
+    <string name="cred_status_empty">Nothing saved yet</string>
+    <string name="cred_empty_title">No saved passwords yet</string>
+    <string name="cred_empty_body">A WPS PIN, an open Push-Button window or a cracked handshake lands
+        here automatically, with the source named.</string>
+    <string name="cred_refresh">Refresh</string>
+    <string name="cred_detail_title">Credential details</string>
+    <string name="cred_field_ssid">Network</string>
+    <string name="cred_field_bssid">BSSID</string>
+    <string name="cred_field_type">Type</string>
+    <string name="cred_field_value">Password</string>
+    <string name="cred_field_pin">WPS PIN</string>
+    <string name="cred_field_saved">Saved</string>
+    <string name="cred_field_source">Source file</string>
+    <string name="cred_field_capture">Cracked from</string>
+    <string name="cred_how_title">HOW IT WAS RECOVERED</string>
+    <string name="cred_how_wps_pin">WPS PIN exchange: the AP accepted the PIN and handed the PSK
+        over in the same exchange.</string>
+    <string name="cred_how_wps_pbc">WPS Push-Button: the window was open, so the PSK came out of
+        the PBC exchange.</string>
+    <string name="cred_how_wpa_psk">Cracked from the saved capture %1$s.</string>
+    <string name="cred_how_wpa_psk_no_capture">Cracked from this network's saved handshake.</string>
+    <string name="cred_how_wep">WEP key recovered from this network's IV/ARP replay.</string>
+    <string name="cred_copy_value">Copy password</string>
+    <string name="cred_copy_pin">Copy PIN</string>
+    <string name="cred_close">Close</string>
+    <string name="cred_copied">Copied</string>
     <string name="hs_status_empty">No captures yet</string>
     <string name="hs_status_count">%1$d captures · %2$d cracked</string>
     <string name="hs_storage_path">the engine\'s capture directory</string>

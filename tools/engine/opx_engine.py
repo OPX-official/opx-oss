@@ -1600,6 +1600,16 @@ class Engine:
         root = captures_dir()
         if not root.is_dir():
             return entries
+        # Which saved capture this key was cracked from: the details view names it, the way the
+        # desktop Vault does. wifi4 writes "<SSID>_<bssid with dashes>.hc22000".
+        captures = {}
+        try:
+            for capture in sorted(root.glob("*.hc22000")):
+                mac = re.search(r"([0-9a-fA-F]{2}(?:-[0-9a-fA-F]{2}){5})", capture.name)
+                if mac:
+                    captures.setdefault(mac.group(1).replace("-", ":").lower(), capture.name)
+        except OSError:
+            captures = {}
         kinds = {"_wps_pin.txt": "wps_pin", "_wps_pbc.txt": "wps_pbc",
                  "_wpa_psk.txt": "wpa_psk", "_wep_key.txt": "wep"}
         for path in sorted(root.glob("*.txt")):
@@ -1628,10 +1638,12 @@ class Engine:
                 when = int(path.stat().st_mtime)
             except OSError:
                 when = 0
+            bssid = field("BSSID")
             entries.append({
                 "id": path.name, "ssid": field("SSID"),
-                "bssid": field("BSSID"), "kind": kind,
+                "bssid": bssid, "kind": kind,
                 "value": value, "pin": pin, "when": when,
+                "capture": captures.get(bssid.lower(), ""),
             })
         entries.sort(key=lambda entry: entry["when"], reverse=True)
         return entries
