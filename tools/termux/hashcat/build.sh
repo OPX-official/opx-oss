@@ -14,8 +14,11 @@ TERMUX_PKG_BUILD_IN_SRC=true
 # start a single backend, even with a working GPU.
 TERMUX_PKG_EXTRA_MAKE_ARGS="USE_SYSTEM_OPENCL=0 SHARED=1"
 
+# The pinned termux tree names its job count TERMUX_PKG_MAKE_PROCESSES (setup_variables),
+# not the older TERMUX_MAKE_PROCESSES: using the old name aborted the build with "unbound
+# variable" and left the shipped runtime without a hashcat binary at all.
 termux_step_make() {
-	make -j"${TERMUX_MAKE_PROCESSES}" \
+	make -j"${TERMUX_PKG_MAKE_PROCESSES}" \
 		PREFIX="${TERMUX_PREFIX}" \
 		USE_SYSTEM_OPENCL=0 \
 		SHARED=1
