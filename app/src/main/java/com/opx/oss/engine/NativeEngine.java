@@ -24,6 +24,7 @@ import com.opx.oss.engine.chips.WifiChip;
 import com.opx.oss.engine.chips.firmware.FirmwareStore;
 import com.opx.oss.engine.chips.ChipRegistry;
 import com.opx.oss.engine.chips.Driver;
+import com.opx.oss.engine.chips.PythonChip;
 import com.opx.oss.engine.dot11.Eapol;
 import com.opx.oss.engine.dot11.Mac;
 import com.opx.oss.engine.dot11.Parser;
@@ -83,6 +84,11 @@ public final class NativeEngine {
         return thread;
     });
     private volatile boolean stopped;
+    /** True once wifi4's own array has been attached, so a plain scan stop touches nothing. */
+    private volatile boolean wifi4Attached;
+    /** True while wifi4's backend is the one hopping the card for a scan. */
+    private volatile boolean wifi4Scanning;
+    private volatile int wifi4Count;
 
     private NativeEngine(Context context, Listener listener) {
         this.context = context;
@@ -170,6 +176,27 @@ public final class NativeEngine {
                     break;
                 case "stop_scan":
                     stopScan();
+                    break;
+                // wifi4's own backend (its WlanArray + campaigns, in Python next to the
+                // driver). Additive: nothing above changes, these commands just route work
+                // into the vendored engine instead of the Java one.
+                case "wifi4_scan":
+                    wifi4Scan(command.optInt("seconds", 0), command.optInt("interval_ms", 500));
+                    break;
+                case "wifi4_stop_scan":
+                    wifi4StopScan();
+                    break;
+                case "wifi4_targets":
+                    wifi4Targets();
+                    break;
+                case "wifi4_attack":
+                    wifi4Attack(command.optString("kind"), command.optString("bssid"));
+                    break;
+                case "wifi4_stop_attack":
+                    wifi4StopAttack();
+                    break;
+                case "wifi4_status":
+                    wifi4Status();
                     break;
                 case "captures":
                     emit(event("captures").put("captures", Vault.toJson(context)));
@@ -263,6 +290,11 @@ public final class NativeEngine {
         scan.clear();
         WifiChip adapter = openChip(path);
         AppLog.info("OpxEngine", "adapter up: " + adapter.name() + " " + adapter.mac());
+        if (wifi4ScanStart(seconds, 0.12)) {
+            // wifi4's array now hops the card; frames still reach onFrame() for handshakes.
+            adapter.startReceive(this::onFrame);
+            return;
+        }
 
         scanEngine.setPlan(true, false);
         scanEngine.start();
@@ -669,9 +701,204 @@ public final class NativeEngine {
         emitQuietly(status);
     }
 
+    // -- wifi4's backend ----------------------------------------------------------------
+
+    /**
+     * Start wifi4's own provider: its {@code WlanArray} hops the card it shares with the
+     * driver, so the AP table is built by wifi4's sink, not by this class.
+     */
+    private void wifi4Scan(int seconds, int intervalMs) throws Exception {
+        String path = firstSupportedDevice();
+        if (path == null) {
+            error("no supported adapter is attached");
+            return;
+        }
+        openChip(path);
+        if (!wifi4ScanStart(seconds, Math.max(50, intervalMs) / 1000.0)) {
+            error("wifi4's backend did not start the scan");
+        }
+    }
+
+    /**
+     * Hand the radio to wifi4's array. Returns false when the backend cannot start, leaving
+     * everything untouched so the caller can fall back to the Java scan.
+     */
+    private boolean wifi4ScanStart(int seconds, double interval) {
+        try {
+            PythonChip.ensurePython(context);
+            if (!PythonChip.backendBool("start_scan", null, interval)) return false;
+        } catch (Throwable failed) {
+            AppLog.error("OpxEngine", failed);
+            return false;
+        }
+        wifi4Attached = true;
+        wifi4Scanning = true;
+        wifi4Count = 0;
+        JSONObject begun = event("scan_started");
+        try {
+            begun.put("adapter", "wifi4").put("backend", "wifi4");
+        } catch (Exception ignored) {
+            // Plain types.
+        }
+        emit(begun);
+        Thread poll = new Thread(() -> {
+            long deadline = seconds > 0
+                    ? System.currentTimeMillis() + seconds * 1000L : Long.MAX_VALUE;
+            while (wifi4Scanning && System.currentTimeMillis() < deadline) {
+                wifi4Count = wifi4Refresh();
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            if (wifi4Scanning) {
+                wifi4Count = wifi4Refresh();
+                stopScan();
+            }
+        }, "opx-wifi4-scan");
+        poll.setDaemon(true);
+        poll.start();
+        return true;
+    }
+
+    private void wifi4StopScan() {
+        boolean stopped = false;
+        try {
+            stopped = PythonChip.backendBool("stop_scan");
+        } catch (RuntimeException failed) {
+            AppLog.error("OpxEngine", failed);
+        }
+        JSONObject reply = event("wifi4_scan_stopped");
+        try {
+            reply.put("stopped", stopped);
+        } catch (Exception ignored) {
+            // A plain boolean.
+        }
+        emitQuietly(reply);
+    }
+
+    /**
+     * Every AP wifi4's sink has seen: each one becomes the app's {@code network} row, so the same
+     * list that the built-in path fills is filled from wifi4's own state.
+     */
+    private void wifi4Targets() {
+        wifi4Refresh();
+    }
+
+    /** Emit wifi4's AP table as network rows; returns how many rows it holds. */
+    private int wifi4Refresh() {
+        PythonChip.ensurePython(context);
+        String json = PythonChip.backendText("targets");
+        JSONArray rows;
+        try {
+            rows = new JSONArray(json == null || json.isEmpty() ? "[]" : json);
+        } catch (Exception broken) {
+            error("wifi4 targets: " + broken.getMessage());
+            return 0;
+        }
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject row = rows.optJSONObject(i);
+            if (row == null) continue;
+            try {
+                JSONObject network = new JSONObject(row.toString());
+                network.put("event", "network");
+                network.put("vendor", row.optString("vendor", ""));
+                network.put("security", bucketFor(row.optString("privacy")));
+                out.put(network);
+                emitQuietly(network);
+            } catch (Exception ignored) {
+                // One malformed row must not hide the rest.
+            }
+        }
+        JSONObject reply = event("wifi4_targets");
+        try {
+            reply.put("targets", out).put("count", out.length());
+        } catch (Exception ignored) {
+            // A plain array and a number.
+        }
+        emitQuietly(reply);
+        return out.length();
+    }
+
+    /** Run one of wifi4's campaigns ({@code deauth}, {@code pmkid}, {@code pin}, …). */
+    private void wifi4Attack(String kind, String bssid) {
+        PythonChip.ensurePython(context);
+        boolean running = PythonChip.backendBool("attack", kind,
+                bssid == null || bssid.isEmpty() ? null : bssid);
+        JSONObject reply = event("wifi4_attack");
+        try {
+            reply.put("running", running).put("kind", kind)
+                    .put("bssid", bssid == null || bssid.isEmpty() ? JSONObject.NULL : bssid);
+        } catch (Exception ignored) {
+            // Plain types.
+        }
+        emitQuietly(reply);
+    }
+
+    private void wifi4StopAttack() {
+        boolean stopped = false;
+        try {
+            stopped = PythonChip.backendBool("stop_attack");
+        } catch (RuntimeException failed) {
+            AppLog.error("OpxEngine", failed);
+        }
+        JSONObject reply = event("wifi4_attack_stopped");
+        try {
+            reply.put("stopped", stopped);
+        } catch (Exception ignored) {
+            // A plain boolean.
+        }
+        emitQuietly(reply);
+    }
+
+    private void wifi4Status() {
+        PythonChip.ensurePython(context);
+        JSONObject reply = event("wifi4_status");
+        try {
+            String json = PythonChip.backendText("attack_status");
+            JSONObject status = new JSONObject(json == null || json.isEmpty() ? "{}" : json);
+            reply.put("running", status.optBoolean("running"));
+            reply.put("kind", status.isNull("kind") ? JSONObject.NULL : status.opt("kind"));
+            reply.put("bssid", status.isNull("bssid") ? JSONObject.NULL : status.opt("bssid"));
+            reply.put("available", PythonChip.backendBool("available"));
+        } catch (Exception failed) {
+            try {
+                reply.put("available", false).put("detail", String.valueOf(failed.getMessage()));
+            } catch (Exception ignored) {
+                // Reported without detail.
+            }
+        }
+        emitQuietly(reply);
+    }
+
+    /** wifi4's encryption text folded into the app's pill buckets, without a Java AP object. */
+    private static String bucketFor(String encryption) {
+        String text = encryption == null ? "" : encryption;
+        if ("WEP".equals(text)) return "WEP";
+        if (text.startsWith("WPA3")) return "WPA3";
+        if (text.startsWith("WPA2")) return "WPA2";
+        if (text.startsWith("WPA")) return "WPA";
+        return "OPEN";
+    }
+
     private void stopScan() {
         boolean wasRunning = scanEngine.isRunning();
+        boolean wasWifi4 = wifi4Attached;
+        int wifi4Rows = wifi4Count;
         scanEngine.stop();
+        wifi4Attached = false;
+        wifi4Scanning = false;
+        // wifi4's array keeps hopping on its own loop; release it before the card goes away.
+        if (wasWifi4) {
+            try {
+                PythonChip.backendBool("close");
+            } catch (Throwable ignored) {
+                // Its runtime may already be gone with the card.
+            }
+        }
         WifiChip stopping = chip;
         chip = null;
         if (stopping != null) {
@@ -680,6 +907,18 @@ public final class NativeEngine {
             } catch (Exception e) {
                 AppLog.info("OpxEngine", "closing the adapter: " + e.getMessage());
             }
+        }
+        if (wasWifi4) {
+            // The rows already went out as network events; the count is wifi4's, not ScanBook's.
+            JSONObject done = event("scan_done");
+            try {
+                done.put("count", wifi4Rows).put("frames", scanEngine.frames())
+                        .put("backend", "wifi4");
+            } catch (Exception ignored) {
+                // Plain values.
+            }
+            emitQuietly(done);
+            return;
         }
         if (!wasRunning) emitScanDone();
     }

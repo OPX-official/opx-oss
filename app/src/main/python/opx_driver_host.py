@@ -25,6 +25,9 @@ _driver = None
 _device = None
 _callback = None
 _family = None
+_vendor = 0
+_product = 0
+_entry = None
 _loop = None
 _thread = None
 _lock = threading.Lock()
@@ -91,12 +94,13 @@ def families():
 
 def start(fd, vendor, product, callback):
     """Wrap ``fd``, pick the family by id, bring the driver up and return its MAC."""
-    global _driver, _device, _callback, _family
+    global _driver, _device, _callback, _family, _vendor, _product, _entry
     with _lock:
         claim = _registry().get((int(vendor), int(product)))
         if claim is None:
             raise RuntimeError(f"no wifi4 driver for {vendor:04x}:{product:04x}")
         _family, entry, import_driver = claim
+        _vendor, _product, _entry = int(vendor), int(product), entry
         _callback = callback
         _device = usb_shim.install(int(fd), int(vendor), int(product))
         driver_class = import_driver()

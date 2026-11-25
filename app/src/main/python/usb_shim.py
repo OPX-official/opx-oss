@@ -34,6 +34,10 @@ class USBTimeoutError(USBError):
     pass
 
 
+class NoBackendError(USBError):
+    """PyUSB raises this when no backend can enumerate a bus; see ``usb.backend`` below."""
+
+
 def _open_library():
     """Load ``libusb-1.0.so`` from wherever this platform keeps it.
 
@@ -376,6 +380,7 @@ class _CoreModule:
 
     USBError = USBError
     USBTimeoutError = USBTimeoutError
+    NoBackendError = NoBackendError
     Device = Device
 
     def __init__(self):
@@ -439,21 +444,36 @@ class _UtilModule:
         return getattr(endpoint, "bEndpointAddress", endpoint)
 
 
-def install(fd: int, vendor: int, product: int):
-    """Wrap ``fd`` and register the shim as ``usb.core`` / ``usb.util``."""
+class IBackend:
+    """PyUSB's backend base: wifi4's device layer subclasses it, so the name must exist."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+class _Libusb1Module:
+    """``usb.backend.libusb1``: there is no bus to enumerate on Android.
+
+    The only device the app can open arrives as a usbfs fd, so ``get_backend`` reports none and
+    callers that insist on a backend (a desktop re-scan) get PyUSB's normal "no backend" path
+    instead of an ImportError at import time.
+    """
+
+    @staticmethod
+    def get_backend(find_library=None):  # noqa: ARG004 - PyUSB's signature
+        return None
+
+
+class _BackendModule:
+    IBackend = IBackend
+    libusb1 = _Libusb1Module()
+
+
+def _register(core):
+    """Publish ``usb`` / ``usb.core`` / ``usb.util`` / ``usb.backend`` over ``core``."""
     import sys
 
-    lib = _lib()
-    handle = ctypes.c_void_p()
-    rc = lib.libusb_wrap_sys_device(_CONTEXT[0], int(fd), ctypes.byref(handle))
-    # -5 (LIBUSB_ERROR_NOT_FOUND) can still leave a handle on some kernels; treat 0 as success.
-    if rc != 0:
-        raise USBError(f"libusb_wrap_sys_device failed: {rc}", -rc)
-
-    core = _CoreModule()
-    core.device = Device(handle, vendor, product)
     util = _UtilModule()
-
     core_module = type(sys)("usb.core")
     core_module.USBError = USBError
     core_module.USBTimeoutError = USBTimeoutError
@@ -465,13 +485,50 @@ def install(fd: int, vendor: int, product: int):
         if not name.startswith("_"):
             setattr(util_module, name, getattr(util, name))
 
+    backend_module = type(sys)("usb.backend")
+    backend_module.IBackend = IBackend
+    backend_module.libusb1 = _Libusb1Module()
+    libusb1_module = type(sys)("usb.backend.libusb1")
+    libusb1_module.get_backend = _Libusb1Module.get_backend
+
     usb_pkg = type(sys)("usb")
+    usb_pkg.__path__ = []
     usb_pkg.core = core_module
     usb_pkg.util = util_module
+    usb_pkg.backend = backend_module
 
     sys.modules["usb"] = usb_pkg
     sys.modules["usb.core"] = core_module
     sys.modules["usb.util"] = util_module
+    sys.modules["usb.backend"] = backend_module
+    sys.modules["usb.backend.libusb1"] = libusb1_module
     global _MODULE
     _MODULE = core
+    return getattr(core, "device", None)
+
+
+def bootstrap():
+    """Register the ``usb`` modules with no device wrapped yet.
+
+    A package that imports ``usb`` at module level (wifi4's backend layer does) can then be
+    imported before a card exists; ``install()`` swaps in the device-backed core afterwards.
+    """
+    import sys
+
+    if "usb" in sys.modules and getattr(sys.modules["usb"], "core", None) is not None:
+        return
+    _register(_CoreModule())
+
+
+def install(fd: int, vendor: int, product: int):
+    """Wrap ``fd`` and register the shim as ``usb.core`` / ``usb.util``."""
+    lib = _lib()
+    handle = ctypes.c_void_p()
+    rc = lib.libusb_wrap_sys_device(_CONTEXT[0], int(fd), ctypes.byref(handle))
+    # -5 (LIBUSB_ERROR_NOT_FOUND) can still leave a handle on some kernels; treat 0 as success.
+    if rc != 0:
+        raise USBError(f"libusb_wrap_sys_device failed: {rc}", -rc)
+    core = _CoreModule()
+    core.device = Device(handle, vendor, product)
+    _register(core)
     return core.device

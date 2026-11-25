@@ -22,6 +22,7 @@ import java.lang.reflect.Method;
 public final class PythonChip implements Driver {
 
     private static final String HOST_MODULE = "opx_driver_host";
+    private static final String BACKEND_MODULE = "opx_wifi4";
 
     private static volatile boolean runtimeStarted;
 
@@ -69,6 +70,21 @@ public final class PythonChip implements Driver {
         } catch (ReflectiveOperationException failed) {
             throw new IllegalStateException("embedded Python could not start", failed);
         }
+    }
+
+    /** Start the interpreter for the backend commands (idempotent, same runtime as the chip). */
+    public static void ensurePython(Context context) {
+        ensureStarted(context);
+    }
+
+    /** Call {@code opx_wifi4.<function>}; the backend answers in JSON text. */
+    public static String backendText(String function, Object... args) {
+        return text(call(pythonModule(BACKEND_MODULE), function, args));
+    }
+
+    /** Call {@code opx_wifi4.<function>} for a yes/no answer. */
+    public static boolean backendBool(String function, Object... args) {
+        return truth(call(pythonModule(BACKEND_MODULE), function, args));
     }
 
     /** True when the vendored wifi4 registry claims this id pair. */
@@ -211,11 +227,15 @@ public final class PythonChip implements Driver {
     // -- Chaquopy, by reflection so the JVM build needs no Android runtime --------------
 
     private static Object hostModule() {
+        return pythonModule(HOST_MODULE);
+    }
+
+    private static Object pythonModule(String name) {
         try {
             Class<?> pythonClass = Class.forName("com.chaquo.python.Python");
             Object python = pythonClass.getMethod("getInstance").invoke(null);
             Method getModule = pythonClass.getMethod("getModule", String.class);
-            return getModule.invoke(python, HOST_MODULE);
+            return getModule.invoke(python, name);
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException
                  | InvocationTargetException failed) {
             throw new IllegalStateException("embedded Python is not available", failed);

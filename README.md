@@ -60,6 +60,34 @@ replaced image is refused.
   kept intact.
 - No old runtime's name, path or dependency appears anywhere in the shipped system.
 
+## wifi4 as the backend
+
+The app carries wifi4's backend, not only its chip drivers: `wlan/` (`WlanArray`/`WlanSink`),
+`campaigns/` (deauth, pmkid, pin, pbc, decloak), `vault/`, `watchers/`, `id/`, `persist/` and
+`device/backend.py` are vendored under `app/src/main/python/wifi4/`, and
+`app/src/main/python/opx_wifi4.py` builds wifi4's array around the driver `opx_driver_host` has
+already opened.
+
+**The TUI is not shipped.** `wifi4/ui`, `wifi4/setup` (15 MB of platform binaries), the
+Termux/Windows device backends and the Windows-only hashcat console are deliberately absent;
+the three references they left behind are replaced (the rich `escape` helper, the
+`ui.focus_model` status lines, and `platformdirs` → the stdlib `platformdirs.py` shim). **No pip
+package is added**, so nothing new is built or downloaded.
+
+Scanning now goes through wifi4: `scan` starts its spread hop and polls its sink, emitting the
+same `network` rows; if the backend refuses to start, the Java scan runs instead. Frames are
+fanned out to both sinks, so handshake capture keeps working. The rest of the backend is behind
+its own commands:
+
+| command | what it does |
+|---|---|
+| `wifi4_scan` `{seconds, interval_ms}` | wifi4's array hops the card |
+| `wifi4_stop_scan` | stops hopping, keeps the table |
+| `wifi4_targets` | wifi4's AP table as `network` rows + one `wifi4_targets` event |
+| `wifi4_attack` `{kind, bssid}` | `deauth`, `pmkid`, `pin`, `pbc`, `decloak` |
+| `wifi4_stop_attack` | stops the running campaign |
+| `wifi4_status` | availability + the running campaign |
+
 ## Known gaps — fix pending
 
 Measured 2026-11-25 against the vendored `wifi4/chips` tree: **379 unique `vid:pid` pairs across
