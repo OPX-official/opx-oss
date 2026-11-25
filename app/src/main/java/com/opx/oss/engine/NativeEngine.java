@@ -143,9 +143,12 @@ public final class NativeEngine {
                 case "silence":
                     silenced(command.optString("bssid"), command.optBoolean("on", true));
                     break;
-                case "chop":
-                    emit(event("config").put("chop", command.optBoolean("on", false)));
+                case "chop": {
+                    JSONObject config = event("config");
+                    config.put("chop", command.optBoolean("on", false));
+                    emit(config);
                     break;
+                }
                 case "verify_psk":
                     verifyPsk(command.optString("bssid"), command.optString("psk"));
                     break;
@@ -342,14 +345,18 @@ public final class NativeEngine {
         WifiChip adapter = requireChip(bssid);
         if (adapter == null) return;
         adapter.transmit(Frame.deauth(Mac.of(bssid), Mac.of(client), 7));
-        emit(event("attack_done").put("ok", true).put("kind", "deauth_client"));
+        JSONObject done = event("attack_done");
+        done.put("ok", true).put("kind", "deauth_client");
+        emit(done);
     }
 
     private void deauthAll(String bssid) throws Exception {
         WifiChip adapter = requireChip(bssid);
         if (adapter == null) return;
         adapter.transmit(Frame.deauthAll(Mac.of(bssid), 7));
-        emit(event("attack_done").put("ok", true).put("kind", "deauth_all"));
+        JSONObject done = event("attack_done");
+        done.put("ok", true).put("kind", "deauth_all");
+        emit(done);
     }
 
     private WifiChip requireChip(String bssid) throws Exception {
@@ -370,7 +377,13 @@ public final class NativeEngine {
         } else {
             silenced.remove(bssid);
         }
-        emitQuietly(event("silence").put("bssid", bssid).put("on", on));
+        JSONObject reply = event("silence");
+        try {
+            reply.put("bssid", bssid).put("on", on);
+        } catch (Exception ignored) {
+            // A string and a boolean cannot fail to serialize.
+        }
+        emitQuietly(reply);
     }
 
     /** Check a candidate passphrase against the handshakes captured for this network. */
