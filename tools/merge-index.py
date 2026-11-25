@@ -134,6 +134,84 @@ def write_index(out: pathlib.Path, index: dict, entries: list[dict]) -> None:
     print(f"  index.json: {len(entries)} artifacts {kinds}")
 
 
+def verify_release(out: pathlib.Path, source: pathlib.Path) -> int:
+    """Makes the release-stored entries describe the assets the release actually serves.
+
+    A release asset is not in the checkout, so ``seal_page`` cannot vouch for it, and the APK
+    trusts whatever the catalogue says about it. An ``extras`` build inherits those entries from
+    the published catalogue, so nothing later in the pipeline ever looks at them again: a run
+    that once published other bytes than its catalogue described leaves a runtime no device can
+    install, and every following run keeps repeating the claim.
+
+    Here the published release is the authority. GitHub reports each asset's size and, for
+    uploads it has hashed, its SHA-256. An entry this run did not rebuild is corrected to what
+    the release serves; an entry whose file is on this runner but disagrees with the release
+    means the upload did not take, and the run fails instead of describing bytes nobody can
+    download.
+    """
+    index_path = out / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    published = json.loads(source.read_text(encoding="utf-8"))
+    assets = published.get("assets", []) if isinstance(published, dict) else published
+    by_name = {asset.get("name"): asset for asset in assets if asset.get("name")}
+
+    corrected = 0
+    missing = []
+    failed = []
+    for entry in index.get("packages", []):
+        if entry.get("storage") != "release":
+            continue
+        name = entry.get("path", "").replace("/", "__")
+        asset = by_name.get(name)
+        if asset is None:
+            missing.append(entry.get("path", name))
+            continue
+        size = int(asset.get("size", -1))
+        digest = asset.get("digest") or ""
+        sha = digest.partition(":")[2] if digest.startswith("sha256:") else ""
+        local = out / entry.get("path", "")
+        if local.is_file():
+            local_size = local.stat().st_size
+            local_sha = make_index.sha256(local)
+            if local_size != size or (sha and sha != local_sha):
+                failed.append(
+                    f"{entry['path']}: the release serves {size} bytes "
+                    f"({digest or 'no digest'}), this run uploaded {local_size} bytes "
+                    f"({local_sha})"
+                )
+                continue
+            sha = sha or local_sha
+        elif not sha:
+            failed.append(
+                f"{entry['path']}: the release reports no digest and the artifact is not on "
+                f"this runner, so its SHA-256 cannot be established"
+            )
+            continue
+        if entry.get("size") != size or entry.get("sha256") != sha:
+            print(f"  corrected {entry['path']}: {entry.get('size')} bytes "
+                  f"{str(entry.get('sha256'))[:12]} -> {size} bytes {sha[:12]} (what the "
+                  f"release serves)")
+            entry["size"] = size
+            entry["sha256"] = sha
+            corrected += 1
+
+    if missing:
+        print("catalogue lists release assets the release does not have: "
+              + ", ".join(missing), file=sys.stderr)
+        return 1
+    if failed:
+        for line in failed:
+            print(line, file=sys.stderr)
+        return 1
+    if corrected:
+        index["generated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        index_path.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+        make_index.write_apt_index(out, index["packages"])
+    print(f"  verified {sum(1 for e in index.get('packages', []) if e.get('storage') == 'release')} "
+          f"release asset(s), corrected {corrected}")
+    return 0
+
+
 def seal_page(page: pathlib.Path) -> int:
     """Makes the catalogue on the checkout describe the files that are about to be committed.
 
@@ -199,6 +277,8 @@ def main() -> int:
                         help="prune this gh-pages checkout against --out/index.json")
     parser.add_argument("--seal-page", type=pathlib.Path,
                         help="reseal this gh-pages checkout's catalogue from its own files")
+    parser.add_argument("--verify-release", type=pathlib.Path,
+                        help="release metadata to check the release-stored entries against")
     args = parser.parse_args()
 
     if args.seal_page is not None:
@@ -225,6 +305,8 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 1
     write_index(out, fresh, entries)
+    if args.verify_release is not None:
+        return verify_release(out, args.verify_release.resolve())
     return 0
 
 

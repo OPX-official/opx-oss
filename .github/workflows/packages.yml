@@ -244,6 +244,13 @@ jobs:
                 || gh release delete-asset packages "$asset" -R "$PACKAGES_REPO" --yes || true
             done
 
+          # The catalogue must describe the assets the release now serves. A release asset is
+          # not in the checkout, so the seal below cannot check it, and an `extras` build
+          # inherits those entries wholesale: reading the release back is the only step that
+          # ever compares the two, and it corrects an entry whose bytes changed without it.
+          gh api "repos/${PACKAGES_REPO}/releases/tags/packages" > "$work/release.json"
+          python3 tools/merge-index.py --out out --verify-release "$work/release.json"
+
           # No --delete: a file this run did not build is one the catalogue still lists. The
           # prune below removes only what the merged catalogue dropped (an old version).
           rsync -a --exclude .git out/ "$work/page/"
