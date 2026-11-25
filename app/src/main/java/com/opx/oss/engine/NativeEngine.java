@@ -201,8 +201,7 @@ public final class NativeEngine {
                     break;
                 }
             }
-            emitQuietly(event("scan_done").put("count", scan.size())
-                    .put("frames", scanEngine.frames()));
+            emitScanDone();
         }, "opx-scan-hop");
         hop.setDaemon(true);
         hop.start();
@@ -226,7 +225,7 @@ public final class NativeEngine {
         WifiChip stopping = chip;
         chip = null;
         if (stopping != null) stopping.close();
-        if (!wasRunning) emitQuietly(event("scan_done").put("count", scan.size()));
+        if (!wasRunning) emitScanDone();
     }
 
     /** The device path of the first attached adapter the engine has a driver for. */
@@ -321,6 +320,17 @@ public final class NativeEngine {
         } catch (Exception ignored) {
             // Nothing further to report.
         }
+    }
+
+    private void emitScanDone() {
+        JSONObject done = event("scan_done");
+        try {
+            done.put("count", scan.size());
+            done.put("frames", scanEngine.frames());
+        } catch (Exception ignored) {
+            // Both values are plain numbers.
+        }
+        emitQuietly(done);
     }
 
     private void emitQuietly(JSONObject event) {
