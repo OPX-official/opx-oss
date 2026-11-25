@@ -494,8 +494,8 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             targetInterfaces.clear();
             if (interfaces != null) {
                 for (int i = 0; i < interfaces.length(); i++) {
-                    String name = interfaces.optString(i, "");
-                    if (!name.isEmpty()) targetInterfaces.add(name);
+                    String ifaceName = interfaces.optString(i, "");
+                    if (!ifaceName.isEmpty()) targetInterfaces.add(ifaceName);
                 }
             }
             if (sheet != null && sheet.isShowing()) renderTargetAttacks();
