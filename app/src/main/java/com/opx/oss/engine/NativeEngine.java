@@ -95,6 +95,10 @@ public final class NativeEngine {
     private volatile boolean wifi4Configured;
     /** One capture watcher per attached card; it turns wifi4's saves into capture_saved events. */
     private volatile boolean wifi4VaultWatch;
+    /** The target whose screen is open: wifi4's packet counters are sampled for it while set. */
+    private volatile String wifi4Focus;
+    /** True while the live sampler thread runs; it sleeps rather than exits on a dismiss. */
+    private volatile boolean wifi4Live;
 
     private NativeEngine(Context context, Listener listener) {
         this.context = context;
@@ -215,6 +219,9 @@ public final class NativeEngine {
                     break;
                 case "wifi4_status":
                     wifi4Status();
+                    break;
+                case "wifi4_focus":
+                    wifi4Focus(command.optString("bssid"));
                     break;
                 case "captures":
                     captures();
@@ -944,7 +951,10 @@ public final class NativeEngine {
                     }
                     JSONObject snapshot = new JSONObject(PythonChip.backendText("progress"));
                     JSONObject counters = snapshot.optJSONObject("counters");
-                    // wifi4's counters are cumulative: the graph needs the per-second delta.
+                    // The backend now hands over wifi4's own per-second rates (it diffs the
+                    // cumulative counters exactly like the dashboard does). The delta below stays
+                    // as the fallback for a sample that has no rate yet.
+                    JSONObject sampled = snapshot.optJSONObject("rates");
                     JSONObject rates = new JSONObject();
                     JSONArray metrics = new JSONArray();
                     long seconds = Math.max(1, (System.currentTimeMillis() - startedAt) / 1000);
@@ -952,7 +962,9 @@ public final class NativeEngine {
                     for (String key : keys) {
                         int now = counters == null ? 0 : counters.optInt(key);
                         Integer was = before.put(key, now);
-                        int rate = was == null ? 0 : Math.max(0, now - was);
+                        int delta = was == null ? 0 : Math.max(0, now - was);
+                        long rate = sampled != null && sampled.has(key)
+                                ? Math.max(0, Math.round(sampled.optDouble(key, 0d))) : delta;
                         rates.put(key, rate);
                         // The chips above the meter carry the same number its row draws, so the
                         // top of the screen says which class is running and how fast.
@@ -974,7 +986,8 @@ public final class NativeEngine {
                     JSONObject progress = new JSONObject();
                     progress.put("rates", rates).put("metrics", metrics);
                     JSONObject entry = event("attack_progress");
-                    entry.put("kind", kind).put("progress", progress);
+                    entry.put("kind", kind).put("progress", progress)
+                            .put("bssid", target == null ? "" : target);
                     JSONArray lines = snapshot.optJSONArray("lines");
                     if (lines != null) entry.put("lines", lines);
                     emitQuietly(entry);
@@ -1039,6 +1052,68 @@ public final class NativeEngine {
             // A plain boolean.
         }
         emitQuietly(reply);
+    }
+
+    /**
+     * Pin the live sampler to one target (the sheet the user has open) or release it with an
+     * empty BSSID.
+     *
+     * <p>wifi4's Focus screen paints its packet dashboard from ``packet_stats`` the whole time a
+     * target is up — no attack needed, because the sink tallies every frame it hears. Reading
+     * those counters only while a campaign ran is why the app's graph stayed blank during a scan;
+     * this keeps a sampler on the open target and pushes it as {@code wifi4_live}.
+     */
+    private void wifi4Focus(String bssid) {
+        String target = bssid == null ? "" : bssid.trim().toLowerCase(java.util.Locale.US);
+        wifi4Focus = target.isEmpty() ? null : target;
+        if (wifi4Focus == null || wifi4Live) return;
+        wifi4Live = true;
+        Thread live = new Thread(() -> {
+            PythonChip.ensurePython(context);
+            int failures = 0;
+            while (wifi4Live) {
+                String focused = wifi4Focus;
+                if (focused != null) {
+                    try {
+                        String json = PythonChip.backendText("sample", focused);
+                        JSONObject sample = new JSONObject(json == null || json.isEmpty()
+                                ? "{}" : json);
+                        JSONObject liveEvent = event("wifi4_live");
+                        liveEvent.put("bssid", focused);
+                        liveEvent.put("kind", sample.optString("kind", "wpa"));
+                        JSONObject rates = sample.optJSONObject("rates");
+                        JSONObject counters = sample.optJSONObject("counters");
+                        if (rates != null) liveEvent.put("rates", rates);
+                        if (counters != null) liveEvent.put("counters", counters);
+                        JSONObject ap = sample.optJSONObject("ap");
+                        if (ap != null) {
+                            liveEvent.put("ssid", ap.optString("ssid", ""));
+                            liveEvent.put("channel", ap.optInt("channel"));
+                            liveEvent.put("signal", ap.optInt("signal", -100));
+                            liveEvent.put("clients", ap.optInt("clients"));
+                            liveEvent.put("beacons", ap.optInt("beacons"));
+                        }
+                        emitQuietly(liveEvent);
+                        failures = 0;
+                    } catch (Throwable broken) {
+                        AppLog.error("OpxEngine", broken);
+                        // A backend that keeps failing must not spin forever behind a dialog.
+                        if (++failures >= 5) {
+                            wifi4Live = false;
+                            return;
+                        }
+                    }
+                }
+                try {
+                    // wifi4's dashboard cadence (SAMPLE_S = 0.4 s in packet_dashboard).
+                    Thread.sleep(400);
+                } catch (InterruptedException stopped) {
+                    return;
+                }
+            }
+        }, "opx-wifi4-live");
+        live.setDaemon(true);
+        live.start();
     }
 
     private void wifi4Status() {
@@ -1343,6 +1418,8 @@ public final class NativeEngine {
         wifi4Count = 0;
         wifi4Configured = false;
         wifi4VaultWatch = false;
+        wifi4Live = false;
+        wifi4Focus = null;
         synchronized (wifi4Sent) {
             wifi4Sent.clear();
         }
@@ -1699,6 +1776,8 @@ public final class NativeEngine {
     private void shutdown() {
         stopped = true;
         cracking = false;
+        wifi4Live = false;
+        wifi4Focus = null;
         worker.shutdownNow();
         cracker.shutdownNow();
     }

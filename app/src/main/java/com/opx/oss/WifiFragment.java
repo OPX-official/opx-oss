@@ -96,6 +96,10 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     private TextView sheetClients;
     private TextView sheetNote;
     private View sheetWpsLocked;
+    // The sheet's live meter: wifi4's packet dashboard for the network it is open on.
+    private TextView sheetLiveMeta;
+    private LinearLayout sheetMeterBox;
+    private PacketMeter sheetMeter;
     private JSONObject targets;
     private String targetsReason = "";
 
@@ -532,6 +536,19 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                     Snackbar.LENGTH_SHORT).show();
         } else if ("chop".equals(name)) {
             if (attackMonitor != null) attackMonitor.onEvent(event);
+        } else if ("wifi4_live".equals(name)) {
+            // wifi4's packet counters for the sheet's target: the same per-class rows its own
+            // dashboard draws, sampled while the card is only scanning as well as mid-attack.
+            String liveBssid = event.optString("bssid", "");
+            if (sheet == null || !sheet.isShowing() || sheetTarget == null
+                    || !liveBssid.equalsIgnoreCase(sheetTarget.bssid)) return;
+            if (sheetMeter != null) sheetMeter.update(event.optJSONObject("rates"));
+            if (sheetLiveMeta != null) {
+                sheetLiveMeta.setText(getString(R.string.wifi_live_sheet_meta,
+                        event.optInt("channel", sheetTarget.channel),
+                        event.optInt("signal", sheetTarget.signal),
+                        event.optInt("clients")));
+            }
         } else if ("attack_status".equals(name)) {
             if (!event.optBoolean("running")) {
                 if (!attackRunning && attackMonitor != null) attackMonitor.dismiss();
@@ -767,6 +784,21 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         sheetAttacks = content.findViewById(R.id.target_attacks);
         sheetNote = content.findViewById(R.id.target_note);
         sheetWpsLocked = content.findViewById(R.id.target_wps_locked);
+        sheetLiveMeta = content.findViewById(R.id.target_live_meta);
+        sheetMeterBox = content.findViewById(R.id.target_live_meter);
+
+        // wifi4's Focus dashboard: DATA / INJECT / DEAUTH plus EAPOL, or the WEP IV row on a WEP
+        // target. Bound before the sheet shows, so the first sample has rows to draw into.
+        if (sheetMeter != null) sheetMeter.stop();
+        sheetMeter = new PacketMeter(requireContext(), sheetMeterBox,
+                network.privacy != null
+                        && network.privacy.toUpperCase(Locale.US).startsWith("WEP")
+                        ? "wep" : "wpa");
+        if (sheetLiveMeta != null) {
+            sheetLiveMeta.setText(getString(R.string.wifi_live_sheet_meta,
+                    network.channel, network.signal, 0));
+        }
+        WifiBridge.get(requireContext()).focus(network.bssid);
 
         name.setText(network.ssid == null || network.ssid.isEmpty()
                 ? getString(R.string.wifi_hidden_ssid) : network.ssid);
@@ -795,6 +827,13 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 sheetNote = null;
                 sheetClients = null;
                 sheetWpsLocked = null;
+                sheetLiveMeta = null;
+                sheetMeterBox = null;
+                if (sheetMeter != null) sheetMeter.stop();
+                sheetMeter = null;
+                // Nothing is on screen to feed any more: the engine stops sampling wifi4's
+                // counters for this target until another sheet asks for them.
+                WifiBridge.get(requireContext()).focus(null);
             }
         });
         sheet = dialog;
@@ -1122,6 +1161,14 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
 
     @Override
     public void onDestroyView() {
+        if (sheetMeter != null) sheetMeter.stop();
+        sheetMeter = null;
+        sheetMeterBox = null;
+        sheetLiveMeta = null;
+        if (getContext() != null && sheet != null) {
+            // The view is going away with the sheet open: stop the engine's sampler with it.
+            WifiBridge.get(requireContext()).focus(null);
+        }
         if (attackMonitor != null) attackMonitor.dismiss();
         attackMonitor = null;
         if (liveMeter != null) liveMeter.stop();

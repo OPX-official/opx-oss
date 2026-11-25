@@ -100,6 +100,15 @@ _default_password_count = None
 #: True once the finished campaign's key (WEP/WPS) has been written to the vault.
 _campaign_saved = False
 
+#: Last counters each reader saw, per (reader, bssid): wifi4's dashboard diffs two snapshots
+#: into a per-window count (``packet_dashboard._sample_live``); this is that previous snapshot.
+#: Keyed by reader so the screen's live meter and an attack's progress cannot halve each
+#: other's window.
+_live_prev = {}
+
+#: A gap longer than this means nobody was sampling (screen away, radio retuned): not a rate.
+_LIVE_MAX_GAP_S = 5.0
+
 #: Every campaign this build exposes, by the name the app's protocol uses.
 _CAMPAIGN_KEYS = ("deauth", "pmkid", "pin", "pbc", "decloak", "wep")
 
@@ -180,9 +189,59 @@ def attach():
         return True
 
 
+def _counters_and_rates(bssid, reader="live"):
+    """wifi4's per-class counters for ``bssid`` plus the frames/second since the last call.
+
+    ``WlanSink.update`` tallies every frame it hears and ``record_tx`` every frame a campaign
+    injects, so these are the same numbers wifi4's packet dashboard draws; it computes the rate
+    by diffing two snapshots, which is exactly what this does.
+    """
+    now = time.time()
+    snapshot = _array.packet_stats.snapshot(bssid)
+    counters = {str(key): int(value) for key, value in snapshot.items()}
+    previous = _live_prev.get((reader, bssid))
+    _live_prev[(reader, bssid)] = (now, counters)
+    if previous is None:
+        return counters, {key: 0.0 for key in counters}
+    previous_ts, before = previous
+    elapsed = now - previous_ts
+    if elapsed <= 0 or elapsed > _LIVE_MAX_GAP_S:
+        return counters, {key: 0.0 for key in counters}
+    rates = {key: max(0.0, (value - int(before.get(key, 0))) / elapsed)
+             for key, value in counters.items()}
+    return counters, {key: round(value, 1) for key, value in rates.items()}
+
+
+def sample(bssid=None):
+    """wifi4's packet dashboard for one target: the per-class rate of every row it draws.
+
+    The app's target sheet calls this while the card is only scanning; wifi4's own Focus screen
+    does the same (its dashboard samples ``packet_stats`` every 0.4 s no matter what the radio is
+    doing), which is why its graph is alive before any attack starts. ``kind`` says which row
+    set applies: a WEP target draws the WEP IV row where a WPA one draws EAPOL.
+    """
+    target = str(bssid or "").lower()
+    out = {"bssid": target, "kind": "wpa", "rates": {}, "counters": {}, "ap": None}
+    if not target or _array is None:
+        return json.dumps(out)
+    try:
+        counters, rates = _counters_and_rates(target)
+        out["counters"], out["rates"] = counters, rates
+        ap = _array.access_points.get(target)
+        if ap is not None:
+            row = _ap_row(ap, _clients_by_bssid())
+            out["ap"] = row
+            out["kind"] = ("wep" if str(row.get("privacy") or "").upper().startswith("WEP")
+                           else "wpa")
+    except Exception:
+        traceback.print_exc()
+    return json.dumps(out)
+
+
 def start_scan(channels=None, interval=0.5):
     """Hop the card(s) across ``channels`` (wifi4's own spread hop) and fill its AP table."""
     attach()
+    _live_prev.clear()   # a fresh hop has no meaningful previous snapshot
 
     async def run():
         await _array.start_hopping(channels=list(channels) if channels else None,
@@ -643,25 +702,32 @@ def progress():
 
     ``WlanSink`` tallies every frame it hears and ``PacketStats.record_tx`` tallies every frame a
     campaign injects, so these counters are the same ones wifi4's dashboard graph draws from.
+    The counters are read first and in their own guard: a campaign whose status line cannot be
+    produced (the base class returns ``None`` for most families) must not blank the meter.
     """
-    out = {"lines": [], "counters": {}, "kind": _kind, "bssid": _bssid,
+    out = {"lines": [], "counters": {}, "rates": {}, "kind": _kind, "bssid": _bssid,
            "log": list(_log_lines)}
     campaign = _campaign
     if campaign is None or _array is None:
         return json.dumps(out)
+    target = getattr(campaign, "target", None)
+    bssid = (getattr(target, "bssid", None) or _bssid or "").lower()
+    if bssid:
+        out["bssid"] = bssid
+        try:
+            counters, rates = _counters_and_rates(bssid, reader="progress")
+            out["counters"], out["rates"] = counters, rates
+        except Exception:
+            traceback.print_exc()
     try:
-        target = getattr(campaign, "target", None)
-        bssid = (getattr(target, "bssid", None) or _bssid or "").lower()
         if hasattr(campaign, "status_under_dash"):
-            out["lines"] = [str(line) for line in campaign.status_under_dash(_array, time.time())]
-        if not out["lines"]:
-            # Most campaigns only log; their last lines are what the Progress tab can show.
-            out["lines"] = list(_log_lines)[-4:]
-        if bssid:
-            snapshot = _array.packet_stats.snapshot(bssid)
-            out["counters"] = {str(k): int(v) for k, v in snapshot.items()}
+            lines = campaign.status_under_dash(_array, time.time()) or []
+            out["lines"] = [str(line) for line in lines]
     except Exception:
         traceback.print_exc()
+    if not out["lines"]:
+        # Most campaigns only log; their last lines are what the Progress tab can show.
+        out["lines"] = list(_log_lines)[-4:]
     return json.dumps(out)
 
 
@@ -691,3 +757,4 @@ def close():
     except Exception:
         traceback.print_exc()
     _array, _iface = None, None
+    _live_prev.clear()

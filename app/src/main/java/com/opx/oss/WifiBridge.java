@@ -208,6 +208,20 @@ public final class WifiBridge {
         send(json("cmd", "targets"));
     }
 
+    /**
+     * Points the engine's live meter at one target (the sheet on screen), or releases it with an
+     * empty/null BSSID. wifi4's packet counters are then pushed as {@code wifi4_live} events.
+     */
+    public void focus(String bssid) {
+        JSONObject command = json("cmd", "wifi4_focus");
+        try {
+            command.put("bssid", bssid == null ? "" : bssid);
+        } catch (JSONException ignored) {
+            // A plain string cannot fail to serialize.
+        }
+        send(command);
+    }
+
     /** Starts one campaign against one BSSID; progress arrives as attack_log/attack_progress. */
     public void attack(String kind, String bssid) {
         attack(kind, bssid, null);

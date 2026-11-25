@@ -265,6 +265,7 @@
     <string name="wifi_live_title">LIVE</string>
     <string name="wifi_live_hint">Data, injection and deauth per second, with EAPOL on its own row</string>
     <string name="wifi_live_meta">%1$s · %2$s</string>
+    <string name="wifi_live_sheet_meta">CH %1$d · %2$d dBm · %3$d clients</string>
     <string name="wifi_stage_radio">Taking the radio</string>
     <string name="wifi_stage_target">Locked on the target</string>
     <string name="wifi_stage_deauth">Deauthenticating clients</string>
