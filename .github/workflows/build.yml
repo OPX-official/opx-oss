@@ -58,5 +58,24 @@ jobs:
           path: out/*.apk
           if-no-files-found: error
 
-      # No release is published while the rewrite is under way: every build is an artifact of
-      # its own run, so the Releases section stays empty until the project is finished.
+      # Artifacts expire and live behind the run page, so every dispatched or tagged build also
+      # becomes a Release: the APK is then downloadable straight from the Releases section.
+      - name: Publish release
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v0.3.0-alpha.1-build${GITHUB_RUN_NUMBER}"
+          fi
+          gh release create "$tag" out/*.apk \
+            --target "$GITHUB_SHA" \
+            --title "OPX OSS ${tag}" \
+            --notes "Automated build of commit ${GITHUB_SHA:0:7} (${GITHUB_REF_NAME}), run #${GITHUB_RUN_NUMBER}.
+
+          Debug and release APKs, signed with the repository keystore so a new build installs
+          over the previous one. ABIs: arm64-v8a, x86_64 (the embedded CPython runtime has no
+          32-bit ARM build)."
