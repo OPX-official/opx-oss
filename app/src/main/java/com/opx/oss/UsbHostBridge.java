@@ -7,7 +7,6 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
-import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
@@ -229,15 +228,6 @@ public final class UsbHostBridge {
                 write(socket, response);
                 return;
             }
-            // Take the card away from a kernel driver before the engine touches it. A Wi-Fi
-            // stick that boots as a ZeroCD fake CD-ROM stays bound to usb-storage, and
-            // usb-storage's probing resets the port under us: the engine's first control
-            // transfer then fails with EIO ("USB descriptor could not attach"), and the card
-            // drops off the bus and comes back on another address. force=true is the app's own
-            // USBDEVFS_DISCONNECT plus a claim; the claim is kept so the driver cannot bind
-            // again. The engine's descriptor is a dup of this one, so usbfs hands the detached
-            // interfaces to it as well.
-            detachKernelDrivers(connection, device);
             // The connection owns the descriptor; SCM_RIGHTS gives the engine its own copy, so
             // both stay usable and the wrapper must outlive the send (closed in shutdown()).
             // Hand a duplicate to the engine: the connection keeps owning its own fd, so the
@@ -255,8 +245,7 @@ public final class UsbHostBridge {
                 openDescriptors.add(descriptor);
             }
             Log.i(TAG, "passed " + path + " to the engine");
-            AppLog.info(TAG, "open " + path + " -> fd passed to the engine (" + describe(device)
-                    + ", " + device.getInterfaceCount() + " interfaces)");
+            AppLog.info(TAG, "open " + path + " -> fd passed to the engine");
             return;
         }
 
@@ -264,26 +253,6 @@ public final class UsbHostBridge {
         response.put("ok", false);
         response.put("error", "unknown command: " + command);
         write(socket, response);
-    }
-
-    /**
-     * Detaches any kernel driver from the card's interfaces and keeps them claimed by this
-     * connection. libusb cannot do this over a wrapped fd: the fd has no sysfs path, so its
-     * kernel-driver helpers report "not supported" and a driver that is still bound keeps
-     * probing (and resetting) the port.
-     */
-    private static void detachKernelDrivers(UsbDeviceConnection connection, UsbDevice device) {
-        for (int i = 0; i < device.getInterfaceCount(); i++) {
-            UsbInterface intf = device.getInterface(i);
-            try {
-                boolean claimed = connection.claimInterface(intf, true);
-                AppLog.info(TAG, "interface " + intf.getId() + " (class "
-                        + intf.getInterfaceClass() + "): " + (claimed ? "claimed" : "busy"));
-            } catch (RuntimeException e) {
-                AppLog.info(TAG, "interface " + intf.getId() + " could not be claimed: "
-                        + e.getMessage());
-            }
-        }
     }
 
     private void write(LocalSocket socket, JSONObject response) throws Exception {
@@ -425,63 +394,13 @@ public final class UsbHostBridge {
                     .append(" vendor=").append(device.getVendorId())
                     .append(" permission=").append(manager.hasPermission(device) ? "granted" : "not granted")
                     .append('\n');
-            for (int i = 0; i < device.getInterfaceCount(); i++) {
-                UsbInterface intf = device.getInterface(i);
-                text.append("    interface ").append(intf.getId())
-                        .append(" class=").append(intf.getInterfaceClass())
-                        .append(" endpoints=").append(intf.getEndpointCount())
-                        .append('\n');
-            }
         }
         if (devices.isEmpty()) {
             text.append("  (none — plug an OTG Wi-Fi adapter in and accept the permission prompt)\n");
         }
-        text.append(descriptorProbe(manager, devices));
         text.append("runtime prefix: ").append(OpxRuntime.PREFIX_GUEST).append('\n');
         text.append("installed: ").append(OpxRuntime.isInstalled(context)).append('\n');
         AppLog.info(TAG, text.toString().replace("\n", " | "));
-        return text.toString();
-    }
-
-    /**
-     * Reads the descriptors over the app's own connection, once per attached card. The engine's
-     * descriptor is a dup of the same usbfs file, so this line separates the two failures the
-     * engine's log cannot: the card is readable here (a handoff problem) or the read fails here
-     * too (the card is resetting or the port cannot power it).
-     */
-    private static String descriptorProbe(UsbManager manager, List<UsbDevice> devices) {
-        StringBuilder text = new StringBuilder("descriptor read over the app's connection:\n");
-        if (devices.isEmpty()) return text.append("  (no device)\n").toString();
-        for (UsbDevice device : devices) {
-            if (!manager.hasPermission(device)) {
-                text.append("  ").append(device.getDeviceName()).append(": no permission yet\n");
-                continue;
-            }
-            UsbDeviceConnection connection = null;
-            try {
-                connection = manager.openDevice(device);
-                if (connection == null) {
-                    text.append("  ").append(device.getDeviceName()).append(": open refused\n");
-                    continue;
-                }
-                detachKernelDrivers(connection, device);
-                byte[] raw = connection.getRawDescriptors();
-                text.append("  ").append(device.getDeviceName()).append(": ")
-                        .append(raw == null ? 0 : raw.length).append(" descriptor bytes\n");
-            } catch (RuntimeException e) {
-                text.append("  ").append(device.getDeviceName()).append(": ")
-                        .append(e.getClass().getSimpleName()).append(": ").append(e.getMessage())
-                        .append('\n');
-            } finally {
-                if (connection != null) {
-                    try {
-                        connection.close();
-                    } catch (RuntimeException ignored) {
-                        // Already closed by the kernel when the card went away.
-                    }
-                }
-            }
-        }
         return text.toString();
     }
 
