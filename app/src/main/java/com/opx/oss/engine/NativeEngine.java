@@ -156,10 +156,16 @@ public final class NativeEngine {
                     emit(event("probed").put("ssids", new JSONArray(probes.ssids())));
                     break;
                 case "deauth_client":
-                    deauthClient(command.optString("bssid"), command.optString("client"));
-                    break;
                 case "deauth_all":
-                    deauthAll(command.optString("bssid"));
+                    if (wifi4Attached) {
+                        // wifi4's deauth campaigns every associated client plus a broadcast burst,
+                        // so its own one-shot path is the closest thing to both buttons.
+                        wifi4Attack("deauth", command.optString("bssid"));
+                    } else if ("deauth_all".equals(name)) {
+                        deauthAll(command.optString("bssid"));
+                    } else {
+                        deauthClient(command.optString("bssid"), command.optString("client"));
+                    }
                     break;
                 case "silence":
                     silenced(command.optString("bssid"), command.optBoolean("on", true));
