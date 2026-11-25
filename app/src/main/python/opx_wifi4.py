@@ -40,7 +40,7 @@ _bssid = None
 _lock = threading.RLock()
 
 #: Every campaign this build exposes, by the name the app's protocol uses.
-_CAMPAIGN_KEYS = ("deauth", "pmkid", "pin", "pbc", "decloak")
+_CAMPAIGN_KEYS = ("deauth", "pmkid", "pin", "pbc", "decloak", "wep")
 
 
 def _campaign_class(kind: str):
@@ -60,6 +60,9 @@ def _campaign_class(kind: str):
     if kind == "decloak":
         from wifi4.campaigns.decloak import DecloakCampaign
         return DecloakCampaign
+    if kind == "wep":
+        from wifi4.campaigns.wep.campaign import WepCampaign
+        return WepCampaign
     raise ValueError(f"no wifi4 campaign called {kind!r}")
 
 
@@ -213,7 +216,11 @@ def attack(kind, bssid=None, **options):
     with _lock:
         if _campaign is not None and not _campaign.done:
             raise RuntimeError("a wifi4 campaign is already running")
-        campaign = _campaign_class(kind)(_array, ap, **options)
+        args = dict(options or {})
+        if kind == "wep":
+            # wifi4's WEP campaign names its logger differently from every other campaign.
+            args["log_callback"] = args.pop("log", None)
+        campaign = _campaign_class(kind)(_array, ap, **args)
         started = host._run(_launch(campaign), timeout=30.0)
         if started:
             _campaign, _kind, _bssid = campaign, kind, (str(bssid).lower() if bssid else None)

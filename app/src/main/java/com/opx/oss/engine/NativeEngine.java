@@ -1137,15 +1137,17 @@ public final class NativeEngine {
 
     /**
      * The attacks wifi4's own campaigns can run against one of its rows: deauth, decloak (hidden),
-     * PMKID (WPA2/WPA3) and the WPS PIN. WEP, Evil Twin and the captive portal are the Java
-     * campaigns, which cannot share the card while wifi4's array holds it.
+     * WEP, PMKID (WPA2/WPA3) and the WPS PIN. Evil Twin needs a second interface and the captive
+     * portal a running twin, so neither can start on the one card wifi4's array holds.
      */
     private JSONArray attacksFor(JSONObject row) {
         JSONArray attacks = new JSONArray();
         String encryption = row.optString("privacy");
         attacks.put(attackEntry("deauth", true, ""));
         if (row.optBoolean("hidden")) attacks.put(attackEntry("decloak", true, ""));
-        if (encryption.startsWith("WPA2") || encryption.startsWith("WPA3")) {
+        if ("WEP".equals(encryption)) {
+            attacks.put(attackEntry("wep", true, ""));
+        } else if (encryption.startsWith("WPA2") || encryption.startsWith("WPA3")) {
             attacks.put(attackEntry("pmkid", true, ""));
         }
         if (row.optBoolean("wps")) {
@@ -1183,6 +1185,7 @@ public final class NativeEngine {
             case "pin":
             case "pbc":
             case "decloak":
+            case "wep":
                 wifi4Attack(mapped, bssid);
                 return;
             default:
