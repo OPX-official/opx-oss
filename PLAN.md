@@ -320,6 +320,14 @@
 - [x] **রেজিস্ট্রার:** `engine/wps/WpsRegistrar.java` — M1→M2, M3→M4 (E-Hash1), M5→M6 (এনক্রিপ্টেড নেটওয়ার্ক সেটিংস + KWA), M7→ক্রেডেনশিয়াল; ভুল হাফে NACK।
 - [x] **নিজস্ব যাচাই:** `SelfCheck`-এ FIPS-197 AES ভেক্টর, WSC KDF ভেক্টর, DH `2^12345 mod p`, PIN চেকসাম/স্পেক পিন, WSC রাউন্ড-ট্রিপ ও Authenticator — সব পিন করা।
 - [x] **বিল্ড সবুজ:** রান **#45635487787** (`1fa8cdb`), **#45635926653** (`3612498`), **#45636358365** (`2b6ae57`)।
-- [ ] বাকি: WPS-এর **অন-এয়ার** অ্যাসোসিয়েশন + EAPOL WSC বিনিময় (ড্রাইভারের অ্যাসোসিয়েশন স্টেট মেশিনের উপর নির্ভরশীল — M6-এর চিপ প্রোফাইলে যাবে), evil twin + captive portal।
+- [x] **নকল AP (evil twin):** `engine/attacks/EvilTwin.java` — টার্গেটের SSID/channel/RSN নকল করে locally-administered BSSID থেকে বীকন, প্রোব-রিকোয়েস্টের উত্তর, `twin_probe` ফিড (NativeEngine probe book-এর পাশে)। `attack kind=eviltwin`।
+- [x] **ক্যাপ্টিভ পোর্টাল:** `engine/portal/PortalServer.java` — **নিজের HTTP/1.1 সার্ভার** (নিজের HTML টেমপ্লেট, GET/POST, `Content-Length`, URL-ডিকোড, `no-store`), নিজের থ্রেডে; জমা পড়লে `portal_credentials` ইভেন্ট + ভল্টে `portal_<bssid>.txt`। `attack kind=captive`, পোর্ট ডিফল্ট 8080 (৮০-এর জন্য রুট)।
+- [x] **ফ্রেম:** `Frame.beacon()` ও `Frame.probeResponse()` — capability/interval/SSID/rates/DS/RSN/ExtRates।
+- [x] **বিল্ড সবুজ:** রান **#45637354836** (`1140c63`)।
+- [ ] বাকি: WPS-এর **অন-এয়ার** অ্যাসোসিয়েশন + EAPOL WSC বিনিময় (ড্রাইভারের অ্যাসোসিয়েশন স্টেট মেশিন — M6-এর চিপ প্রোফাইলে)।
 
-**বাকি ফেজ (M5–M6):** উপরের ৬ নম্বর সেকশনের তালিকা অনুযায়ী।
+### M5 — সম্পন্ন (হার্ডওয়্যার-টেস্ট বাদে)
+
+পাঁচটি ক্যাম্পেইন (`deauth`, `decloak`, `pmkid`, `wep`, `eviltwin`/`captive`) এখন `attack_started` → প্রগ্রেস → `attack_done` পর্যন্ত যায়; WPS-এর ক্রিপ্টো/পিন/কোডেক/রেজিস্ট্রার আলাদা লেয়ার হিসেবে তৈরি ও স্ব-যাচাইকৃত।
+
+**বাকি ফেজ (M6):** উপরের ৬ নম্বর সেকশনের তালিকা অনুযায়ী।
