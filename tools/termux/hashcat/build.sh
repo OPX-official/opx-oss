@@ -1,6 +1,10 @@
 TERMUX_PKG_HOMEPAGE=https://hashcat.net/hashcat/
 TERMUX_PKG_DESCRIPTION="World's fastest and most advanced password recovery utility"
 TERMUX_PKG_LICENSE="MIT"
+# hashcat keeps its MIT text at docs/license.txt, not LICENSE in the source root. Without this
+# the pinned tree's license step aborts after make install and no deb is produced at all, so
+# the runtime silently shipped without the GPU cracker.
+TERMUX_PKG_LICENSE_FILE="docs/license.txt"
 TERMUX_PKG_MAINTAINER="OPX OSS <opx@opx.dev>"
 TERMUX_PKG_VERSION=7.1.2
 TERMUX_PKG_SRCURL=https://github.com/hashcat/hashcat/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz

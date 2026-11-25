@@ -196,6 +196,7 @@ PYAPT
       HASHCAT_DEB="$(ls "$TP_SRC/output/hashcat_"*"_${arch}.deb" 2>/dev/null | head -1 || true)"
       if [ -n "$HASHCAT_DEB" ]; then
         printf '  hashcat %s\n' "$(basename "$HASHCAT_DEB")"
+        echo "::notice title=GPU crack::hashcat $(basename "$HASHCAT_DEB") is in the $arch runtime"
       else
         echo "WARN: hashcat built but no deb was produced; GPU crack stays disabled" >&2
       fi
@@ -203,6 +204,11 @@ PYAPT
       echo "WARN: hashcat did not build; the base runtime continues without GPU crack" >&2
       grep -nE "error:|Error|No such|not found|failed" "$WORK/hashcat-$arch.log" | tail -10 >&2 || true
       tail -20 "$WORK/hashcat-$arch.log" >&2 || true
+    fi
+    # The optional build must still be visible in the run: a silent failure is how the
+    # aarch64 runtime shipped without the GPU cracker while the APK offered the card.
+    if [ -z "$HASHCAT_DEB" ]; then
+      echo "::warning title=GPU crack disabled::hashcat did not produce a deb for $arch; the runtime ships without the GPU cracker" >&2
     fi
   fi
 
