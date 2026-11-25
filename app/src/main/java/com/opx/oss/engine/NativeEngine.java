@@ -885,6 +885,17 @@ public final class NativeEngine {
             }
             emitQuietly(started);
             watchWifi4Campaign(kind, bssid);
+        } else {
+            // The monitor would otherwise spin forever on a campaign that never took the radio.
+            JSONObject done = event("attack_done");
+            try {
+                done.put("ok", false).put("kind", kind)
+                        .put("summary", kind + " could not start")
+                        .put("detail", "another wifi4 campaign still holds the radio");
+            } catch (Exception ignored) {
+                // Plain values only.
+            }
+            emitQuietly(done);
         }
         JSONObject reply = event("wifi4_attack");
         try {
@@ -954,14 +965,21 @@ public final class NativeEngine {
                         }
                         logSeen = logLines.length();
                     }
+                    // The monitor reads rates/metrics from its nested ``progress`` object.
+                    JSONObject progress = new JSONObject();
+                    progress.put("rates", rates).put("metrics", metrics);
                     JSONObject entry = event("attack_progress");
-                    entry.put("kind", kind).put("rates", rates).put("metrics", metrics);
+                    entry.put("kind", kind).put("progress", progress);
                     JSONArray lines = snapshot.optJSONArray("lines");
                     if (lines != null) entry.put("lines", lines);
                     emitQuietly(entry);
                     if (!running) {
+                        String error = status.optString("error", "");
                         JSONObject done = event("attack_done");
-                        done.put("ok", true).put("kind", kind).put("summary", kind + " finished");
+                        done.put("ok", error.isEmpty()).put("kind", kind)
+                                .put("summary", error.isEmpty() ? kind + " finished" : error);
+                        JSONArray foundKeys = status.optJSONArray("keys");
+                        if (foundKeys != null) done.put("keys", foundKeys);
                         emitQuietly(done);
                         return;
                     }

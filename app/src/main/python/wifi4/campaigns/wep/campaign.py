@@ -21,8 +21,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
+
+try:
+    # Android has no multiprocessing (CPython marks it "not Android"), so the worker-process
+    # path may be missing entirely; the crack then runs in a thread instead.
+    from concurrent.futures import ProcessPoolExecutor
+except Exception:  # pragma: no cover - platform dependent
+    ProcessPoolExecutor = None
 
 
 
@@ -98,8 +105,8 @@ class WepCampaign(Campaign):
         self.recovered_key: Optional[bytes] = None
         self._crack_cursor = 0
         self._crack_started = False
-        # The PTW search runs in a separate process.
-        self._crack_pool: Optional[ProcessPoolExecutor] = None
+        # The PTW search runs off the event loop (worker process where the platform has one).
+        self._crack_pool = None
 
         # ChopChop is a "manufacture an ARP seed" sub-mode the user toggles mid-campaign.
         self.chop: Optional[WepChopChop] = None
@@ -118,6 +125,27 @@ class WepCampaign(Campaign):
             request_reauth=self.fake_auth.request_reauth,
             log_callback=self._log,
         )
+
+    @staticmethod
+    def _make_crack_pool():
+        """A killable worker process where available, a thread on Android (no multiprocessing)."""
+        if ProcessPoolExecutor is not None:
+            try:
+                return ProcessPoolExecutor(max_workers=1)
+            except Exception:
+                logger.info("[WEP-Campaign] no worker process here; cracking in a thread")
+        return ThreadPoolExecutor(max_workers=1)
+
+    def _pool_to_thread(self) -> None:
+        """Replace an unusable pool with a thread so the PTW search still runs."""
+        pool, self._crack_pool = self._crack_pool, None
+        if pool is not None:
+            try:
+                pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+        if not self.stopped:
+            self._crack_pool = ThreadPoolExecutor(max_workers=1)
 
     async def _loop(self) -> None:
         """Hold one lease (STA MAC + channel) for the campaign, then run fake-auth + ARP replay and
@@ -145,7 +173,7 @@ class WepCampaign(Campaign):
         self.fake_auth.start()
         self.replay.start()
         # One reusable worker process for the crack search
-        self._crack_pool = ProcessPoolExecutor(max_workers=1)
+        self._crack_pool = self._make_crack_pool()
         logger.info("[WEP-Campaign] Started on %s", self.target.bssid)
 
         loop = asyncio.get_event_loop()
@@ -171,8 +199,16 @@ class WepCampaign(Campaign):
             try:
                 key = await loop.run_in_executor(self._crack_pool, self.cracker.recover)
             except Exception:
-                logger.exception("[WEP-Campaign] crack worker failed")
-                continue   # retry next tick on a fresh snapshot
+                logger.warning("[WEP-Campaign] crack worker unusable; retrying in a thread",
+                               exc_info=True)
+                self._pool_to_thread()
+                if self._crack_pool is None or self.stopped:
+                    return
+                try:
+                    key = await loop.run_in_executor(self._crack_pool, self.cracker.recover)
+                except Exception:
+                    logger.exception("[WEP-Campaign] crack worker failed")
+                    continue   # retry next tick on a fresh snapshot
             if key is not None:
                 self.recovered_key = key
                 self.target.wep_key = key   # persist on the AP (Save / UI)

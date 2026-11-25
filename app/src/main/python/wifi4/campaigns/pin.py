@@ -646,9 +646,11 @@ class WpsCampaign(Campaign):
         try:
             return await self._search_in(concurrent.futures.ProcessPoolExecutor(max_workers=1),
                                          bundle)
-        except (concurrent.futures.BrokenExecutor, OSError):
+        except (concurrent.futures.BrokenExecutor, OSError, ImportError, NotImplementedError,
+                AttributeError):
             # Workers spawn lazily, so an unusable subprocess surfaces here rather than at
-            # construction. A thread still yields to the loop between GIL switches.
+            # construction. Android has no multiprocessing at all, where construction itself
+            # fails; a thread still yields to the loop between GIL switches either way.
             logger.debug("Pixie worker process unusable; retrying in a thread", exc_info=True)
         if self.stopped:
             return PixieResult()

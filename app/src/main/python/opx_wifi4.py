@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 import traceback
@@ -37,12 +38,49 @@ logger = logging.getLogger("opx.wifi4")
 #: The running campaign's own log lines, polled by the app instead of a JNI callback.
 _log_lines = deque(maxlen=400)
 
+#: The last exception wifi4 logged while a campaign ran (its base class swallows crashes).
+_last_error = None
+
+#: wifi4's TUI writes Rich markup (``[bold cyan]…[/bold cyan]``); the terminal here wants text.
+_MARKUP = re.compile(r"\[/?[A-Za-z][A-Za-z0-9 _/]*\]")
+
+
+def _plain(text: str) -> str:
+    """Strip wifi4's Rich markup, keeping the message readable in the Terminal tab."""
+    try:
+        return _MARKUP.sub("", str(text))
+    except Exception:
+        return str(text)
+
 
 def _ui_log(line: str) -> None:
     try:
-        _log_lines.append(str(line))
+        _log_lines.append(_plain(line))
     except Exception:
         pass
+
+
+class _Wifi4LogBridge(logging.Handler):
+    """Forward wifi4's warnings and crashes into the campaign log the app polls.
+
+    ``Campaign._drive`` catches every ``_loop`` exception and only logs it, so without this a
+    crashed campaign was indistinguishable from a finished one in the app.
+    """
+
+    def emit(self, record):
+        global _last_error
+        try:
+            text = self.format(record)
+            _log_lines.append(_plain(text))
+            if record.levelno >= logging.ERROR:
+                _last_error = _plain(record.getMessage())
+        except Exception:
+            pass
+
+
+_bridge = _Wifi4LogBridge(level=logging.WARNING)
+_bridge.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+logging.getLogger("wifi4").addHandler(_bridge)
 
 
 _array = None
@@ -72,14 +110,15 @@ def _campaign_class(kind: str):
         from wifi4.campaigns.deauth import DeauthCampaign
         return DeauthCampaign
     if kind == "pmkid":
-        from wifi4.campaigns.pmkid import PmkidCampaign
-        return PmkidCampaign
+        from wifi4.campaigns.pmkid import PmkidHarvestAttack
+        return PmkidHarvestAttack
     if kind == "pin":
-        from wifi4.campaigns.pin import PinCampaign
-        return PinCampaign
+        # wifi4 calls the PIN sweep ``WpsCampaign`` (``pin.py`` is just the module name).
+        from wifi4.campaigns.pin import WpsCampaign
+        return WpsCampaign
     if kind == "pbc":
-        from wifi4.campaigns.pbc import PbcCampaign
-        return PbcCampaign
+        from wifi4.campaigns.pbc import WpsPbcCampaign
+        return WpsPbcCampaign
     if kind == "decloak":
         from wifi4.campaigns.decloak import DecloakCampaign
         return DecloakCampaign
@@ -224,8 +263,9 @@ def set_captures_dir(path):
 
     target = str(path)
     Path(target).mkdir(parents=True, exist_ok=True)
-    if _captures_dir is not None and _captures_dir != target:
-        # A different directory means a different index; rebuild both halves.
+    if _captures_dir != target:
+        # A different directory means a different index; rebuild both halves. This also covers the
+        # vault an early status poll may have built against the desktop default directory.
         _vault = None
         _watcher = None
     Config.captures_dir = target
@@ -468,7 +508,7 @@ def targets():
 
 def attack(kind, bssid=None, **options):
     """Run wifi4's ``kind`` campaign against ``bssid``; True when it took the radio."""
-    global _campaign, _kind, _bssid, _campaign_saved
+    global _campaign, _kind, _bssid, _campaign_saved, _last_error
     attach()
     if kind not in _CAMPAIGN_KEYS:
         raise ValueError(f"no wifi4 campaign called {kind!r}")
@@ -481,6 +521,7 @@ def attack(kind, bssid=None, **options):
         if _campaign is not None and not _campaign.done:
             raise RuntimeError("a wifi4 campaign is already running")
         _log_lines.clear()
+        _last_error = None
         args = dict(options or {})
         if kind == "wep":
             # wifi4's WEP campaign names its logger differently from every other campaign.
@@ -578,12 +619,22 @@ def _reap_campaign(force=False):
 def attack_status():
     campaign = _campaign
     saved = _reap_campaign()
+    keys = []
+    if _bssid and _captures_dir:
+        try:
+            vault, _ = _vault_state()
+            keys = [key.value for key in vault.ap_state(_bssid).keys
+                    if getattr(key, "value", None)]
+        except Exception:
+            keys = []
     return json.dumps({
         "running": bool(campaign is not None and not campaign.done),
         "kind": _kind,
         "bssid": _bssid,
         "done": bool(campaign is None or campaign.done),
         "saved": saved,
+        "error": _last_error or "",
+        "keys": keys,
     })
 
 
