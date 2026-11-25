@@ -10,6 +10,7 @@ import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
+import android.net.LocalSocketAddress;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.text.TextUtils;
@@ -20,6 +21,7 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.FileDescriptor;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
@@ -67,9 +69,22 @@ public final class UsbHostBridge {
     }
 
     public static synchronized void start(Context context) {
-        if (instance != null && instance.running) return;
-        instance = new UsbHostBridge(context.getApplicationContext());
-        instance.listen();
+        if (instance != null) {
+            if (instance.running) return;
+            // A bridge that failed to bind keeps no socket of its own; close whatever is left
+            // before a new one is built, so the next bind never races a half-open instance.
+            instance.shutdown();
+            instance = null;
+        }
+        UsbHostBridge bridge = new UsbHostBridge(context.getApplicationContext());
+        // A failed bind leaves the instance out of the static, so the next start() retries
+        // instead of reporting a bridge that cannot serve a single request.
+        if (bridge.listen()) instance = bridge;
+    }
+
+    /** Whether a bridge is bound and serving {@code opx.usb} right now. */
+    public static synchronized boolean isListening() {
+        return instance != null && instance.running;
     }
 
     public static synchronized void stop() {
@@ -78,13 +93,30 @@ public final class UsbHostBridge {
         instance = null;
     }
 
-    private void listen() {
-        try {
-            server = new LocalServerSocket(SOCKET_NAME);
-        } catch (Exception e) {
-            Log.w(TAG, "cannot open the USB bridge socket", e);
-            AppLog.error(TAG, e);
-            return;
+    private boolean listen() {
+        // Retry the bind: the previous server's accept() can hold the abstract name for a
+        // moment after an engine restart, and Android then answers EADDRINUSE. Without the
+        // retry the runtime is left with no bridge at all and every devices request is empty.
+        IOException failure = null;
+        for (int attempt = 0; attempt < 5 && server == null; attempt++) {
+            try {
+                server = new LocalServerSocket(SOCKET_NAME);
+            } catch (IOException e) {
+                failure = e;
+                try {
+                    Thread.sleep(150L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        if (server == null) {
+            IOException reason = failure != null ? failure
+                    : new IOException("the USB bridge socket could not be opened");
+            Log.w(TAG, "cannot open the USB bridge socket", reason);
+            AppLog.error(TAG, reason);
+            return false;
         }
         running = true;
         acceptThread = new Thread(() -> {
@@ -107,6 +139,7 @@ public final class UsbHostBridge {
         acceptThread.setDaemon(true);
         acceptThread.start();
         Log.i(TAG, "USB bridge listening on " + SOCKET_NAME);
+        return true;
     }
 
     /** One request: only this app's own processes may use the bridge. */
@@ -157,12 +190,28 @@ public final class UsbHostBridge {
 
     private void shutdown() {
         running = false;
-        try {
-            if (server != null) server.close();
-        } catch (Exception ignored) {
-            // Closing twice is harmless.
-        }
+        Thread accepting = acceptThread;
+        acceptThread = null;
+        LocalServerSocket listening = server;
         server = null;
+        if (listening != null) {
+            // close() drops our descriptor, but accept() is blocked on the same socket and
+            // keeps the abstract name bound until it returns. One throwaway connection wakes
+            // it, so a restart right after this does not fail with "Address already in use".
+            wakeAccept();
+            try {
+                listening.close();
+            } catch (Exception ignored) {
+                // Closing twice is harmless.
+            }
+        }
+        if (accepting != null) {
+            try {
+                accepting.join(500L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
         synchronized (openDescriptors) {
             for (ParcelFileDescriptor descriptor : openDescriptors) {
                 try {
@@ -182,6 +231,23 @@ public final class UsbHostBridge {
                 }
             }
             openConnections.clear();
+        }
+    }
+
+    /** A client connection that only exists to make a blocked accept() return. */
+    private static void wakeAccept() {
+        LocalSocket client = new LocalSocket();
+        try {
+            client.connect(new LocalSocketAddress(SOCKET_NAME,
+                    LocalSocketAddress.Namespace.ABSTRACT));
+        } catch (IOException ignored) {
+            // Nothing is listening: exactly the state shutdown() wants.
+        } finally {
+            try {
+                client.close();
+            } catch (IOException ignored) {
+                // Already closed.
+            }
         }
     }
 

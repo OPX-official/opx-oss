@@ -131,6 +131,27 @@ def prepare_opencl():
         return f"cannot prepare vendor OpenCL: {type(exc).__name__}: {exc}"
 
 
+def usb_hint(bridge=None):
+    """Why the USB bridge has no usable adapter: the poller's reason, else libusb's.
+
+    A card can be attached, listed by the bridge and still be unusable - the fd was refused or
+    libusb could not wrap it - and that reason is what tells the two apart in the app's log.
+    """
+    if bridge is None:
+        try:
+            from wifi4.device import opx_bridge as bridge
+        except Exception:  # noqa: BLE001 - a trimmed runtime has no USB layer at all
+            return ""
+    for name in ("last_error", "libusb_error"):
+        try:
+            value = getattr(bridge, name)()
+        except Exception:  # noqa: BLE001
+            value = None
+        if value:
+            return str(value)
+    return ""
+
+
 def default_passwords_info():
     """The built-in common-password list wifi4 ships, as the crack dialog shows it.
 
@@ -372,11 +393,13 @@ class Engine:
             for d in found
         ]
         fields = {"devices": devices, "count": len(devices)}
-        # When nothing is found, the USB backend's own last error is the useful part.
+        # When nothing is found, the USB backend's own last error is the useful part - and a
+        # card that is attached but whose descriptor libusb refused has a different one, so
+        # both are reported instead of a bare empty list.
         try:
             from wifi4.device import opx_bridge
 
-            hint = opx_bridge.last_error()
+            hint = usb_hint(opx_bridge)
             if hint and not devices:
                 fields["hint"] = hint
         except Exception:  # noqa: BLE001
@@ -576,7 +599,9 @@ class Engine:
         try:
             iface = await self.connect()
         except Exception as exc:  # noqa: BLE001 - no card or no permission is a normal state
-            emit("usb_waiting", message=f"{type(exc).__name__}: {exc}")
+            hint = usb_hint()
+            message = f"{type(exc).__name__}: {exc}" + (f" ({hint})" if hint else "")
+            emit("usb_waiting", message=message)
             self._schedule_attach_retry()
             return
         self._cancel_attach_retry()

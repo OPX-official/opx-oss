@@ -96,6 +96,14 @@ public final class WifiBridge {
         // an installed prefix can still carry a #!/usr/bin/env line, which Android cannot exec.
         OpxRuntime.ensureUsbShim(context);
         UsbHostBridge.start(context);
+        if (!UsbHostBridge.isListening()) {
+            // The engine finds its adapter only through this socket: starting it without a
+            // bridge would run a process that can never see a card and log "no adapter" for
+            // the whole session instead of the real reason.
+            AppLog.info(TAG, "engine not started: the USB bridge socket is not listening");
+            notifyStopped("the USB bridge could not open; the engine was not started");
+            return;
+        }
         acquireWakeLock();
         // pyusb needs the prefix's libusb visible; the shim must exist before python starts.
         OpxRuntime.ensureSiteShim(context);
