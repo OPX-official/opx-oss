@@ -314,6 +314,12 @@
 - [x] **বুক ও ক্যাম্পেইন:** `engine/WepBook.java` (প্রতিটি প্রটেক্টেড ARP-আকার ফ্রেম → স্যাম্পল, শেষ ৮টি ফ্রেম রিপ্লের জন্য) + `engine/attacks/WepCampaign.java` (ARP রিপ্লে → নতুন IV, প্রতি ১০০০ IV-এ কী চেষ্টা, `wep_key` ইভেন্ট ও ভল্টে `wep_<bssid>.key`)।
 - [x] **প্রোটোকল:** `attack kind=wep`, `crack` অ্যালিয়াস `cpu_crack`-এর সাথে।
 - [x] **বিল্ড সবুজ:** রান **#45634553704** (`9dade64`)।
-- [ ] বাকি: WPS (PBC/PIN), evil twin + captive portal।
+- [x] **WPS ক্রিপ্টো:** `engine/crypto/Aes.java` (নিজের AES-128 + CBC + PKCS#5; S-box কোড থেকেই তৈরি, টেবিল টাইপ করা নেই) + `dot11/wsc/WscCrypto.java` (MODP-1536 DH, WSC KDF, AuthKey/KeyWrapKey/EMSK, split-PIN PSK1/PSK2, E/R-Hash, Authenticator/KWA, PIN চেকসাম)।
+- [x] **WPS পিন:** `engine/crack/WpsPins.java` — ৯টি প্রকাশিত ভেন্ডর অ্যালগরিদম (zhao/NIC, ComputePIN-28/32, Airocon, D-Link, D-Link+1, ASUS, Trendnet, inverted NIC) + ডিফল্ট তালিকা + SSID-প্যাটার্ন।
+- [x] **WSC কোডেক:** `dot11/wsc/WscMessage.java` — ৫০+ অ্যাট্রিবিউট আইডি, TLV বিল্ড/পার্স, M1/M3/M4/M5/M6/M7/NACK, আগের মেসেজসহ Authenticator যাচাই।
+- [x] **রেজিস্ট্রার:** `engine/wps/WpsRegistrar.java` — M1→M2, M3→M4 (E-Hash1), M5→M6 (এনক্রিপ্টেড নেটওয়ার্ক সেটিংস + KWA), M7→ক্রেডেনশিয়াল; ভুল হাফে NACK।
+- [x] **নিজস্ব যাচাই:** `SelfCheck`-এ FIPS-197 AES ভেক্টর, WSC KDF ভেক্টর, DH `2^12345 mod p`, PIN চেকসাম/স্পেক পিন, WSC রাউন্ড-ট্রিপ ও Authenticator — সব পিন করা।
+- [x] **বিল্ড সবুজ:** রান **#45635487787** (`1fa8cdb`), **#45635926653** (`3612498`), **#45636358365** (`2b6ae57`)।
+- [ ] বাকি: WPS-এর **অন-এয়ার** অ্যাসোসিয়েশন + EAPOL WSC বিনিময় (ড্রাইভারের অ্যাসোসিয়েশন স্টেট মেশিনের উপর নির্ভরশীল — M6-এর চিপ প্রোফাইলে যাবে), evil twin + captive portal।
 
 **বাকি ফেজ (M5–M6):** উপরের ৬ নম্বর সেকশনের তালিকা অনুযায়ী।
