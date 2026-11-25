@@ -1,6 +1,6 @@
 package com.opx.oss.engine.portal;
 
-import com.opx.oss.engine.AppLog;
+import com.opx.oss.AppLog;
 
 import java.io.BufferedReader;
 import java.io.IOException;
