@@ -4,13 +4,17 @@ import android.content.Context;
 import android.content.res.AssetManager;
 import android.net.Uri;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 
@@ -24,6 +28,9 @@ final class PortalTemplates {
 
     static final String CATALOG = "portal/catalog";
     static final String TEMPLATES = "portal/templates";
+    // A flat manifest of every page: AssetManager.list() is not reliable for packaged
+    // directories on every build, and an empty list used to leave only "Custom HTML file…".
+    static final String INDEX = "portal/index.txt";
 
     /** One catalog page: its category, its asset file and the label a sheet shows. */
     static final class Entry {
@@ -42,34 +49,68 @@ final class PortalTemplates {
     }
 
     static List<String> categories(Context context) {
-        List<String> found = new ArrayList<>();
-        try {
-            String[] names = context.getAssets().list(CATALOG);
-            if (names != null) {
-                for (String name : names) found.add(name);
-            }
-        } catch (IOException ignored) {
-            // An empty list only hides the catalog; the built-in page still works.
+        LinkedHashSet<String> found = new LinkedHashSet<>();
+        for (String row : index(context)) {
+            int slash = row.indexOf('/');
+            if (slash > 0) found.add(row.substring(0, slash));
         }
-        Collections.sort(found);
-        return found;
+        if (found.isEmpty()) {
+            // Fallback for an APK built without the manifest.
+            try {
+                String[] names = context.getAssets().list(CATALOG);
+                if (names != null) {
+                    for (String name : names) found.add(name);
+                }
+            } catch (IOException ignored) {
+                // An empty list only hides the catalog; the built-in page still works.
+            }
+        }
+        List<String> out = new ArrayList<>(found);
+        Collections.sort(out);
+        return out;
     }
 
     static List<Entry> templates(Context context, String category) {
         List<Entry> found = new ArrayList<>();
-        try {
-            String[] names = context.getAssets().list(CATALOG + "/" + category);
-            if (names != null) {
-                for (String name : names) {
-                    if (!name.toLowerCase(Locale.US).endsWith(".html")) continue;
-                    found.add(new Entry(category, name, humanize(category, name)));
+        for (String row : index(context)) {
+            int slash = row.indexOf('/');
+            if (slash <= 0 || !row.substring(0, slash).equals(category)) continue;
+            String file = row.substring(slash + 1);
+            found.add(new Entry(category, file, humanize(category, file)));
+        }
+        if (found.isEmpty()) {
+            // Fallback for an APK built without the manifest.
+            try {
+                String[] names = context.getAssets().list(CATALOG + "/" + category);
+                if (names != null) {
+                    for (String name : names) {
+                        if (!name.toLowerCase(Locale.US).endsWith(".html")) continue;
+                        found.add(new Entry(category, name, humanize(category, name)));
+                    }
                 }
+            } catch (IOException ignored) {
+                // An empty category is just not offered.
             }
-        } catch (IOException ignored) {
-            // An empty category is just not offered.
         }
         Collections.sort(found, (left, right) -> left.label.compareToIgnoreCase(right.label));
         return found;
+    }
+
+    /** Every {@code category/file} line of the packaged manifest. */
+    private static List<String> index(Context context) {
+        List<String> rows = new ArrayList<>();
+        try (InputStream input = context.getAssets().open(INDEX);
+             BufferedReader reader = new BufferedReader(
+                     new InputStreamReader(input, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (!line.isEmpty() && line.indexOf('/') > 0) rows.add(line);
+            }
+        } catch (IOException ignored) {
+            // The fallback above still lists the assets.
+        }
+        return rows;
     }
 
     static String categoryLabel(String category) {

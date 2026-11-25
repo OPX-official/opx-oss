@@ -10,9 +10,11 @@ import android.graphics.drawable.ColorDrawable;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.Window;
+import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -48,7 +50,8 @@ final class CrackDialog {
 
     /** AP mode: the screen starts wifi4's Evil Twin and its captive portal. */
     interface ApListener {
-        void onStartAp(String bssid, String ssid, String password, String templatePath);
+        void onStartAp(String bssid, String ssid, String password, String templatePath,
+                       String iface);
     }
 
     /** The screen opens the portal catalog for this dialog. */
@@ -67,6 +70,8 @@ final class CrackDialog {
     private final MaterialCardView hashcatCard;
     private final MaterialCardView apCard;
     private final LinearLayout apOptions;
+    private final Spinner apIface;
+    private final List<String> apIfaceNames = new ArrayList<>();
     private final EditText apName;
     private final EditText apPassword;
     private final MaterialButton apTemplate;
@@ -116,6 +121,7 @@ final class CrackDialog {
         hashcatCard = content.findViewById(R.id.hc_tool_hashcat);
         apCard = content.findViewById(R.id.hc_tool_ap);
         apOptions = content.findViewById(R.id.hc_ap_options);
+        apIface = content.findViewById(R.id.hc_ap_iface);
         apName = content.findViewById(R.id.hc_ap_name);
         apPassword = content.findViewById(R.id.hc_ap_password);
         apTemplate = content.findViewById(R.id.hc_ap_template);
@@ -228,6 +234,31 @@ final class CrackDialog {
         this.templateListener = listener;
     }
 
+    /** wifi4's pooled cards: the AP hosts on the one selected here. */
+    void setInterfaces(JSONArray interfaces) {
+        apIfaceNames.clear();
+        List<String> labels = new ArrayList<>();
+        if (interfaces != null) {
+            for (int i = 0; i < interfaces.length(); i++) {
+                JSONObject info = interfaces.optJSONObject(i);
+                if (info == null) continue;
+                String name = info.optString("name", "");
+                if (name.isEmpty()) continue;
+                apIfaceNames.add(name);
+                String label = info.optString("label", "");
+                labels.add(label.isEmpty() || label.equals(name) ? name : label + " · " + name);
+            }
+        }
+        if (labels.isEmpty()) {
+            apIfaceNames.add("");
+            labels.add(context.getString(R.string.hc_ap_iface_default));
+        }
+        apIface.setAdapter(new ArrayAdapter<>(context, android.R.layout.simple_spinner_item,
+                labels));
+        ((ArrayAdapter<?>) apIface.getAdapter()).setDropDownViewResource(
+                android.R.layout.simple_spinner_dropdown_item);
+    }
+
     /** The picked page; an empty path keeps opx_ap's built-in sign-in page. */
     void setTemplate(File file, String label) {
         apTemplatePath = file == null ? "" : file.getAbsolutePath();
@@ -265,9 +296,12 @@ final class CrackDialog {
                 return;
             }
             status.setText(R.string.hc_ap_starting);
+            int ifacePosition = apIface.getSelectedItemPosition();
+            String iface = ifacePosition >= 0 && ifacePosition < apIfaceNames.size()
+                    ? apIfaceNames.get(ifacePosition) : "";
             if (apListener != null) {
                 apListener.onStartAp(capture.optString("bssid"), name,
-                        apPassword.getText().toString(), apTemplatePath);
+                        apPassword.getText().toString(), apTemplatePath, iface);
             }
             dialog.dismiss();
             return;

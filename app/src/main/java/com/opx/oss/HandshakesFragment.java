@@ -70,6 +70,8 @@ public class HandshakesFragment extends Fragment
     private String apBssid = "";
     private String apName = "";
     private String apTemplatePath = "";
+    private String apIface = "";
+    private JSONArray apInterfaces = new JSONArray();
     private String apPasswordToTry;
 
     private final ActivityResultLauncher<String[]> wordlistPicker =
@@ -128,6 +130,8 @@ public class HandshakesFragment extends Fragment
         WifiBridge bridge = WifiBridge.get(requireContext());
         bridge.start();
         bridge.requestCaptures();
+        // The AP sheet's interface select reads this list; one card is still listed by name.
+        bridge.requestInterfaces();
     }
 
     @Override
@@ -164,6 +168,10 @@ public class HandshakesFragment extends Fragment
         String name = event.optString("event");
         if ("captures".equals(name)) {
             render(event);
+        } else if ("wifi4_interfaces".equals(name)) {
+            JSONArray info = event.optJSONArray("interface_info");
+            apInterfaces = info == null ? new JSONArray() : info;
+            if (crackDialog != null) crackDialog.setInterfaces(apInterfaces);
         } else if ("capture_saved".equals(name)) {
             requestCaptures();
         } else if ("crack_done".equals(name)) {
@@ -326,6 +334,7 @@ public class HandshakesFragment extends Fragment
         crackDialog = new CrackDialog(requireContext(), capture, this::pickWordlist);
         crackDialog.setApListener(this::startAp);
         crackDialog.setTemplateListener(this::pickPortalTemplate);
+        crackDialog.setInterfaces(apInterfaces);
         try {
             crackDialog.setTemplate(PortalTemplates.defaultLogin(requireContext()),
                     getString(R.string.portal_template_default));
@@ -363,7 +372,8 @@ public class HandshakesFragment extends Fragment
      * The crack dialog's AP mode. A password typed there is checked against the saved handshake
      * first (wifi4's vault); only when it does not match does the twin AP and its portal open.
      */
-    private void startAp(String bssid, String ssid, String password, String templatePath) {
+    private void startAp(String bssid, String ssid, String password, String templatePath,
+                         String iface) {
         if (!isAdded()) return;
         if (OpxService.getState() != OpxService.STATE_READY) {
             Snackbar.make(requireView(), R.string.wifi_engine_pending, Snackbar.LENGTH_LONG).show();
@@ -372,6 +382,7 @@ public class HandshakesFragment extends Fragment
         apBssid = bssid == null ? "" : bssid;
         apName = ssid == null || ssid.isEmpty() ? "" : ssid;
         apTemplatePath = templatePath == null ? "" : templatePath;
+        apIface = iface == null ? "" : iface;
         WifiBridge bridge = WifiBridge.get(requireContext());
         bridge.start();
         if (password != null && !password.isEmpty()) {
@@ -394,6 +405,7 @@ public class HandshakesFragment extends Fragment
         JSONObject options = new JSONObject();
         try {
             options.put("ssid", apName).put("portal", true);
+            if (!apIface.isEmpty()) options.put("twin_iface", apIface);
             if (!apTemplatePath.isEmpty()) options.put("template_path", apTemplatePath);
             options.put("success_path",
                     PortalTemplates.defaultSuccess(requireContext()).getAbsolutePath());

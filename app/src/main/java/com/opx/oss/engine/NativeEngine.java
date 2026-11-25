@@ -225,6 +225,9 @@ public final class NativeEngine {
                 case "captures":
                     captures();
                     break;
+                case "interfaces":
+                    wifi4Interfaces();
+                    break;
                 case "crack_tools":
                     crackTools();
                     break;
@@ -1583,6 +1586,18 @@ public final class NativeEngine {
             reply.put("interfaces", wifi4InterfaceNames(pooled)).put("interface_info", pooled);
         } catch (Exception ignored) {
             // Plain values.
+        }
+        emitQuietly(reply);
+    }
+
+    /** The cards the AP sheet can host on, in wifi4's own order. */
+    private void wifi4Interfaces() {
+        JSONArray pooled = wifi4InterfaceInfo();
+        JSONObject reply = event("wifi4_interfaces");
+        try {
+            reply.put("interfaces", wifi4InterfaceNames(pooled)).put("interface_info", pooled);
+        } catch (Exception ignored) {
+            // Plain values only.
         }
         emitQuietly(reply);
     }

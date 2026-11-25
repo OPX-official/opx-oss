@@ -17,6 +17,7 @@ these targets come from), not to the Java engine's sink.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -824,7 +825,12 @@ def attack(kind, bssid=None, options=None):
 
 async def _launch(campaign):
     # run() creates the campaign's task, so it has to execute on the loop the array lives on.
-    return campaign.run()
+    # PortalAp.run() is a coroutine: returning it without awaiting meant its AP task was never
+    # created, so the campaign reported running while no beacon or portal existed.
+    result = campaign.run()
+    if asyncio.iscoroutine(result):
+        return await result
+    return result
 
 
 def stop_attack():

@@ -208,6 +208,11 @@ public final class WifiBridge {
         send(json("cmd", "targets"));
     }
 
+    /** The cards wifi4 holds, for the AP sheet's interface select. */
+    public void requestInterfaces() {
+        send(json("cmd", "interfaces"));
+    }
+
 
     /** Starts one campaign against one BSSID; progress arrives as attack_log/attack_progress. */
     public void attack(String kind, String bssid) {

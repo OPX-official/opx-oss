@@ -366,6 +366,8 @@
     <string name="hc_ap_template_default">Default sign-in</string>
     <string name="hc_ap_template_router">Router firmware update</string>
     <string name="hc_ap_template_hotel">Hotel Wi-Fi</string>
+    <string name="hc_ap_iface">INTERFACE</string>
+    <string name="hc_ap_iface_default">Automatic (first card)</string>
     <string name="portal_ap_title">AP mode</string>
     <string name="portal_ap_body">The AP is starting with the page you chose. A client that joins it sees that page and types the Wi-Fi password; every entry is checked against the captured handshake. A match closes the AP.</string>
     <string name="portal_ap_hint">Test a password (optional)</string>

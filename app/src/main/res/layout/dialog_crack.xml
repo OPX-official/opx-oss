@@ -282,6 +282,20 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:text="@string/hc_ap_iface"
+                    android:textColor="@color/night_contrast_2"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <Spinner
+                    android:id="@+id/hc_ap_iface"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
                     android:text="@string/hc_ap_name"
                     android:textColor="@color/night_contrast_2"
                     android:textSize="11sp"
