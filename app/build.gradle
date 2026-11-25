@@ -2,6 +2,17 @@ plugins {
     id 'com.android.application'
 }
 
+// The headless engine ships with the APK as well as in the opx-runtime payload: a phone that
+// already has a prefix never downloads or unpacks a newer engine, so this is the only way an
+// engine fix reaches it. Copying the repository's own file (instead of a checked-in copy) keeps
+// the payload and the APK byte-identical.
+def engineAssets = file("$buildDir/generated/engineAssets")
+
+tasks.register('syncEngineAsset', Copy) {
+    from rootProject.file('tools/engine/opx_engine.py')
+    into new File(engineAssets, 'engine')
+}
+
 android {
     namespace 'com.opx.oss'
     compileSdk 36
@@ -58,6 +69,12 @@ android {
         viewBinding false
     }
 
+    sourceSets {
+        main {
+            assets.srcDirs += engineAssets
+        }
+    }
+
     lint {
         // The target SDK is pinned at 28 on purpose (runtime exec permissions), so the
         // "expired target SDK" check would otherwise fail every release build.
@@ -70,6 +87,8 @@ android {
         }
     }
 }
+
+preBuild.dependsOn syncEngineAsset
 
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.0'

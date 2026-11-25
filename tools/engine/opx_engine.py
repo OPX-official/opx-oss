@@ -617,8 +617,12 @@ class Engine:
 
     async def _scan(self, seconds):
         # Hold the array locally: an unplug during the scan drops self.array, and the finally
-        # block must still stop hopping on the object it started with.
-        array = await self.connect()
+        # block must still stop hopping on the object it started with. connect() hands back the
+        # interface it brought up, not the pool, so the array is taken off the engine.
+        await self.connect()
+        array = self.array
+        if array is None:
+            raise RuntimeError("the adapter went away before the scan could start")
         self.scanning = True
         seen = {}
         try:
