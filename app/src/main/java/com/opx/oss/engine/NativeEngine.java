@@ -74,6 +74,8 @@ public final class NativeEngine {
     private final java.util.Set<String> silenced =
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
     private volatile WifiChip chip;
+    /** Every adapter wifi4's array pools, by USB path; the first one is also {@link #chip}. */
+    private final java.util.Map<String, WifiChip> cards = new java.util.LinkedHashMap<>();
     private volatile Campaign campaign;
     private volatile String campaignKind;
     private volatile String campaignBssid;
@@ -95,10 +97,6 @@ public final class NativeEngine {
     private volatile boolean wifi4Configured;
     /** One capture watcher per attached card; it turns wifi4's saves into capture_saved events. */
     private volatile boolean wifi4VaultWatch;
-    /** The target whose screen is open: wifi4's packet counters are sampled for it while set. */
-    private volatile String wifi4Focus;
-    /** True while the live sampler thread runs; it sleeps rather than exits on a dismiss. */
-    private volatile boolean wifi4Live;
 
     private NativeEngine(Context context, Listener listener) {
         this.context = context;
@@ -174,7 +172,7 @@ public final class NativeEngine {
                     if (wifi4Attached) {
                         // wifi4's deauth campaigns every associated client plus a broadcast burst,
                         // so its own one-shot path is the closest thing to both buttons.
-                        wifi4Attack("deauth", command.optString("bssid"));
+                        wifi4Attack("deauth", command.optString("bssid"), null);
                     } else if ("deauth_all".equals(name)) {
                         deauthAll(command.optString("bssid"));
                     } else {
@@ -212,16 +210,14 @@ public final class NativeEngine {
                     wifi4Targets();
                     break;
                 case "wifi4_attack":
-                    wifi4Attack(command.optString("kind"), command.optString("bssid"));
+                    wifi4Attack(command.optString("kind"), command.optString("bssid"),
+                            command.optJSONObject("options"));
                     break;
                 case "wifi4_stop_attack":
                     wifi4StopAttack();
                     break;
                 case "wifi4_status":
                     wifi4Status();
-                    break;
-                case "wifi4_focus":
-                    wifi4Focus(command.optString("bssid"));
                     break;
                 case "captures":
                     captures();
@@ -437,6 +433,7 @@ public final class NativeEngine {
         // ChipRegistry's open() already ran the staged bring-up, so this only caches it.
         adapter = opened;
         chip = adapter;
+        cards.put(path, adapter);
         // The card is up now: tell the screens which interface is carrying the radio, so the
         // Wi-Fi card stops showing a dash in its INTERFACE cell while a scan runs.
         emitQuietly(statusEvent());
@@ -737,16 +734,51 @@ public final class NativeEngine {
     // -- wifi4's backend ----------------------------------------------------------------
 
     /**
+     * Bring up every attached adapter wifi4's registry claims, one at a time, so its
+     * {@code WlanArray} can pool them. Evil Twin hosts the twin on one card and punts from the
+     * other when the twin sits off the target's channel; a plain scan is happy with one.
+     * A card that refuses to open is skipped: the pool keeps whatever came up.
+     */
+    private void openAllChips() {
+        UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
+        java.util.List<String> paths;
+        try {
+            paths = UsbFd.list();
+        } catch (Exception failed) {
+            AppLog.info("OpxEngine", "cannot ask the bridge for devices: " + failed.getMessage());
+            return;
+        }
+        for (String path : paths) {
+            if (cards.containsKey(path)) continue;
+            try {
+                UsbDevice device = manager == null ? null : device(manager, path);
+                if (device == null) continue;
+                if (!ChipRegistry.hasDriver(context, device.getVendorId(),
+                        device.getProductId())) {
+                    continue;
+                }
+                WifiChip opened = ChipRegistry.open(context, device.getVendorId(),
+                        device.getProductId(), path);
+                cards.put(path, opened);
+                if (chip == null) chip = opened;
+            } catch (Exception failed) {
+                AppLog.info("OpxEngine", "adapter " + path + " stayed closed: "
+                        + failed.getMessage());
+            }
+        }
+        emitQuietly(statusEvent());
+    }
+
+    /**
      * Start wifi4's own provider: its {@code WlanArray} hops the card it shares with the
      * driver, so the AP table is built by wifi4's sink, not by this class.
      */
     private void wifi4Scan(int seconds, int intervalMs) throws Exception {
-        String path = firstSupportedDevice();
-        if (path == null) {
+        if (firstSupportedDevice() == null) {
             error("no supported adapter is attached");
             return;
         }
-        openChip(path);
+        openAllChips();
         if (!wifi4ScanStart(seconds, Math.max(50, intervalMs) / 1000.0)) {
             error("wifi4's backend did not start the scan");
         }
@@ -757,6 +789,8 @@ public final class NativeEngine {
      * everything untouched so the caller can fall back to the Java scan.
      */
     private boolean wifi4ScanStart(int seconds, double interval) {
+        // A hub's other adapters join wifi4's pool here, before the array is built.
+        openAllChips();
         try {
             wifi4Configure();
             if (!PythonChip.backendBool("start_scan", null, interval)) return false;
@@ -878,11 +912,12 @@ public final class NativeEngine {
     }
 
     /** Run one of wifi4's campaigns ({@code deauth}, {@code pmkid}, {@code pin}, …). */
-    private void wifi4Attack(String kind, String bssid) {
+    private void wifi4Attack(String kind, String bssid, JSONObject options) {
         wifi4Configure();
         startWifi4VaultWatch();
         boolean running = PythonChip.backendBool("attack", kind,
-                bssid == null || bssid.isEmpty() ? null : bssid);
+                bssid == null || bssid.isEmpty() ? null : bssid,
+                options == null ? "" : options.toString());
         if (running) {
             JSONObject started = event("attack_started");
             try {
@@ -927,7 +962,9 @@ public final class NativeEngine {
             // the WEP IV counter (the same two rows wifi4 swaps by encryption family).
             String[] keys = {"data", "inject", "deauth", "eapol", "wep_iv"};
             int logSeen = 0;
-            for (int i = 0; i < 7200; i++) {
+            // No cap: wifi4's own campaign decides when it is done (a WPS sweep can legitimately
+            // run for hours), and the watcher lives only as long as the engine.
+            while (!stopped) {
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException stopped) {
@@ -992,10 +1029,14 @@ public final class NativeEngine {
                     if (lines != null) entry.put("lines", lines);
                     emitQuietly(entry);
                     if (!running) {
+                        // wifi4's own reason wins: a sweep that ran out of candidates or an AP
+                        // that stayed locked is a failure, not a quiet success.
                         String error = status.optString("error", "");
+                        String reason = status.optString("reason", "");
+                        String problem = !error.isEmpty() ? error : reason;
                         JSONObject done = event("attack_done");
-                        done.put("ok", error.isEmpty()).put("kind", kind)
-                                .put("summary", error.isEmpty() ? kind + " finished" : error);
+                        done.put("ok", problem.isEmpty()).put("kind", kind)
+                                .put("summary", problem.isEmpty() ? kind + " finished" : problem);
                         JSONArray foundKeys = status.optJSONArray("keys");
                         if (foundKeys != null) done.put("keys", foundKeys);
                         emitQuietly(done);
@@ -1052,68 +1093,6 @@ public final class NativeEngine {
             // A plain boolean.
         }
         emitQuietly(reply);
-    }
-
-    /**
-     * Pin the live sampler to one target (the sheet the user has open) or release it with an
-     * empty BSSID.
-     *
-     * <p>wifi4's Focus screen paints its packet dashboard from ``packet_stats`` the whole time a
-     * target is up — no attack needed, because the sink tallies every frame it hears. Reading
-     * those counters only while a campaign ran is why the app's graph stayed blank during a scan;
-     * this keeps a sampler on the open target and pushes it as {@code wifi4_live}.
-     */
-    private void wifi4Focus(String bssid) {
-        String target = bssid == null ? "" : bssid.trim().toLowerCase(java.util.Locale.US);
-        wifi4Focus = target.isEmpty() ? null : target;
-        if (wifi4Focus == null || wifi4Live) return;
-        wifi4Live = true;
-        Thread live = new Thread(() -> {
-            PythonChip.ensurePython(context);
-            int failures = 0;
-            while (wifi4Live) {
-                String focused = wifi4Focus;
-                if (focused != null) {
-                    try {
-                        String json = PythonChip.backendText("sample", focused);
-                        JSONObject sample = new JSONObject(json == null || json.isEmpty()
-                                ? "{}" : json);
-                        JSONObject liveEvent = event("wifi4_live");
-                        liveEvent.put("bssid", focused);
-                        liveEvent.put("kind", sample.optString("kind", "wpa"));
-                        JSONObject rates = sample.optJSONObject("rates");
-                        JSONObject counters = sample.optJSONObject("counters");
-                        if (rates != null) liveEvent.put("rates", rates);
-                        if (counters != null) liveEvent.put("counters", counters);
-                        JSONObject ap = sample.optJSONObject("ap");
-                        if (ap != null) {
-                            liveEvent.put("ssid", ap.optString("ssid", ""));
-                            liveEvent.put("channel", ap.optInt("channel"));
-                            liveEvent.put("signal", ap.optInt("signal", -100));
-                            liveEvent.put("clients", ap.optInt("clients"));
-                            liveEvent.put("beacons", ap.optInt("beacons"));
-                        }
-                        emitQuietly(liveEvent);
-                        failures = 0;
-                    } catch (Throwable broken) {
-                        AppLog.error("OpxEngine", broken);
-                        // A backend that keeps failing must not spin forever behind a dialog.
-                        if (++failures >= 5) {
-                            wifi4Live = false;
-                            return;
-                        }
-                    }
-                }
-                try {
-                    // wifi4's dashboard cadence (SAMPLE_S = 0.4 s in packet_dashboard).
-                    Thread.sleep(400);
-                } catch (InterruptedException stopped) {
-                    return;
-                }
-            }
-        }, "opx-wifi4-live");
-        live.setDaemon(true);
-        live.start();
     }
 
     private void wifi4Status() {
@@ -1418,8 +1397,6 @@ public final class NativeEngine {
         wifi4Count = 0;
         wifi4Configured = false;
         wifi4VaultWatch = false;
-        wifi4Live = false;
-        wifi4Focus = null;
         synchronized (wifi4Sent) {
             wifi4Sent.clear();
         }
@@ -1432,6 +1409,15 @@ public final class NativeEngine {
         }
         WifiChip stopping = chip;
         chip = null;
+        for (WifiChip extra : cards.values()) {
+            if (extra == stopping) continue;
+            try {
+                extra.close();
+            } catch (Exception e) {
+                AppLog.info("OpxEngine", "closing an extra adapter: " + e.getMessage());
+            }
+        }
+        cards.clear();
         if (stopping != null) {
             try {
                 stopping.close();
@@ -1571,10 +1557,26 @@ public final class NativeEngine {
         JSONObject reply = event("targets");
         try {
             reply.put("targets", out).put("handshakes", handshakeCount).put("backend", "wifi4");
+            reply.put("interfaces", wifi4Interfaces());
         } catch (Exception ignored) {
             // Plain values.
         }
         emitQuietly(reply);
+    }
+
+    /** The names of the cards wifi4's array holds ({@code wlan0}, {@code wlan1}, …). */
+    private JSONArray wifi4Interfaces() {
+        JSONArray names = new JSONArray();
+        try {
+            JSONArray pooled = new JSONArray(PythonChip.backendText("interfaces"));
+            for (int i = 0; i < pooled.length(); i++) {
+                String name = pooled.optString(i, "");
+                if (!name.isEmpty()) names.put(name);
+            }
+        } catch (Exception ignored) {
+            // An empty list only means the sheet offers the connected card as both.
+        }
+        return names;
     }
 
     /**
@@ -1596,6 +1598,10 @@ public final class NativeEngine {
             boolean locked = row.optBoolean("wps_locked");
             attacks.put(attackEntry("wps", !locked,
                     locked ? context.getString(com.opx.oss.R.string.wifi_attack_wps_locked) : ""));
+        }
+        if (row.optBoolean("eviltwin")) {
+            String reason = row.optString("eviltwin_reason", "");
+            attacks.put(attackEntry("eviltwin", reason.isEmpty(), reason));
         }
         return attacks;
     }
@@ -1628,7 +1634,12 @@ public final class NativeEngine {
             case "pbc":
             case "decloak":
             case "wep":
-                wifi4Attack(mapped, bssid);
+                // These campaigns own every knob themselves, exactly as in wifi4's TUI.
+                wifi4Attack(mapped, bssid, null);
+                return;
+            case "eviltwin":
+                // EvilTwinInput: the modal's twin/punter cards, BSSID, channel and punt cycle.
+                wifi4Attack(mapped, bssid, command.optJSONObject("options"));
                 return;
             default:
                 error(kind + " runs on the Java engine, which wifi4's array is holding the card from");
@@ -1776,8 +1787,6 @@ public final class NativeEngine {
     private void shutdown() {
         stopped = true;
         cracking = false;
-        wifi4Live = false;
-        wifi4Focus = null;
         worker.shutdownNow();
         cracker.shutdownNow();
     }

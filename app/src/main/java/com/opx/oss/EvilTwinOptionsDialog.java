@@ -135,7 +135,10 @@ final class EvilTwinOptionsDialog {
         body.addView(bssidButtons);
 
         body.addView(label(R.string.wifi_eviltwin_channel));
-        channel = field(R.string.wifi_eviltwin_channel, String.valueOf(targetChannel));
+        // wifi4's modal opens on its decoy channel when a second card can host off-target; the
+        // one-card case stays locked to the target (the engine enforces the same rule).
+        channel = field(R.string.wifi_eviltwin_channel,
+                String.valueOf(single ? targetChannel : decoyChannel(targetChannel)));
         channel.setInputType(InputType.TYPE_CLASS_NUMBER);
         if (single) {
             // One radio hosts the twin AND punts for it: the target's channel is the only one.
@@ -270,6 +273,12 @@ final class EvilTwinOptionsDialog {
     private void showError(int message) {
         error.setText(message);
         error.setVisibility(android.view.View.VISIBLE);
+    }
+
+    /** wifi4's {@code csa_target_channel}: a valid decoy in the target AP's own band. */
+    private static int decoyChannel(int targetChannel) {
+        if (targetChannel > 14) return targetChannel == 36 ? 40 : 36;
+        return targetChannel == 1 ? 6 : 1;
     }
 
     /** 5 GHz DFS bands: 52-64 and 100-144 (wifi4's is_dfs_channel). */

@@ -111,55 +111,6 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- wifi4's Focus dashboard, for the network this sheet is open on: one labelled row per
-             frame class (DATA / INJECT / DEAUTH plus EAPOL or WEP IV), each with its live rate.
-             The engine samples wifi4's counters while this sheet is up, not only during an
-             attack, which is how wifi4's own graph is alive before anything is injected. -->
-        <LinearLayout
-            android:id="@+id/target_live"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="20dp"
-            android:layout_marginTop="14dp"
-            android:layout_marginEnd="20dp"
-            android:orientation="vertical">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:letterSpacing="0.06"
-                    android:text="@string/wifi_live_title"
-                    android:textAllCaps="true"
-                    android:textColor="@color/stryker_accent"
-                    android:textSize="11sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/target_live_meta"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:layout_weight="1"
-                    android:ellipsize="end"
-                    android:singleLine="true"
-                    android:text="@string/wifi_live_hint"
-                    android:textColor="@color/grey"
-                    android:textSize="11sp" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:id="@+id/target_live_meter"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:orientation="vertical" />
-        </LinearLayout>
 
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/target_wps_locked"

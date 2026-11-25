@@ -30,6 +30,9 @@ public final class PythonChip implements Driver {
     private final String path;
 
     private UsbFdHandle handle;
+    /** This card's session key in {@code opx_driver_host}: its usbfs fd, so a hub's other
+     *  adapters stay separate sessions and never tune or transmit through this one. */
+    private int session;
     private Object module;
     private volatile String macAddress;
     private volatile Driver.FrameSink sink;
@@ -134,7 +137,8 @@ public final class PythonChip implements Driver {
         handle = UsbFdHandle.open(context, path);
         try {
             module = hostModule();
-            Object mac = call(module, "start", handle.fileDescriptor(),
+            session = handle.fileDescriptor();
+            Object mac = call(module, "start", session,
                     handle.vendorId(), handle.productId(), this);
             macAddress = text(mac);
             up = true;
@@ -153,13 +157,13 @@ public final class PythonChip implements Driver {
     @Override
     public void setChannel(int channel) throws IOException {
         if (!up) throw new IOException("the card is not open");
-        callChecked("set_channel", channel, false);
+        callChecked("set_channel", session, channel, false);
     }
 
     @Override
     public void transmit(byte[] mpdu) throws IOException {
         if (!up) throw new IOException("the card is not open");
-        callChecked("inject", mpdu);
+        callChecked("inject", session, mpdu);
     }
 
     @Override
@@ -193,7 +197,7 @@ public final class PythonChip implements Driver {
     @Override
     public long acksSeen() {
         try {
-            return number(call(module, "acks"));
+            return number(call(module, "acks", session));
         } catch (Throwable ignored) {
             return 0L;
         }
@@ -204,7 +208,7 @@ public final class PythonChip implements Driver {
         up = false;
         if (module != null) {
             try {
-                call(module, "stop");
+                call(module, "stop", session);
             } catch (Throwable ignored) {
                 // The card may already be gone.
             }

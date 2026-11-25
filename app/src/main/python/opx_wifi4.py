@@ -102,15 +102,14 @@ _campaign_saved = False
 
 #: Last counters each reader saw, per (reader, bssid): wifi4's dashboard diffs two snapshots
 #: into a per-window count (``packet_dashboard._sample_live``); this is that previous snapshot.
-#: Keyed by reader so the screen's live meter and an attack's progress cannot halve each
-#: other's window.
+#: Keyed by reader so two readers cannot halve each other's window.
 _live_prev = {}
 
 #: A gap longer than this means nobody was sampling (screen away, radio retuned): not a rate.
 _LIVE_MAX_GAP_S = 5.0
 
 #: Every campaign this build exposes, by the name the app's protocol uses.
-_CAMPAIGN_KEYS = ("deauth", "pmkid", "pin", "pbc", "decloak", "wep")
+_CAMPAIGN_KEYS = ("deauth", "pmkid", "pin", "pbc", "decloak", "wep", "eviltwin")
 
 
 def _campaign_class(kind: str):
@@ -134,58 +133,68 @@ def _campaign_class(kind: str):
     if kind == "wep":
         from wifi4.campaigns.wep.campaign import WepCampaign
         return WepCampaign
+    if kind == "eviltwin":
+        from wifi4.campaigns.eviltwin import EvilTwinCampaign
+        return EvilTwinCampaign
     raise ValueError(f"no wifi4 campaign called {kind!r}")
 
 
-def _entry():
-    """The registry row that claimed this card, for the interface's description fields."""
-    entry = getattr(host, "_entry", None)
-    if entry is None:
-        claim = host._registry().get((int(host._vendor), int(host._product)))
-        entry = claim[1] if claim is not None else None
-    return entry
-
-
 def attach():
-    """Build wifi4's array around the card ``opx_driver_host`` already connected."""
+    """Build wifi4's array around every card ``opx_driver_host`` has open.
+
+    One card is an array of one, exactly like wifi4's own single-card session. With a USB hub,
+    each open adapter becomes its own ``WlanInterface`` in the same ``WlanArray`` (``wlan0``,
+    ``wlan1``, …), which is what Evil Twin needs: its twin and its punter are two cards when the
+    twin sits on a channel the target is not on.
+    """
     global _array, _iface
     with _lock:
         if _array is not None:
             return True
-        if host._driver is None or host._device is None:
+        open_cards = host.sessions()
+        if not open_cards:
             raise RuntimeError("no card is open: open the adapter before asking wifi4 for targets")
         from wifi4.wlan.array import WlanArray
         from wifi4.wlan.interface import WlanInterface
 
-        entry = _entry()
-        iface = WlanInterface(
-            host._driver,
-            "wifi4",
-            getattr(entry, "description", None) or "wifi4",
-            vid=getattr(entry, "vid", None),
-            pid=getattr(entry, "pid", None),
-            dev=host._device,
-            chipset=getattr(entry, "chipset", None),
-            vendor=getattr(entry, "vendor", None),
-            product_name=getattr(entry, "product_name", None),
-        )
         array = WlanArray()
-        array.attach(iface)
-        # ``attach`` made wifi4's interface the driver's RX callback. Chain the host's own
-        # callback in front of it, so a frame still reaches the Java engine (its scan book and
-        # handshake capture) *and* wifi4's sink (which is where these targets come from).
-        wifi4_sink = iface._on_frame_parsed
+        for index, card in enumerate(open_cards):
+            entry = card.get("entry")
+            iface = WlanInterface(
+                card["driver"],
+                f"wlan{index}",
+                getattr(entry, "description", None) or "wifi4",
+                vid=card.get("vid"),
+                pid=card.get("pid"),
+                dev=card.get("device"),
+                chipset=getattr(entry, "chipset", None),
+                vendor=getattr(entry, "vendor", None),
+                product_name=getattr(entry, "product_name", None),
+            )
+            # ``WlanInterface`` replaced the driver's RX callback with its own parser. Chain the
+            # Java engine's callback in front of it, so a frame reaches both wifi4's sink (where
+            # these targets come from) and the engine's scan book / handshake capture.
+            wifi4_sink = iface._on_frame_parsed
+            callback = card.get("callback")
 
-        def fan_out(packet):
-            host._on_frame(packet)
-            try:
-                wifi4_sink(packet)
-            except Exception:
-                # A frame wifi4 cannot parse must not kill the driver's reader thread.
-                traceback.print_exc()
+            def fan_out(packet, callback=callback, wifi4_sink=wifi4_sink):
+                try:
+                    if callback is not None:
+                        payload = bytes(getattr(packet, "raw", b"") or b"")
+                        callback.onFrame(payload, int(getattr(packet, "rssi", 0) or 0))
+                except Exception:
+                    traceback.print_exc()
+                try:
+                    wifi4_sink(packet)
+                except Exception:
+                    # A frame wifi4 cannot parse must not kill the driver's reader thread.
+                    traceback.print_exc()
 
-        host._driver.register_rx_callback(fan_out)
-        _array, _iface = array, iface
+            card["driver"].register_rx_callback(fan_out)
+            array.attach(iface)
+            if _iface is None:
+                _iface = iface
+        _array = array
         return True
 
 
@@ -212,30 +221,15 @@ def _counters_and_rates(bssid, reader="live"):
     return counters, {key: round(value, 1) for key, value in rates.items()}
 
 
-def sample(bssid=None):
-    """wifi4's packet dashboard for one target: the per-class rate of every row it draws.
+def interfaces():
+    """The cards wifi4's array pools, by name (``wlan0``, ``wlan1``, …).
 
-    The app's target sheet calls this while the card is only scanning; wifi4's own Focus screen
-    does the same (its dashboard samples ``packet_stats`` every 0.4 s no matter what the radio is
-    doing), which is why its graph is alive before any attack starts. ``kind`` says which row
-    set applies: a WEP target draws the WEP IV row where a WPA one draws EAPOL.
+    The Evil Twin sheet's two selects come from here, the same member list the TUI's modal reads
+    from ``array.members``.
     """
-    target = str(bssid or "").lower()
-    out = {"bssid": target, "kind": "wpa", "rates": {}, "counters": {}, "ap": None}
-    if not target or _array is None:
-        return json.dumps(out)
-    try:
-        counters, rates = _counters_and_rates(target)
-        out["counters"], out["rates"] = counters, rates
-        ap = _array.access_points.get(target)
-        if ap is not None:
-            row = _ap_row(ap, _clients_by_bssid())
-            out["ap"] = row
-            out["kind"] = ("wep" if str(row.get("privacy") or "").upper().startswith("WEP")
-                           else "wpa")
-    except Exception:
-        traceback.print_exc()
-    return json.dumps(out)
+    if _array is None:
+        return json.dumps([])
+    return json.dumps([m.name for m in _array.members])
 
 
 def start_scan(channels=None, interval=0.5):
@@ -300,12 +294,22 @@ def _ap_row(ap, clients_by_bssid=None) -> dict:
         "wps_locked": bool(getattr(ap, "wps_locked", False)),
         "wps_version": getattr(ap, "wps_version", None),
         "hidden": bool(getattr(ap, "is_hidden", False)),
+        "eviltwin": False,
+        "eviltwin_reason": "",
         "chipset": getattr(ap, "chipset", None),
         "beacons": int(getattr(ap, "beacons", 0) or 0),
         "handshakes": len(getattr(ap, "handshakes", {}) or {}),
         "clients": len(clients),
         "clients_list": clients,
     }
+    try:
+        from wifi4.campaigns.eviltwin import EvilTwinCampaign
+        row["eviltwin"] = bool(EvilTwinCampaign.visible(ap))
+        row["eviltwin_reason"] = EvilTwinCampaign.ineligible_reason(ap) or ""
+    except Exception:
+        # An import that fails only hides the button; the other attacks stay usable.
+        traceback.print_exc()
+    return row
 
 
 def set_captures_dir(path):
@@ -565,10 +569,91 @@ def targets():
     return json.dumps(rows)
 
 
-def attack(kind, bssid=None, **options):
-    """Run wifi4's ``kind`` campaign against ``bssid``; True when it took the radio."""
+def _eviltwin_input(ap, options):
+    """The ``EvilTwinInput`` wifi4's modal would have produced, from the app's own sheet.
+
+    Interface election, the one-card channel lock, the BSSID rule for a card that cannot spoof,
+    the PMF-aware default punt set and the punt cycle are all wifi4's (``eviltwin_modal.py`` and
+    ``campaign.py``); this only maps the app's option names onto them.
+    """
+    from wifi4.campaigns.eviltwin import (
+        EvilTwinInput, PuntMode, csa_target_channel, default_punt_modes,
+    )
+    from wifi4.chips.driver import FakeMacSupport
+    from wifi4.wlan.array import fake_mac_rank
+
+    members = list(_array.members)
+    if not members:
+        raise RuntimeError("EvilTwin needs an open card")
+    by_name = {m.name: m for m in members}
+    twin = by_name.get(str(options.get("twin_iface") or ""))
+    if twin is None:
+        hosts = [m for m in members
+                 if getattr(getattr(m, "driver", None), "FAKE_MAC", None)
+                 in (FakeMacSupport.SPOOFABLE, FakeMacSupport.FIXED_MAC)]
+        twin = min(hosts, key=fake_mac_rank) if hosts else members[0]
+    punter = by_name.get(str(options.get("punt_iface") or ""))
+    if punter is None:
+        punter = next((m for m in members if m is not twin), twin)
+
+    single = len(members) == 1
+    supported = list(getattr(twin, "supported_channels", None) or [])
+    requested = int(options.get("twin_channel") or 0)
+    if single:
+        # One card cannot host off the target's channel; the TUI locks it to the target too.
+        channel = ap.channel
+    elif requested > 0:
+        channel = requested
+    else:
+        channel = csa_target_channel(ap.channel)
+    if supported and channel not in supported:
+        channel = ap.channel if ap.channel in supported else supported[0]
+    if channel <= 0:
+        channel = max(1, ap.channel or 1)
+
+    twin_bssid = str(options.get("twin_bssid") or "").lower() or (ap.bssid or "").lower()
+    spoofable = getattr(getattr(twin, "driver", None), "FAKE_MAC", None) is FakeMacSupport.SPOOFABLE
+    if not spoofable:
+        # A FIXED_MAC card (or one that cannot spoof) hosts under the address it already ACKs.
+        twin_bssid = (getattr(twin, "mac_address", None) or twin_bssid).lower()
+
+    if options.get("punt") == "none":
+        modes = ()
+    elif options.get("punt_modes") is not None:
+        lookup = {"deauth": PuntMode.DEAUTH, "csa": PuntMode.CSA, "btm": PuntMode.BTM}
+        modes = tuple(lookup[name] for name in options["punt_modes"] if name in lookup)
+    else:
+        modes = default_punt_modes(ap)
+
+    period = options.get("punt_period", 30.0)
+    if period in (None, ""):
+        period = None
+    else:
+        period = float(period)
+    return EvilTwinInput(twin_iface=twin, punt_iface=punter, twin_channel=int(channel),
+                         twin_bssid=twin_bssid, punt_modes=modes, csa_channel=None,
+                         punt_period_sec=period,
+                         punt_once=bool(options.get("punt_once", False)))
+
+
+def attack(kind, bssid=None, options=None):
+    """Run wifi4's ``kind`` campaign against ``bssid``; True when it took the radio.
+
+    ``options`` is the app's JSON text. Only Evil Twin takes any (the sheet's EvilTwinInput);
+    every other campaign decides its own knobs, exactly as wifi4's TUI buttons do.
+    """
     global _campaign, _kind, _bssid, _campaign_saved, _last_error
     attach()
+    settings = {}
+    if isinstance(options, str) and options.strip():
+        try:
+            settings = json.loads(options)
+        except ValueError:
+            traceback.print_exc()
+    elif isinstance(options, dict):
+        settings = dict(options)
+    if not isinstance(settings, dict):
+        settings = {}
     if kind not in _CAMPAIGN_KEYS:
         raise ValueError(f"no wifi4 campaign called {kind!r}")
     ap = None
@@ -581,14 +666,19 @@ def attack(kind, bssid=None, **options):
             raise RuntimeError("a wifi4 campaign is already running")
         _log_lines.clear()
         _last_error = None
-        args = dict(options or {})
-        if kind == "wep":
-            # wifi4's WEP campaign names its logger differently from every other campaign.
-            args["log_callback"] = args.pop("log", None) or _ui_log
+        if kind == "eviltwin":
+            if ap is None:
+                raise ValueError("EvilTwin needs a target network")
+            campaign = _campaign_class(kind)(_array, ap, _eviltwin_input(ap, settings))
         else:
-            # Every other campaign writes its running commentary through ``log``.
-            args.setdefault("log", _ui_log)
-        campaign = _campaign_class(kind)(_array, ap, **args)
+            args = dict(settings)
+            if kind == "wep":
+                # wifi4's WEP campaign names its logger differently from every other campaign.
+                args["log_callback"] = args.pop("log", None) or _ui_log
+            else:
+                # Every other campaign writes its running commentary through ``log``.
+                args.setdefault("log", _ui_log)
+            campaign = _campaign_class(kind)(_array, ap, **args)
         started = host._run(_launch(campaign), timeout=30.0)
         if started:
             _campaign, _kind, _bssid = campaign, kind, (str(bssid).lower() if bssid else None)
@@ -675,6 +765,27 @@ def _reap_campaign(force=False):
     return _save_campaign_result(campaign, _kind)
 
 
+def _campaign_reason(campaign):
+    """Why wifi4's campaign stopped by itself, in its own words (empty while it runs).
+
+    A sweep that runs out of candidates, an AP that stays locked, or a campaign that caught an
+    exception all end with wifi4's own status/fail_reason; the app shows that instead of calling
+    every ending a success.
+    """
+    if campaign is None:
+        return ""
+    reason = getattr(campaign, "fail_reason", None)
+    if reason:
+        return _plain(str(reason))
+    phase = getattr(getattr(campaign, "state", None), "phase", None)
+    if phase == "failed":
+        return "WPS PIN sweep exhausted its candidates"
+    status = getattr(campaign, "status", None)
+    if status in ("failed", "error"):
+        return f"campaign {status}"
+    return ""
+
+
 def attack_status():
     campaign = _campaign
     saved = _reap_campaign()
@@ -693,6 +804,7 @@ def attack_status():
         "done": bool(campaign is None or campaign.done),
         "saved": saved,
         "error": _last_error or "",
+        "reason": _campaign_reason(campaign),
         "keys": keys,
     })
 

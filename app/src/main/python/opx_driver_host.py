@@ -7,6 +7,10 @@ every ``wifi4/chips/<family>/__init__.py`` exposes ``SUPPORTED_IDS`` and ``impor
 
 wifi4's drivers are coroutines, and their receive reader keeps tasks alive for the whole session, so
 one dedicated thread owns a single event loop and every call is posted to it.
+
+More than one card can be open at once (a USB hub): each ``start()`` call is a *session*, keyed by
+the usbfs fd it wrapped. The Java driver hands its own fd back on every later call, so two cards
+never tune or transmit through each other.
 """
 
 from __future__ import annotations
@@ -21,13 +25,8 @@ import traceback
 
 import usb_shim
 
-_driver = None
-_device = None
-_callback = None
-_family = None
-_vendor = 0
-_product = 0
-_entry = None
+#: fd -> session dict(driver, device, callback, vid, pid, entry, family).
+_sessions = {}
 _loop = None
 _thread = None
 _lock = threading.Lock()
@@ -93,74 +92,106 @@ def families():
 
 
 def start(fd, vendor, product, callback):
-    """Wrap ``fd``, pick the family by id, bring the driver up and return its MAC."""
-    global _driver, _device, _callback, _family, _vendor, _product, _entry
+    """Wrap ``fd``, pick the family by id, bring the driver up and return its MAC.
+
+    The fd is the session key: every later call for this card passes it back, so a second card on
+    the same hub is a second session instead of replacing the first.
+    """
     with _lock:
+        key = int(fd)
+        existing = _sessions.get(key)
+        if existing is not None:
+            return getattr(existing["driver"], "mac_address", None)
         claim = _registry().get((int(vendor), int(product)))
         if claim is None:
             raise RuntimeError(f"no wifi4 driver for {vendor:04x}:{product:04x}")
-        _family, entry, import_driver = claim
-        _vendor, _product, _entry = int(vendor), int(product), entry
-        _callback = callback
-        _device = usb_shim.install(int(fd), int(vendor), int(product))
+        family, entry, import_driver = claim
+        device = usb_shim.install(key, int(vendor), int(product))
         driver_class = import_driver()
-        _driver = driver_class.from_usb_device(_device, entry)
-        _driver.register_rx_callback(_on_frame)
-        _driver.register_disconnect_callback(_on_disconnect)
+        driver = driver_class.from_usb_device(device, entry)
+        driver.register_rx_callback(lambda packet, key=key: _on_frame(key, packet))
+        driver.register_disconnect_callback(lambda key=key: _on_disconnect(key))
         _ensure_loop()
-        _run(_connect(_driver))
+        _run(_connect(driver))
         try:
-            _run(_driver.enable_rx_acks())
+            _run(driver.enable_rx_acks())
         except Exception:
             # ACK tallying is optional; a chip that cannot stream ACKs still transmits.
             traceback.print_exc(file=sys.stderr)
-        return getattr(_driver, "mac_address", None)
+        _sessions[key] = {"driver": driver, "device": device, "callback": callback,
+                          "vid": int(vendor), "pid": int(product), "entry": entry,
+                          "family": family}
+        return getattr(driver, "mac_address", None)
+
+
+def sessions():
+    """Every open card, oldest first: what wifi4's ``WlanArray`` pools."""
+    return [dict(key=key, **session) for key, session in sorted(_sessions.items())]
+
+
+def _session(key=None):
+    """The session a call targets: its fd, or the most recently opened card when omitted."""
+    if not _sessions:
+        return None
+    if key is None:
+        return _sessions[max(_sessions)]
+    return _sessions.get(int(key))
 
 
 async def _connect(driver):
     return await driver.connect(_on_progress)
 
 
-def _on_frame(packet):
-    if _callback is None:
+def _on_frame(key, packet):
+    session = _sessions.get(key)
+    callback = None if session is None else session.get("callback")
+    if callback is None:
         return
     try:
         payload = bytes(getattr(packet, "raw", b"") or b"")
-        _callback.onFrame(payload, int(getattr(packet, "rssi", 0) or 0))
+        callback.onFrame(payload, int(getattr(packet, "rssi", 0) or 0))
     except Exception:
         traceback.print_exc(file=sys.stderr)
 
 
-def _on_disconnect():
-    if _callback is not None:
-        try:
-            _callback.onDisconnect()
-        except Exception:
-            traceback.print_exc(file=sys.stderr)
+def _on_disconnect(key):
+    session = _sessions.get(key)
+    callback = None if session is None else session.get("callback")
+    if callback is None:
+        return
+    try:
+        callback.onDisconnect()
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
 
 
 def _on_progress(percentage, message):
-    if _callback is not None:
+    for session in list(_sessions.values()):
+        callback = session.get("callback")
+        if callback is None:
+            continue
         try:
-            _callback.onProgress(int(float(percentage)), str(message))
+            callback.onProgress(int(float(percentage)), str(message))
         except Exception:
             pass
 
 
-def set_channel(channel, scan=False):
-    if _driver is None:
+def set_channel(session, channel, scan=False):
+    target = _session(session)
+    if target is None:
         raise RuntimeError("no driver is open")
-    return bool(_run(_driver.set_channel(int(channel), bool(scan))))
+    return bool(_run(target["driver"].set_channel(int(channel), bool(scan))))
 
 
-def inject(frame):
-    if _driver is None:
+def inject(session, frame):
+    target = _session(session)
+    if target is None:
         raise RuntimeError("no driver is open")
-    return bool(_run(_driver.inject_frame(bytes(frame))))
+    return bool(_run(target["driver"].inject_frame(bytes(frame))))
 
 
-def _mac_bytes():
-    mac = getattr(_driver, "mac_address", None)
+def _mac_bytes(driver):
+    mac = getattr(driver, "mac_address", None)
     if not mac:
         return None
     digits = mac.replace(":", "").replace("-", "")
@@ -170,31 +201,35 @@ def _mac_bytes():
         return None
 
 
-def acks():
-    if _driver is None:
+def acks(session):
+    target = _session(session)
+    if target is None:
         return 0
-    return int(_driver.acks_seen(_mac_bytes()))
+    driver = target["driver"]
+    return int(driver.acks_seen(_mac_bytes(driver)))
 
 
-def stop():
-    global _driver, _device
+def stop(session=None):
+    """Close one card's session, or every card when ``session`` is omitted."""
     with _lock:
-        if _driver is not None:
+        keys = list(_sessions) if session is None else [int(session)]
+        for key in keys:
+            target = _sessions.pop(key, None)
+            if target is None:
+                continue
             try:
-                _run(_driver.close(), timeout=15.0)
+                _run(target["driver"].close(), timeout=15.0)
             except Exception:
                 traceback.print_exc(file=sys.stderr)
-            _driver = None
-        if _device is not None:
             try:
-                _device.close()
+                target["device"].close()
             except Exception:
                 pass
-            _device = None
 
 
 def family():
-    return _family
+    target = _session()
+    return None if target is None else target.get("family")
 
 
 # -- optional line protocol, for running the host as a process (desktop tests) ------------
@@ -217,13 +252,14 @@ def run():
                 mac = start(request["fd"], request["vid"], request["pid"], None)
                 emit({"ok": True, "mac": mac, "family": family()})
             elif op == "channel":
-                emit({"ok": set_channel(request["ch"], request.get("scan", False))})
+                emit({"ok": set_channel(request.get("session"), request["ch"],
+                                        request.get("scan", False))})
             elif op == "tx":
-                emit({"ok": inject(base64.b64decode(request["b64"]))})
+                emit({"ok": inject(request.get("session"), base64.b64decode(request["b64"]))})
             elif op == "acks":
-                emit({"ok": True, "acks": acks()})
+                emit({"ok": True, "acks": acks(request.get("session"))})
             elif op == "stop":
-                stop()
+                stop(request.get("session"))
                 emit({"ok": True})
                 return
             else:
