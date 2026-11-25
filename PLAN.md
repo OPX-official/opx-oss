@@ -253,4 +253,16 @@
 - [x] **রিলিজ বন্ধ:** `.github/workflows/build.yml` থেকে দুটি রিলিজ-স্টেপ বাদ, `latest` রিলিজ ও ট্যাগ মুছে ফেলা — প্রজেক্ট শেষ না হওয়া পর্যন্ত Releases খালি, শুধু রান-আর্টিফ্যাক্ট।
 - [ ] ডিভাইসে `devices` → `open` → bulk I/O পরীক্ষা (ফোনে দেখতে হবে)।
 
+### M2 — চলছে (আনুমানিক ৫০%)
+
+- [x] **ক্রিপ্টো নিজের হাতে:** `engine/crypto/{Sha1,Sha256,Hmac,Pbkdf2,Rc4,Crc32}.java` — কোনো বাইরের হ্যাশ লাইব্রেরি নেই।
+- [x] **WPA কী-স্কেডুল:** `engine/crypto/WpaKeys.java` — PMK (PBKDF2 4096), PRF-512 → PTK/KCK, EAPOL MIC (HMAC-SHA1-128), PMKID — রেফারেন্স `crack/wpa_psk.py` ও `dot11/wpa.py` অনুযায়ী।
+- [x] **Known-answer সেলফ-চেক:** `engine/SelfCheck.java` — SHA-1/SHA-256/HMAC/PBKDF2/RC4/CRC-32/WPA-PMK (IEEE ভেক্টর)/hc22000 লাইন; ইঞ্জিন শুরুতেই চলে, `ready.runtime.selfcheck`-এ ফল যায়।
+- [x] **৮০২.১১ কোর:** `dot11/{Mac,Ie,Frame,Parser}.java` — হেডার, IE ওয়াক/বিল্ড, RSN পার্স, beacon/probe → `AccessPoint`, deauth/auth/probe/assoc বিল্ডার, `forcePskAkm`।
+- [x] **স্ক্যান-সিঙ্ক:** `engine/{AccessPoint,ScanBook}.java` — BSSID-ভিত্তিক মার্জ, সিগন্যাল-সাজানো, অ্যাপের রো JSON।
+- [x] **ভল্ট + 22000:** `engine/Vault.java`, `engine/capture/Hc22000.java` (PMKID ও EAPOL লাইন), `captures`/`crack_tools` ইন-প্রসেস ইভেন্ট।
+- [x] **বিল্ড সবুজ:** রান **#45624833303** (`a051b26`)।
+- [ ] EAPOL-Key পার্স + ৪-ওয়ে হ্যান্ডশেক স্টেট (M2-এর বাকি অংশ) → PMKID/হ্যান্ডশেক ক্যাপচার।
+- [ ] চিপসেট ড্রাইভার (`Ar9271` প্রথম) — এটা ছাড়া স্ক্যান চালানো যায় না; `scan` এখনো ইঞ্জিনে ওয়্যার হয়নি।
+
 **বাকি ফেজ (M2–M6):** উপরের ৬ নম্বর সেকশনের তালিকা অনুযায়ী অপরিবর্তিত।
