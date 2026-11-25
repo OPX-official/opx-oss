@@ -9,10 +9,7 @@ import java.io.IOException;
 public final class Rtl8187Phy {
 
     /** The synthesiser word for channels 1..14, exactly the order the radio expects. */
-    private static final int[] CHANNEL_WORDS = {
-            0x085C, 0x08DC, 0x095C, 0x09DC, 0x0A5C, 0x0ADC, 0x0B5C,
-            0x0BDC, 0x0C5C, 0x0CDC, 0x0D5C, 0x0DDC, 0x0E5C, 0x0F72
-    };
+    private static final int[] CHANNEL_WORDS = Rtl8225Tables.RTL8225_CHAN;
 
     /** RF register that holds the synthesiser word. */
     private static final int RF_CHANNEL_REGISTER = 0x07;
@@ -29,7 +26,9 @@ public final class Rtl8187Phy {
 
     /** One PHY register write: address in the low byte, data above it, bit 7 marks a write. */
     public void writePhy(int address, int data) throws IOException {
-        int word = ((data & 0xFFFF) << 8) | (address & 0xFF) | 0x80;
+        // The CCK selector is bit 16 of the data word, so the whole value has to survive the
+        // shift: masking to 16 bits here silently turns every CCK write into an OFDM write.
+        int word = (data << 8) | (address & 0xFF) | 0x80;
         transport.write8(Rtl8187Regs.REG_PHY + 3, (word >>> 24) & 0xFF);
         transport.write8(Rtl8187Regs.REG_PHY + 2, (word >>> 16) & 0xFF);
         transport.write8(Rtl8187Regs.REG_PHY + 1, (word >>> 8) & 0xFF);

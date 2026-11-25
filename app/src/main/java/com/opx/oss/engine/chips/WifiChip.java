@@ -33,4 +33,13 @@ public interface WifiChip extends Closeable {
 
     /** Start the receive thread feeding {@code sink}. */
     void startReceive(FrameSink sink) throws IOException;
+
+    /** Link-layer ACKs the radio has handed up since the last reset; the silicon ACKs for us. */
+    default long acksSeen() {
+        return 0;
+    }
+
+    /** Clear the ACK tally, e.g. before a probe burst. */
+    default void resetAcks() {
+    }
 }

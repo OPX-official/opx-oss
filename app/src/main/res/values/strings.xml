@@ -338,7 +338,7 @@
     <string name="hs_password_copied">Password copied</string>
 
     <string name="hc_title">Crack handshake</string>
-    <string name="hc_subtitle">The engine's own cracker: a wordlist or a mask, run on this device</string>
+    <string name="hc_subtitle">The engine\'s own cracker: a wordlist or a mask, run on this device</string>
     <string name="hc_tool">TOOL</string>
     <string name="hc_tool_cpu">CPU Crack</string>
     <string name="hc_tool_gpu">Hashcat (GPU)</string>

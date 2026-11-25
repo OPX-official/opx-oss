@@ -14,8 +14,6 @@ import java.io.IOException;
  */
 public final class Rtl8187Tx {
 
-    private static final int PACKET_ALIGNMENT = 64;
-
     private final UsbTransport transport;
     private int sequence;
 
@@ -25,12 +23,18 @@ public final class Rtl8187Tx {
 
     /** The descriptor for one frame at {@code rateIndex}, retried {@code retries} times. */
     public static byte[] descriptor(int frameLength, int rateIndex, int retries) {
+        return descriptor(frameLength, rateIndex, retries, false);
+    }
+
+    /** As above, with bit 17 marking a frame that still has fragments to follow. */
+    public static byte[] descriptor(int frameLength, int rateIndex, int retries, boolean moreFrag) {
         if (frameLength <= 0 || frameLength > 0x0FFF) {
             throw new IllegalArgumentException("frame too long for the descriptor: " + frameLength);
         }
         int flags = (frameLength & 0x0FFF)
                 | Rtl8187Regs.TX_FLAG_NO_ENC
                 | ((rateIndex & 0x0F) << 24);
+        if (moreFrag) flags |= Rtl8187Regs.TX_FLAG_MOREFRAG;
         int retry = ((retries - 1) & 0xFF) << 8;
         return new byte[]{
                 (byte) flags, (byte) (flags >>> 8), (byte) (flags >>> 16), (byte) (flags >>> 24),
@@ -57,7 +61,11 @@ public final class Rtl8187Tx {
 
     /** Prepend the descriptor and write the frame out. */
     public void send(byte[] frame, int rateIndex, int retries) throws IOException {
-        byte[] header = descriptor(frame.length, rateIndex, retries);
+        send(frame, rateIndex, retries, false);
+    }
+
+    public void send(byte[] frame, int rateIndex, int retries, boolean moreFrag) throws IOException {
+        byte[] header = descriptor(frame.length, rateIndex, retries, moreFrag);
         byte[] payload = new byte[header.length + frame.length];
         System.arraycopy(header, 0, payload, 0, header.length);
         System.arraycopy(frame, 0, payload, header.length, frame.length);
@@ -68,7 +76,8 @@ public final class Rtl8187Tx {
         }
         // A transfer that is an exact multiple of the packet size has no terminating short
         // packet, so the chip never fires it: follow it with an empty write.
-        if (payload.length % PACKET_ALIGNMENT == 0) {
+        int packetSize = transport.maxPacketOut();
+        if (packetSize > 0 && payload.length % packetSize == 0) {
             transport.bulkOut(new byte[0], 200);
         }
     }

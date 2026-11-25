@@ -1,5 +1,6 @@
 plugins {
     id 'com.android.application'
+    id 'com.chaquo.python'
 }
 
 android {
@@ -9,7 +10,7 @@ android {
     defaultConfig {
         applicationId "com.opx.oss"
         // Android 6.0 and up, 32- and 64-bit ABIs alike.
-        minSdk 23
+        minSdk 24  // Chaquopy 17 (embedded CPython) requires API 24+
         // Kept at 28 so the shared-storage export folder stays an ordinary runtime permission;
         // the engine itself runs in this process and never executes a file.
         targetSdk 28
@@ -21,6 +22,12 @@ android {
                 : 22
         versionName "0.3.0-alpha.1"
         vectorDrawables.useSupportLibrary = true
+
+        // The Python runtime and libusb are native. Chaquopy 17 (Python 3.12) has no 32-bit ARM
+        // build, so the shipped ABIs are 64-bit ARM plus the emulator.
+        ndk {
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
     }
 
     // One key for every artifact this repository builds. Android treats a different signature as
@@ -81,4 +88,22 @@ dependencies {
     // Stryker's Lottie animations (wifi_scan, usb_stick, settings_gears, router, connection).
     implementation 'com.airbnb.android:lottie:6.7.1'
     // Untars the packaged userland payloads (the archive ships tar.gz trees, not zips).
+}
+
+// ---------------------------------------------------------------------------------------------
+// Embedded Python: the wifi4 drivers (GPL-2.0-only, vendored under app/src/main/python with its
+// LICENSE) run unmodified. They only need PyUSB, which /python/usb_shim.py replaces with a libusb
+// wrapper around the usbfs fd that UsbHostBridge already hands over.
+//
+// Requirements checked before a release build:
+//   * app/src/main/jniLibs/<abi>/libusb-1.0.so  (built by scripts/build-libusb.sh)
+//   * a host CPython 3.11+ for Chaquopy's codegen: set OPX_BUILD_PYTHON, default /usr/bin/python3
+// ---------------------------------------------------------------------------------------------
+chaquopy {
+    defaultConfig {
+        // Chaquopy 17 needs the build interpreter to match the app's Python exactly.
+        version "3.12"
+        buildPython System.getenv("OPX_BUILD_PYTHON") ?: "/usr/bin/python3"
+        // No pip packages: usb_shim.py covers PyUSB's surface for the drivers.
+    }
 }
