@@ -114,7 +114,7 @@ public final class NativeEngine {
                     targets();
                     break;
                 case "scan":
-                    scan(command.optBoolean("seconds", 0));
+                    scan(command.optInt("seconds", 0));
                     break;
                 case "stop_scan":
                     stopScan();

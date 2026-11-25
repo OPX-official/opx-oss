@@ -134,7 +134,7 @@ public final class Rtl8187Chip implements WifiChip {
         }
         if (phy != null) {
             try {
-                radio.stop();
+                phy.stop();
             } catch (IOException ignored) {
                 // The card may already be unplugged.
             }
