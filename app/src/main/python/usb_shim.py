@@ -242,6 +242,29 @@ class _CoreModule:
 
 
 class _UtilModule:
+    # PyUSB's endpoint constants: the drivers describe endpoints with these, so they must exist
+    # before any bulk endpoint can be found.
+    ENDPOINT_DIR_MASK = 0x80
+    ENDPOINT_IN = 0x80
+    ENDPOINT_OUT = 0x00
+    ENDPOINT_TYPE_MASK = 0x03
+    ENDPOINT_TYPE_CTRL = 0
+    ENDPOINT_TYPE_ISO = 1
+    ENDPOINT_TYPE_BULK = 2
+    ENDPOINT_TYPE_INTR = 3
+    SPEED_LOW = 1
+    SPEED_FULL = 2
+    SPEED_HIGH = 3
+    SPEED_SUPER = 4
+
+    @staticmethod
+    def endpoint_direction(address):
+        return address & _UtilModule.ENDPOINT_DIR_MASK
+
+    @staticmethod
+    def endpoint_type(address):
+        return address & _UtilModule.ENDPOINT_TYPE_MASK
+
     def claim_interface(self, device, interface):
         number = getattr(interface, "bInterfaceNumber", interface)
         if number in device._claimed:
@@ -287,11 +310,12 @@ def install(fd: int, vendor: int, product: int):
     core_module.USBError = USBError
     core_module.USBTimeoutError = USBTimeoutError
     core_module.Device = Device
+    core_module.Interface = _Interface
     core_module.find = core.find
     util_module = type(sys)("usb.util")
-    for name in ("claim_interface", "release_interface", "dispose_resources",
-                 "find_descriptor", "endpoint_address"):
-        setattr(util_module, name, getattr(util, name))
+    for name in dir(util):
+        if not name.startswith("_"):
+            setattr(util_module, name, getattr(util, name))
 
     usb_pkg = type(sys)("usb")
     usb_pkg.core = core_module

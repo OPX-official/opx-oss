@@ -2,6 +2,7 @@ package com.opx.oss.engine.chips;
 
 import android.content.Context;
 
+import com.opx.oss.AppLog;
 import com.opx.oss.engine.UsbFdHandle;
 
 import java.io.IOException;
@@ -65,9 +66,12 @@ public final class PythonChip implements Driver {
         try {
             ensureStarted(context);
             Object module = hostModule();
-            return Boolean.TRUE.equals(call(module, "has_driver", vendorId, productId));
+            return truth(call(module, "has_driver", vendorId, productId));
         } catch (Throwable missing) {
             // No embedded Python (JVM tests, stripped build): this family simply isn't available.
+            // Logged, because "the card is unsupported" and "Python did not start" look the same
+            // to the engine and only this line tells them apart.
+            AppLog.error("OpxPython", missing);
             return false;
         }
     }
@@ -106,7 +110,7 @@ public final class PythonChip implements Driver {
             module = hostModule();
             Object mac = call(module, "start", handle.fileDescriptor(),
                     handle.vendorId(), handle.productId(), this);
-            macAddress = mac == null ? null : String.valueOf(mac);
+            macAddress = text(mac);
             up = true;
         } catch (RuntimeException failed) {
             handle.close();
@@ -163,8 +167,7 @@ public final class PythonChip implements Driver {
     @Override
     public long acksSeen() {
         try {
-            Object value = call(module, "acks");
-            return value instanceof Number ? ((Number) value).longValue() : 0L;
+            return number(call(module, "acks"));
         } catch (Throwable ignored) {
             return 0L;
         }
@@ -213,8 +216,59 @@ public final class PythonChip implements Driver {
         try {
             Method method = module.getClass().getMethod("callAttr", String.class, Object[].class);
             return method.invoke(module, name, args);
-        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException failed) {
-            throw new IllegalStateException("Python call " + name + " failed", failed);
+        } catch (InvocationTargetException failed) {
+            // getCause() is the Python exception (PyException); its message is the traceback tail,
+            // which is what tells a firmware problem from a missing module.
+            Throwable cause = failed.getCause() == null ? failed : failed.getCause();
+            throw new IllegalStateException("Python call " + name + " failed: " + describe(cause),
+                    cause);
+        } catch (NoSuchMethodException | IllegalAccessException failed) {
+            throw new IllegalStateException("Python call " + name + " failed: " + describe(failed),
+                    failed);
         }
+    }
+
+    // -- Python value conversion --------------------------------------------------------
+
+    /**
+     * Chaquopy returns every Python value as a {@code PyObject}, never as a Java wrapper: asking
+     * {@code Boolean.TRUE.equals(...)} would therefore be false even for Python {@code True}. Let
+     * the object convert itself.
+     */
+    private static boolean truth(Object value) {
+        if (value instanceof Boolean) return (Boolean) value;
+        if (value == null) return false;
+        try {
+            Object answer = value.getClass().getMethod("toBoolean").invoke(value);
+            return answer instanceof Boolean && (Boolean) answer;
+        } catch (ReflectiveOperationException | RuntimeException failed) {
+            return false;
+        }
+    }
+
+    private static long number(Object value) {
+        if (value instanceof Number) return ((Number) value).longValue();
+        if (value == null) return 0L;
+        try {
+            Object answer = value.getClass().getMethod("toLong").invoke(value);
+            return answer instanceof Number ? ((Number) answer).longValue() : 0L;
+        } catch (ReflectiveOperationException | RuntimeException failed) {
+            return 0L;
+        }
+    }
+
+    /** A Python string as Java text, and Python {@code None} as {@code null}. */
+    private static String text(Object value) {
+        if (value == null) return null;
+        if (value instanceof String) return (String) value;
+        String rendered = value.toString();
+        return "None".equals(rendered) ? null : rendered;
+    }
+
+    private static String describe(Throwable failed) {
+        Throwable root = failed;
+        while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+        String message = root.getMessage();
+        return message == null || message.isEmpty() ? root.toString() : message;
     }
 }

@@ -681,10 +681,14 @@ public final class NativeEngine {
     /** The device path of the first attached adapter the engine has a driver for. */
     private String firstSupportedDevice() {
         UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
+        StringBuilder seen = new StringBuilder();
         try {
             for (String path : UsbFd.list()) {
                 UsbDevice device = manager == null ? null : device(manager, path);
                 if (device == null) continue;
+                if (seen.length() > 0) seen.append(", ");
+                seen.append(String.format("%04x:%04x", device.getVendorId(),
+                        device.getProductId()));
                 if (ChipRegistry.hasDriver(context, device.getVendorId(),
                         device.getProductId())) {
                     return path;
@@ -693,6 +697,8 @@ public final class NativeEngine {
         } catch (Exception e) {
             AppLog.info("OpxEngine", "cannot ask the bridge for devices: " + e.getMessage());
         }
+        // Which ids were passed over, so "no adapter" is distinguishable from "no driver".
+        if (seen.length() > 0) AppLog.info("OpxEngine", "no driver claimed: " + seen);
         return null;
     }
 
