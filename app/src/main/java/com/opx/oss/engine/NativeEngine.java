@@ -238,6 +238,10 @@ public final class NativeEngine {
                 String firmware = ChipCatalog.firmware(
                         device.getVendorId(), device.getProductId());
                 entry.put("firmware", firmware == null ? JSONObject.NULL : firmware);
+                // The adapter row prints description (chipset), so an empty device path never
+                // leaves the app showing a bare dash for a card it has already opened.
+                entry.put("description", model == null ? path : model);
+                entry.put("chipset", firmware == null ? JSONObject.NULL : firmware);
                 entry.put("firmware_bundled", firmware != null
                         && !FirmwareStore.forChip(context, firmware).isEmpty());
             }
@@ -790,7 +794,39 @@ public final class NativeEngine {
         }
     }
 
+    /**
+     * The scan book as the app's rows: one {@code network} event per AP, which is what the list
+     * is built from. Without these the run reports a count but the list stays empty.
+     */
+    private void emitNetworks() {
+        for (AccessPoint ap : scan.list()) {
+            JSONObject network = ap.toJson();
+            try {
+                network.put("event", "network");
+                network.put("security", securityBucket(ap));
+                network.put("privacy", ap.encryption);
+                network.put("vendor", ap.wscManufacturer == null ? "" : ap.wscManufacturer);
+                network.put("band", ap.channel > 14 ? "5" : "2.4");
+            } catch (Exception ignored) {
+                // Every value above is a plain type.
+            }
+            emitQuietly(network);
+        }
+    }
+
+    /** wifi4's encryption text folded into the app's pill buckets, like the built-in radio path. */
+    private static String securityBucket(AccessPoint ap) {
+        if (ap.wpa3) return ap.transitionMode ? "WPA3_TRANSITION" : "WPA3";
+        String encryption = ap.encryption == null ? "" : ap.encryption;
+        if ("WEP".equals(encryption)) return "WEP";
+        if (encryption.startsWith("WPA2")) return "WPA2";
+        if (encryption.startsWith("WPA3")) return "WPA3";
+        if (encryption.startsWith("WPA")) return "WPA";
+        return "OPEN";
+    }
+
     private void emitScanDone() {
+        emitNetworks();
         JSONObject done = event("scan_done");
         try {
             done.put("count", scan.size());
