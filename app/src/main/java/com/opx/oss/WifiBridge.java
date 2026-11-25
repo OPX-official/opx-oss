@@ -58,6 +58,9 @@ public final class WifiBridge {
     private volatile boolean userStopped;
     private int restarts;
     private long restartWindowStart;
+    /** Last time the opx-usb shim was run to explain an empty device list. */
+    private long lastUsbProbeAt;
+    private static final long USB_PROBE_INTERVAL_MS = 30_000L;
     /** A running session holds a partial wakelock; a scan has to outlive the screen. */
     private PowerManager.WakeLock wakeLock;
 
@@ -209,6 +212,9 @@ public final class WifiBridge {
     }
 
     private void deliver(JSONObject event) {
+        if ("devices".equals(event.optString("event")) && event.optInt("count", 0) == 0) {
+            probeUsbShim();
+        }
         for (Listener listener : listeners) {
             try {
                 listener.onEngineEvent(event);
@@ -216,6 +222,28 @@ public final class WifiBridge {
                 Log.w(TAG, "listener failed", e);
             }
         }
+    }
+
+    /**
+     * Runs the shim the engine execs and logs its own output.
+     * <p>
+     * The engine sees no adapter through {@code opx-usb}; when the shim itself is the part that
+     * fails (a missing file, a broken interpreter line, a refused socket) the engine can only
+     * report an empty list. This runs the same command outside the engine, rate-limited, so the
+     * app's log names the failing layer instead of repeating "no adapter".
+     */
+    private void probeUsbShim() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastUsbProbeAt < USB_PROBE_INTERVAL_MS) return;
+        lastUsbProbeAt = now;
+        Thread probe = new Thread(() -> {
+            OpxRuntime.CommandResult result = OpxRuntime.run(context, "opx-usb", "-l");
+            String output = result.output.trim().replace("\n", " | ");
+            if (output.length() > 400) output = output.substring(0, 400) + "...";
+            AppLog.info(TAG, "opx-usb -l exited " + result.exitCode + ": " + output);
+        }, "opx-usb-probe");
+        probe.setDaemon(true);
+        probe.start();
     }
 
     private void notifyStopped(String reason) {
