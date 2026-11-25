@@ -66,6 +66,18 @@ public final class Frame {
                 rsn == null ? new byte[0] : rsn, Ie.extRates(channel));
     }
 
+    /** A beacon carrying a channel switch announcement to {@code csaChannel}. */
+    public static byte[] csaBeacon(byte[] bssid, String ssid, int channel, byte[] rsn,
+                                    int interval, boolean privacy, int csaChannel, int count) {
+        byte[] header = Mac.header(fc0(TYPE_MGMT, SUBTYPE_BEACON), 0, Mac.BROADCAST, bssid, bssid);
+        byte[] fixed = new byte[]{
+                0, 0, (byte) (interval & 0xFF), (byte) (interval >> 8), 0x31, 0x04};
+        if (privacy) fixed[4] |= 0x10;
+        return Mac.concat(header, fixed, Ie.ssid(ssid), Ie.rates(channel), Ie.dsParam(channel),
+                Ie.csa(csaChannel, count), rsn == null ? new byte[0] : rsn,
+                Ie.extRates(channel));
+    }
+
     /** A probe response: the beacon's body addressed to one station. */
     public static byte[] probeResponse(byte[] bssid, byte[] station, String ssid, int channel,
                                        byte[] rsn, boolean privacy) {

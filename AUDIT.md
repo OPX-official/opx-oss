@@ -56,8 +56,9 @@ is the RFC 3526 group-5 literal and is exercised by the `2^12345` check.
 | `crack/hc22000_format.py` | `Hc22000.java` | **vector**: an exact hashline string is asserted at start-up |
 | `crack/wpa_psk.py` verify | `Verify.java` | **ported**: PMK → KCK → MIC over the MIC-zeroed frame; PMK path for a raw 64-hex key |
 
-Known deviation: `Hc22000.pmkid(...)` is always called with `sha256 = false`, so a PMKID from an
-AKM-6 (SHA-256) network is written without the `03` message-pair bit the reference sets.
+Fixed: `Handshake.sha256` now follows the AP's AKM list (`PSK-SHA256`), so an AKM-6 PMKID is
+written with the `03` message-pair field the reference sets. FT lines (`WPA*03`/`WPA*04`) are
+still not produced.
 
 ## 4. Chips (`engine/chips/`)
 
@@ -79,10 +80,10 @@ the catalogue because its firmware is present, not because it works.
 | `campaigns/pmkid.py` | `PmkidCampaign.java` | **ported**: RSN mirror, synthetic client, fresh MAC per round, M1 PMKID read |
 | `campaigns/wep/*` | `WepCampaign.java`, `WepBook.java` | **simplified**: ARP replay only (no chopchop, fragmentation or fake-auth) |
 | `crack/wep.py` `PtwCracker` | `crack/WepCracker.java` | **ported**: KSA-first-3, Klein votes, additive σ table, best-first fudge search (depth 16, 100k trials), 8 held-back samples with tolerance 1, key lengths 5/13. Offline simulation: a known 5-byte key is recovered on the first trial at 60,000 IVs, but not at 20,000 — the reference's `ready_threshold` of 10,000 is therefore optimistic for this port |
-| `campaigns/eviltwin/*` | `EvilTwin.java` | **simplified**: no WPA3/SAE downgrade punts (CSA/BTM), no two-interface election, no per-client phase tracking; beacon + probe response + optional portal |
+| `campaigns/eviltwin/*` | `EvilTwin.java` | **simplified**: beacon + probe response + optional portal; **CSA beacon and a broadcast deauth punt** are in (`csa_channel`, `punt`), but there is no SAE->PSK downgrade, no BTM and no two-interface election |
 | captive portal (`scripts/`, templates) | `portal/PortalServer.java` | **simplified**: our own HTTP/1.1 server and page, no DNS hijack, no per-vendor templates |
-| `crack/wpa_psk.py` search | `CpuCracker.java` | **simplified**: wordlist and mask only — no rules, mangling, GPU or hashcat hand-off |
-| `campaigns/wps/*`, `dot11/wsc/*` | `dot11/wsc/*`, `wps/WpsRegistrar.java`, `crack/WpsPins.java` | **ported** crypto and messages (vectors above), **simplified** PIN candidates: 9 published formulas + defaults, but the reference's 866-line PIN database and OUI tables are **not** ported; **missing**: Pixie Dust, lockout tracking, and the on-air association/EAPOL exchange that would actually run it |
+| `crack/wpa_psk.py` search | `CpuCracker.java`, `Rules.java` | **simplified**: wordlist, mask and a single mangling rule per word (`l u c r d t $ ^ s`) — no rule chains, GPU or hashcat hand-off |
+| `campaigns/wps/*`, `dot11/wsc/*` | `dot11/wsc/*`, `wps/WpsRegistrar.java`, `crack/WpsPins.java` | **ported** crypto and messages (vectors above), **ported** PIN candidates: the reference's database is now shipped as `assets/wps_pins.json` (605 OUI PINs, 235 OUI→algorithm rows, 7 models, generated from `wps_pindb.py`), plus the 9 formulas and defaults; **missing**: Pixie Dust, lockout tracking, and the on-air association/EAPOL exchange that would actually run it |
 
 ## 6. USB
 
@@ -101,7 +102,10 @@ compare line by line — this layer is ours by design.
 
 ## Verdict
 
-**Not 100% accurate, and not claimed to be.** What is machine-checked: every hash, key
+**Not 100% accurate, and not claimed to be.** Since the first audit, four gaps were closed: the
+PMKID SHA-256 pair field, hashcat-style mangling rules, the CSA/punt path in the twin, and the
+WPS PIN database. Still open: every radio family except RTL8187, SAE/PMF/BTM/EAP modules, the
+on-air WPS exchange, Pixie Dust, WEP chopchop, and FT hashlines. What is machine-checked: every hash, key
 derivation, hashline format and the WSC/AES/DH vectors. What is review-only: the 802.11 field
 layouts, the EAPOL offsets, the RTL8187 register sequence, the PTW vote arithmetic and the PIN
 formulas. What is knowingly different: WEP has ARP replay only, the evil twin has no SAE

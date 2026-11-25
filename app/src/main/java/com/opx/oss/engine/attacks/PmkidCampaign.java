@@ -57,6 +57,7 @@ public final class PmkidCampaign extends Campaign {
 
             Handshake handshake = handshakes.get(bssid, clientText);
             if (handshake != null && handshake.pmkid != null) {
+                handshake.sha256 = ap != null && ap.akms.contains("PSK-SHA256");
                 String line = handshake.pmkidLine();
                 if (line == null) {
                     log(events, "the AP sent a PMKID but the network name is unknown");

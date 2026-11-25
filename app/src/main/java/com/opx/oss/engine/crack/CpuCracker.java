@@ -84,6 +84,23 @@ public final class CpuCracker {
         return null;
     }
 
+    /** A wordlist whose words are mangled by {@code rule} before they are tried. */
+    public static Iterator<String> wordlist(File file, String rule) throws IOException {
+        final Iterator<String> words = wordlist(file);
+        if (rule == null || rule.isEmpty()) return words;
+        return new Iterator<String>() {
+            @Override
+            public boolean hasNext() {
+                return words.hasNext();
+            }
+
+            @Override
+            public String next() {
+                return Rules.apply(words.next(), rule);
+            }
+        };
+    }
+
     /** A wordlist file, read lazily so a large list costs no memory up front. */
     public static Iterator<String> wordlist(File file) throws IOException {
         final BufferedReader reader = new BufferedReader(new InputStreamReader(

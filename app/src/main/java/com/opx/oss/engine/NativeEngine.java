@@ -18,6 +18,8 @@ import com.opx.oss.engine.attacks.WepCampaign;
 import com.opx.oss.engine.capture.Handshake;
 import com.opx.oss.engine.capture.Verify;
 import com.opx.oss.engine.crack.CpuCracker;
+import com.opx.oss.engine.crack.WpsPinDb;
+import com.opx.oss.engine.crack.WpsPins;
 import com.opx.oss.engine.chips.WifiChip;
 import com.opx.oss.engine.chips.firmware.FirmwareStore;
 import com.opx.oss.engine.chips.rtl8187.Rtl8187Chip;
@@ -175,7 +177,8 @@ public final class NativeEngine {
                 case "crack_tools": {
                     JSONObject tools = event("crack_tools");
                     tools.put("tools", new JSONArray().put("cpu_crack"))
-                            .put("available", !cracking);
+                            .put("available", !cracking)
+                            .put("rules", true);
                     emit(tools);
                     break;
                 }
@@ -338,7 +341,11 @@ public final class NativeEngine {
 
         AccessPoint ap = scan.get(bssid);
         String ssid = ap == null ? "" : ap.ssid;
+        Handshake known = handshakes.get(bssid, station);
+        if (known != null && ap != null) known.sha256 = ap.akms.contains("PSK-SHA256");
         String line = handshakes.feed(bssid, station, ssid, eapol);
+        Handshake stored = handshakes.get(bssid, station);
+        if (stored != null && ap != null) stored.sha256 = ap.akms.contains("PSK-SHA256");
         if (line == null) return;
         try {
             java.io.File saved = Vault.save(context, "capture_" + bssid.replace(':', '-') + ".22000",
@@ -389,7 +396,7 @@ public final class NativeEngine {
                 error("no such wordlist: " + file);
                 return;
             }
-            candidates = CpuCracker.wordlist(list);
+            candidates = CpuCracker.wordlist(list, command.optString("rules"));
             total = -1;
         } else {
             if (mask.isEmpty()) mask = "?d?d?d?d?d?d?d?d";
@@ -695,7 +702,18 @@ public final class NativeEngine {
             } else if (ap.encryption.startsWith("WPA2") || ap.encryption.startsWith("WPA3")) {
                 attacks.put("pmkid");
             }
-            if (ap.wps) attacks.put("wps");
+            if (ap.wps) {
+                attacks.put("wps");
+                try {
+                    java.util.List<String> pins = WpsPins.forTarget(WpsPinDb.load(context),
+                            Mac.of(ap.bssid), ap.ssid, null, null);
+                    JSONArray candidates = new JSONArray();
+                    for (int i = 0; i < Math.min(4, pins.size()); i++) candidates.put(pins.get(i));
+                    entry.put("wps_candidates", candidates).put("wps_known", pins.size());
+                } catch (Exception ignored) {
+                    // A malformed BSSID only means no candidate list for this row.
+                }
+            }
             if (!ap.ssid.isEmpty()) {
                 attacks.put("eviltwin");
                 attacks.put("captive");

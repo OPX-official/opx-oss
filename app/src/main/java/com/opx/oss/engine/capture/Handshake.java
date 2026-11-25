@@ -20,6 +20,8 @@ public final class Handshake {
     public byte[] mic;
     public byte[] eapol;
     public byte[] pmkid;
+    /** True when the network's AKM is PSK-SHA256, which changes the PMKID hashline's pair field. */
+    public boolean sha256;
 
     public boolean hasM1;
     public boolean hasM2;
@@ -35,7 +37,7 @@ public final class Handshake {
     /** The hashline for the captured PMKID, or {@code null} when there is none. */
     public String pmkidLine() {
         if (pmkid == null || ssid == null || ssid.isEmpty()) return null;
-        return Hc22000.pmkid(ssid, pmkid, Mac.of(bssid), Mac.of(station), false);
+        return Hc22000.pmkid(ssid, pmkid, Mac.of(bssid), Mac.of(station), sha256);
     }
 
     /** The hashline for the captured EAPOL pair, or {@code null} when it is not crackable yet. */

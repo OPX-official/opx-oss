@@ -340,4 +340,13 @@
 - [x] **USB অটুট:** `UsbHostBridge.java`-এ ডিফ = ০।
 - [ ] **রিলিজ/বিল্ড:** নির্দেশ অনুযায়ী **ইচ্ছাকৃতভাবে বন্ধ** — ব্যবহারকারী বললে তখনই `assembleDebug`/`assembleRelease` ও রিলিজ।
 
-**বাকি (শুধু অনুমতি পেলে):** APK বিল্ড ও রিলিজ; রেডিওতে আসল টেস্ট।
+### M6-পরবর্তী — গ্যাপ ফিক্স
+
+- [x] **PMKID SHA-256:** `Handshake.sha256` এখন AP-র AKM (`PSK-SHA256`) থেকে সেট হয় → `.22000`-এ `03` মেসেজ-পেয়ার।
+- [x] **ক্র্যাকার রুল:** `engine/crack/Rules.java` — `l u c r d t $ ^ s` ম্যাঙ্গলিং, `cpu_crack`-এ `rules` প্যারামিটার, `crack_tools.rules=true`।
+- [x] **CSA punt:** `Ie.csa()` + `Frame.csaBeacon()`; twin-এ `csa_channel` ও `punt` — декয় চ্যানেলে CSA বীকন, প্রতি ১০ বীকনে broadcast deauth।
+- [x] **WPS PIN ডেটাবেস:** রেফারেন্সের `wps_pindb.py` থেকে জেনারেট করা `assets/wps_pins.json` (**605 OUI PIN, 235 OUI→অ্যালগরিদম, 7 মডেল**) + `engine/crack/WpsPinDb.java` লোডার + `WpsPins.forTarget()`; `targets`-এ `wps_candidates` ও `wps_known`।
+- [x] **SelfCheck:** রুল ও CSA এলিমেন্টের নতুন ভেক্টর।
+- [ ] বাকি: RTL8187 ছাড়া অন্য রেডিও, SAE/PMF/BTM/EAP, অন-এয়ার WPS, Pixie Dust, WEP chopchop, FT হ্যাশলাইন।
+
+**বাকি (শুধু অনুমতি পেলে):** APK বিল্ড, রিলিজ, রেডিও টেস্ট।

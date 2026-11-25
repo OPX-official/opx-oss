@@ -25,8 +25,28 @@ public final class WpsPins {
 
     /** Ranked, de-duplicated candidates for a BSSID, its name and a vendor string. */
     public static List<String> forBssid(byte[] bssid, String ssid, String vendor) {
+        return forTarget(null, bssid, ssid, vendor, null);
+    }
+
+    /**
+     * The full ordered candidate list: the shipped database first (model, then OUI PINs, then the
+     * OUI's algorithms), then the SSID patterns, then the broad chipset formulas and defaults.
+     */
+    public static List<String> forTarget(WpsPinDb.Db db, byte[] bssid, String ssid, String vendor,
+                                         String model) {
         Set<String> out = new LinkedHashSet<>();
         if (bssid == null || bssid.length < 6) return new ArrayList<>();
+
+        String oui = String.format(Locale.US, "%02X%02X%02X",
+                bssid[0] & 0xFF, bssid[1] & 0xFF, bssid[2] & 0xFF);
+        if (db != null && !db.isEmpty()) {
+            out.addAll(WpsPinDb.model(db, model));
+            out.addAll(WpsPinDb.pins(db, oui));
+            for (String algo : WpsPinDb.algos(db, oui)) {
+                String pin = dispatch(algo, bssid);
+                if (pin != null) out.add(pin);
+            }
+        }
 
         String vendorName = vendor == null ? "" : vendor.toLowerCase(Locale.US);
         if (vendorName.contains("dlink") || vendorName.contains("d-link")) {
@@ -53,6 +73,33 @@ public final class WpsPins {
         out.add(trendnet(bssid));
         out.add(invNic(bssid));
         return new ArrayList<>(out);
+    }
+
+    /** One algorithm by the name the database uses; {@code null} when it is not implemented. */
+    public static String dispatch(String algo, byte[] bssid) {
+        if (algo == null) return null;
+        switch (algo) {
+            case "zhao":
+                return pin24(bssid);
+            case "computepin_28":
+                return compute28(bssid);
+            case "computepin_32":
+                return compute32(bssid);
+            case "dlink":
+                return dlink(bssid);
+            case "dlink1":
+                return dlink1(bssid);
+            case "asus":
+                return asus(bssid);
+            case "airocon":
+                return airocon(bssid);
+            case "trendnet":
+                return trendnet(bssid);
+            case "invnic":
+                return invNic(bssid);
+            default:
+                return null;
+        }
     }
 
     /** Seven digits plus the spec's checksum digit. */

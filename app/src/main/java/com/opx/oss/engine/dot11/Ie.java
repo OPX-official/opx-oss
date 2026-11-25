@@ -14,6 +14,8 @@ public final class Ie {
     public static final int RSN = 48;
     public static final int HT_CAP = 45;
     public static final int HT_INFO = 61;
+    /** Channel switch announcement. */
+    public static final int CSA = 37;
     public static final int EXT_RATES = 50;
     public static final int VENDOR = 221;
 
@@ -118,6 +120,14 @@ public final class Ie {
         out[4] = 0x1B;
         out[5] = (byte) 0xFF;
         return out;
+    }
+
+    /**
+     * A channel switch announcement: tells every client on the BSSID to move to {@code channel}
+     * after {@code count} beacons. Used by the twin to pull clients off the real AP.
+     */
+    public static byte[] csa(int channel, int count) {
+        return new byte[]{(byte) CSA, 0x03, 0x01, (byte) (channel & 0xFF), (byte) Math.max(0, count)};
     }
 
     public static byte[] dsParam(int channel) {

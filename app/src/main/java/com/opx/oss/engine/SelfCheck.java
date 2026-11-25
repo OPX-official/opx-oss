@@ -9,7 +9,9 @@ import com.opx.oss.engine.crypto.Sha1;
 import com.opx.oss.engine.crypto.Sha256;
 import com.opx.oss.engine.crypto.WpaKeys;
 import com.opx.oss.engine.crack.CpuCracker;
+import com.opx.oss.engine.crack.Rules;
 import com.opx.oss.engine.crack.WpsPins;
+import com.opx.oss.engine.dot11.Ie;
 import com.opx.oss.engine.crypto.Aes;
 import com.opx.oss.engine.dot11.wsc.WscCrypto;
 import com.opx.oss.engine.dot11.wsc.WscMessage;
@@ -74,6 +76,10 @@ public final class SelfCheck {
         m1.authenticate(new byte[32], new byte[]{1});
         expect(failures, "wsc-authenticator", "true",
                 Boolean.toString(m1.authentic(new byte[32], new byte[]{1})));
+        expect(failures, "rule-append", "Pass1", Rules.apply("Pass", "$1"));
+        expect(failures, "rule-lower", "pass", Rules.apply("Pass", "l"));
+        expect(failures, "rule-capitalise", "Pass", Rules.apply("PASS", "c"));
+        expect(failures, "csa-element", "2503010603", hex(Ie.csa(6, 3)));
         expect(failures, "mask-count", "260",
                 Long.toString(CpuCracker.count("?d?l")));
         expect(failures, "mask-first", "0a", CpuCracker.expand("?d?l").next());
