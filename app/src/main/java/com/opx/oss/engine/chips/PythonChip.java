@@ -51,8 +51,18 @@ public final class PythonChip implements Driver {
             Object platform = platformClass.getConstructor(Context.class)
                     .newInstance(context.getApplicationContext());
             Class<?> pythonClass = Class.forName("com.chaquo.python.Python");
-            pythonClass.getMethod("start", Class.forName("com.chaquo.python.Platform"))
-                    .invoke(null, platform);
+            // There is no class called com.chaquo.python.Platform: start() takes the *nested*
+            // Python$Platform, so look the method up by name instead of guessing its type.
+            Method start = null;
+            for (Method candidate : pythonClass.getMethods()) {
+                if ("start".equals(candidate.getName()) && candidate.getParameterCount() == 1
+                        && candidate.getParameterTypes()[0].isInstance(platform)) {
+                    start = candidate;
+                    break;
+                }
+            }
+            if (start == null) throw new NoSuchMethodException("Python.start(Platform)");
+            start.invoke(null, platform);
             runtimeStarted = true;
         } catch (ClassNotFoundException missing) {
             throw new IllegalStateException("this build has no embedded Python", missing);
