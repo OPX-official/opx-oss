@@ -1656,10 +1656,17 @@ public final class NativeEngine {
                 // These campaigns own every knob themselves, exactly as in wifi4's TUI.
                 wifi4Attack(mapped, bssid, null);
                 return;
-            case "eviltwin":
+            case "eviltwin": {
                 // EvilTwinInput: the modal's twin/punter cards, BSSID, channel and punt cycle.
-                wifi4Attack(mapped, bssid, command.optJSONObject("options"));
+                // Its portal switch asks for the open AP instead, so a client can join and type.
+                JSONObject options = command.optJSONObject("options");
+                if (options != null && options.optBoolean("portal")) {
+                    wifi4Attack("portal", bssid, options);
+                    return;
+                }
+                wifi4Attack(mapped, bssid, options);
                 return;
+            }
             case "portal":
                 // The AP crack mode: an open AP we host ourselves, with its own DHCP/DNS/portal.
                 wifi4Attack(mapped, bssid, command.optJSONObject("options"));

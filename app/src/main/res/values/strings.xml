@@ -225,6 +225,8 @@
     <string name="wifi_eviltwin_plus1">+1</string>
     <string name="wifi_eviltwin_rand">Rand</string>
     <string name="wifi_eviltwin_cycle">Punt cycle</string>
+    <string name="wifi_eviltwin_portal">CAPTIVE PORTAL</string>
+    <string name="wifi_eviltwin_portal_host">Host an open AP with this portal instead of the WPA2 twin</string>
     <string name="wifi_eviltwin_cycle_never">Never</string>
     <string name="wifi_eviltwin_cycle_once">Once</string>
     <string name="wifi_eviltwin_cycle_seconds">%1$d seconds</string>
@@ -364,6 +366,12 @@
     <string name="hc_ap_template_default">Default sign-in</string>
     <string name="hc_ap_template_router">Router firmware update</string>
     <string name="hc_ap_template_hotel">Hotel Wi-Fi</string>
+    <string name="portal_template_choose">Choose template</string>
+    <string name="portal_template_default">Default sign-in (OPX-wifi4)</string>
+    <string name="portal_template_category">Choose a category</string>
+    <string name="portal_template_custom">Custom HTML file…</string>
+    <string name="portal_template_custom_picked">Custom · %1$s</string>
+    <string name="portal_template_failed">Could not read that HTML file</string>
     <string name="wifi_portal_default_title">Network sign-in</string>
     <string name="wifi_portal_default_body">This network needs a sign-in before the internet works. Enter the Wi-Fi password to continue.</string>
     <string name="wifi_portal_router_title">Router firmware update</string>

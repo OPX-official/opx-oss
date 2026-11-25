@@ -743,12 +743,15 @@ def _start_portal(ap, settings):
     if not ssid:
         raise ValueError("AP mode needs a network name")
     template = str(settings.get("template") or "default")
+    template_path = str(settings.get("template_path") or "") or None
+    success_path = str(settings.get("success_path") or "") or None
 
     def verify(psk):
         ok, _ = _vault_verdict(ap.bssid, psk)
         return ok
 
-    return PortalAp(_array, ap, iface, ssid, template, verify, _ui_log)
+    return PortalAp(_array, ap, iface, ssid, template, verify, _ui_log,
+                    template_path=template_path, success_path=success_path)
 
 
 def attack(kind, bssid=None, options=None):
@@ -802,7 +805,7 @@ def attack(kind, bssid=None, options=None):
         else:
             args = dict(settings)
             # AP mode's sheet keys belong to Evil Twin only; a campaign would reject them.
-            for key in ("ssid", "template", "portal"):
+            for key in ("ssid", "template", "portal", "template_path", "success_path"):
                 args.pop(key, None)
             if kind == "wep":
                 # wifi4's WEP campaign names its logger differently from every other campaign.

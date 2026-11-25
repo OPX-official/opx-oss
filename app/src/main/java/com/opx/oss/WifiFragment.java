@@ -26,6 +26,8 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
@@ -104,6 +106,12 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
     private AttackMonitorDialog attackMonitor;
     private CaptivePortalDialog captiveDialog;
     private EvilTwinOptionsDialog evilTwinDialog;
+
+    // A page the user picked from their own storage for the Evil Twin portal.
+    private final ActivityResultLauncher<String[]> portalTemplatePicker =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
+                if (uri != null) copyPortalTemplate(uri);
+            });
 
     // The running-attack card.
     private View attackCard;
@@ -1070,6 +1078,7 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             evilTwinDialog = new EvilTwinOptionsDialog(requireContext(), target.ssid,
                     target.bssid, target.channel, pmf, interfaces,
                     options -> launchAttack(kind, target, options));
+            evilTwinDialog.setTemplateListener(this::pickPortalTemplate);
             evilTwinDialog.show();
             return;
         }
@@ -1092,6 +1101,26 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
             return;
         }
         launchAttack(kind, target, null);
+    }
+
+    private void pickPortalTemplate() {
+        try {
+            portalTemplatePicker.launch(new String[]{"text/html"});
+        } catch (RuntimeException e) {
+            Snackbar.make(requireView(), R.string.portal_template_failed, Snackbar.LENGTH_LONG).show();
+        }
+    }
+
+    private void copyPortalTemplate(Uri uri) {
+        if (evilTwinDialog == null) return;
+        try {
+            java.io.File file = PortalTemplates.copyCustom(requireContext(), uri,
+                    uri.getLastPathSegment());
+            evilTwinDialog.setTemplate(file, getString(R.string.portal_template_custom_picked,
+                    file.getName().replace("custom__", "")));
+        } catch (Exception e) {
+            Snackbar.make(requireView(), R.string.portal_template_failed, Snackbar.LENGTH_LONG).show();
+        }
     }
 
     private void launchAttack(String kind, WifiAdapter.Network target, JSONObject options) {

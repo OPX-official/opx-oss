@@ -327,10 +327,15 @@
                     android:textSize="11sp"
                     android:textStyle="bold" />
 
-                <Spinner
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/hc_ap_template"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content" />
+                    android:layout_height="wrap_content"
+                    android:gravity="start|center_vertical"
+                    android:text="@string/portal_template_choose"
+                    android:textAllCaps="false"
+                    android:textSize="12sp" />
 
                 <TextView
                     android:layout_width="match_parent"

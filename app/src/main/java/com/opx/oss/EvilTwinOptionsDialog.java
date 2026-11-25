@@ -24,6 +24,7 @@ import com.google.android.material.card.MaterialCardView;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -78,6 +79,10 @@ final class EvilTwinOptionsDialog {
     private final CheckBox deauth;
     private final CheckBox csa;
     private final CheckBox btm;
+    private final CheckBox portal;
+    private final MaterialButton templateButton;
+    private File templateFile;
+    private Runnable templateListener;
     private final TextView warning;
     private final TextView error;
     private final List<Integer> channelValues = new ArrayList<>();
@@ -184,6 +189,20 @@ final class EvilTwinOptionsDialog {
         cycle.setSelection(5);   // 30 seconds, wifi4's _DEFAULT_CYCLE
         body.addView(cycle);
 
+        // Portal: instead of the WPA2 twin, host our own open AP and its page. That is the
+        // combination a client can actually join and type into, so the page matters here.
+        body.addView(label(R.string.wifi_eviltwin_portal));
+        portal = check(R.string.wifi_eviltwin_portal_host, false);
+        body.addView(portal);
+        templateButton = new MaterialButton(context);
+        templateButton.setText(R.string.portal_template_choose);
+        templateButton.setTextSize(12);
+        templateButton.setCornerRadius(dp(14));
+        templateButton.setOnClickListener(v -> {
+            if (templateListener != null) templateListener.run();
+        });
+        body.addView(templateButton);
+
         warning = new TextView(context);
         warning.setText(R.string.wifi_eviltwin_warn_same);
         warning.setTextColor(ContextCompat.getColor(context, R.color.stryker_accent));
@@ -263,6 +282,17 @@ final class EvilTwinOptionsDialog {
         if (dialog.isShowing()) dialog.dismiss();
     }
 
+    /** The screen opens the portal catalog; this sheet only keeps the result. */
+    void setTemplateListener(Runnable listener) {
+        this.templateListener = listener;
+    }
+
+    void setTemplate(File file, String labelText) {
+        templateFile = file;
+        templateButton.setText(labelText == null || labelText.isEmpty()
+                ? context.getString(R.string.portal_template_choose) : labelText);
+    }
+
     // ------------------------------------------------------------ modal wiring
 
     private void fillChannels(Iface twin) {
@@ -323,6 +353,21 @@ final class EvilTwinOptionsDialog {
     }
 
     private void submit() {
+        if (portal.isChecked()) {
+            // No twin settings apply: opx_ap hosts an open AP under the target's SSID.
+            try {
+                JSONObject options = new JSONObject();
+                options.put("portal", true);
+                if (templateFile != null) {
+                    options.put("template_path", templateFile.getAbsolutePath());
+                }
+                listener.onStart(options);
+                dismiss();
+            } catch (Exception e) {
+                showError(R.string.wifi_eviltwin_bad_options);
+            }
+            return;
+        }
         if (members.isEmpty()) {
             showError(R.string.wifi_eviltwin_iface_missing);
             return;

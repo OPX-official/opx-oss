@@ -69,7 +69,7 @@ public class HandshakesFragment extends Fragment
     // AP crack mode: wifi4's Evil Twin hosts the AP, this screen runs its portal verification.
     private String apBssid = "";
     private String apName = "";
-    private String apTemplate = "default";
+    private String apTemplatePath = "";
     private String apPasswordToTry;
 
     private final ActivityResultLauncher<String[]> wordlistPicker =
@@ -77,6 +77,13 @@ public class HandshakesFragment extends Fragment
                 if (uri == null) return;
                 pendingWordlist = uri;
                 copyWordlist(uri);
+            });
+
+    // A page from the device for the portal: catalog templates come from assets instead.
+    private final ActivityResultLauncher<String[]> portalTemplatePicker =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
+                if (uri == null) return;
+                copyPortalTemplate(uri);
             });
 
     @Nullable
@@ -298,8 +305,36 @@ public class HandshakesFragment extends Fragment
     public void onCrack(JSONObject capture) {
         crackDialog = new CrackDialog(requireContext(), capture, this::pickWordlist);
         crackDialog.setApListener(this::startAp);
+        crackDialog.setTemplateListener(this::pickPortalTemplate);
+        try {
+            crackDialog.setTemplate(PortalTemplates.defaultLogin(requireContext()),
+                    getString(R.string.portal_template_default));
+        } catch (Exception ignored) {
+            // The built-in page is the fallback when the asset cannot be copied.
+        }
         crackDialog.show();
         WifiBridge.get(requireContext()).requestCrackTools();
+    }
+
+    private void pickPortalTemplate() {
+        try {
+            portalTemplatePicker.launch(new String[]{"text/html"});
+        } catch (RuntimeException e) {
+            Snackbar.make(requireView(), R.string.portal_template_failed, Snackbar.LENGTH_LONG).show();
+        }
+    }
+
+    private void copyPortalTemplate(Uri uri) {
+        String name = uri.getLastPathSegment();
+        try {
+            File file = PortalTemplates.copyCustom(requireContext(), uri, name);
+            if (crackDialog != null) {
+                crackDialog.setTemplate(file, getString(R.string.portal_template_custom_picked,
+                        file.getName().replace("custom__", "")));
+            }
+        } catch (Exception e) {
+            Snackbar.make(requireView(), R.string.portal_template_failed, Snackbar.LENGTH_LONG).show();
+        }
     }
 
     // --------------------------------------------------------------- AP mode
@@ -308,7 +343,7 @@ public class HandshakesFragment extends Fragment
      * The crack dialog's AP mode. A password typed there is checked against the saved handshake
      * first (wifi4's vault); only when it does not match does the twin AP and its portal open.
      */
-    private void startAp(String bssid, String ssid, String password, String template) {
+    private void startAp(String bssid, String ssid, String password, String templatePath) {
         if (!isAdded()) return;
         if (OpxService.getState() != OpxService.STATE_READY) {
             Snackbar.make(requireView(), R.string.wifi_engine_pending, Snackbar.LENGTH_LONG).show();
@@ -316,7 +351,7 @@ public class HandshakesFragment extends Fragment
         }
         apBssid = bssid == null ? "" : bssid;
         apName = ssid == null || ssid.isEmpty() ? "" : ssid;
-        apTemplate = template == null || template.isEmpty() ? "default" : template;
+        apTemplatePath = templatePath == null ? "" : templatePath;
         WifiBridge bridge = WifiBridge.get(requireContext());
         bridge.start();
         if (password != null && !password.isEmpty()) {
@@ -332,14 +367,18 @@ public class HandshakesFragment extends Fragment
     private void openPortal() {
         if (!isAdded()) return;
         WifiBridge bridge = WifiBridge.get(requireContext());
-        portalDialog = new CaptivePortalDialog(requireContext(), apName, apTemplate,
+        // The operator sheet's copy is its own; the page a client sees is the chosen template.
+        portalDialog = new CaptivePortalDialog(requireContext(), apName, "default",
                 password -> bridge.verifyPsk(apBssid, password));
         portalDialog.show();
         JSONObject options = new JSONObject();
         try {
-            options.put("ssid", apName).put("template", apTemplate).put("portal", true);
-        } catch (org.json.JSONException ignored) {
-            // Three plain values.
+            options.put("ssid", apName).put("portal", true);
+            if (!apTemplatePath.isEmpty()) options.put("template_path", apTemplatePath);
+            options.put("success_path",
+                    PortalTemplates.defaultSuccess(requireContext()).getAbsolutePath());
+        } catch (Exception ignored) {
+            // Plain values; a missing page falls back to the built-in success copy.
         }
         // opx_ap hosts the open AP, its DHCP/DNS and the portal; wifi4 stays the backend.
         bridge.attack("portal", apBssid, options);

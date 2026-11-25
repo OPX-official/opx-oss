@@ -1,0 +1,3 @@
+Captive portal templates from https://github.com/OPX-Aminul/OPX-wifi4 (captive_portal/),
+which credits flipper-portals (https://github.com/L-ubu/flipper-portals) and
+evil-portal (https://github.com/bigbrodude6119/flipper-zero-evil-portal).

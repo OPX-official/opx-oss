@@ -10,11 +10,9 @@ import android.graphics.drawable.ColorDrawable;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.Window;
-import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -28,6 +26,7 @@ import com.google.android.material.progressindicator.LinearProgressIndicator;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -49,14 +48,13 @@ final class CrackDialog {
 
     /** AP mode: the screen starts wifi4's Evil Twin and its captive portal. */
     interface ApListener {
-        void onStartAp(String bssid, String ssid, String password, String template);
+        void onStartAp(String bssid, String ssid, String password, String templatePath);
     }
 
-    /** The captive-portal pages this build can host; ``default`` is preselected. */
-    private static final String[] TEMPLATE_KEYS = {"default", "router", "hotel"};
-    private static final int[] TEMPLATE_LABELS = {
-            R.string.hc_ap_template_default, R.string.hc_ap_template_router,
-            R.string.hc_ap_template_hotel};
+    /** The screen opens the portal catalog for this dialog. */
+    interface TemplateListener {
+        void onPickTemplate();
+    }
 
     private final Context context;
     private final Dialog dialog;
@@ -71,7 +69,7 @@ final class CrackDialog {
     private final LinearLayout apOptions;
     private final EditText apName;
     private final EditText apPassword;
-    private final Spinner apTemplate;
+    private final MaterialButton apTemplate;
     private final TextView sourcesTitle;
     private final LinearLayout sourcesGroup;
     private final MaterialCardView wordlistCard;
@@ -94,6 +92,8 @@ final class CrackDialog {
     private boolean hashcatAvailable;
     private String hashcatReason = "";
     private ApListener apListener;
+    private TemplateListener templateListener;
+    private String apTemplatePath = "";
 
     CrackDialog(Context context, JSONObject capture, Listener listener) {
         this.context = context;
@@ -147,10 +147,10 @@ final class CrackDialog {
         // AP mode's defaults: the captured network's name and wifi4's default portal page.
         ((TextView) content.findViewById(R.id.hc_tool_ap_desc)).setText(R.string.hc_tool_ap_desc);
         apName.setText(ssid == null ? "" : ssid);
-        apTemplate.setAdapter(new ArrayAdapter<>(context,
-                android.R.layout.simple_spinner_item, templateLabels()));
-        ((ArrayAdapter<?>) apTemplate.getAdapter()).setDropDownViewResource(
-                android.R.layout.simple_spinner_dropdown_item);
+        apTemplate.setText(R.string.portal_template_choose);
+        apTemplate.setOnClickListener(v -> {
+            if (templateListener != null) templateListener.onPickTemplate();
+        });
 
         cpuCard.setOnClickListener(v -> selectTool("cpu_crack"));
         apCard.setOnClickListener(v -> selectTool("ap"));
@@ -214,10 +214,15 @@ final class CrackDialog {
         this.apListener = listener;
     }
 
-    private List<String> templateLabels() {
-        List<String> labels = new ArrayList<>();
-        for (int label : TEMPLATE_LABELS) labels.add(context.getString(label));
-        return labels;
+    void setTemplateListener(TemplateListener listener) {
+        this.templateListener = listener;
+    }
+
+    /** The picked page; an empty path keeps opx_ap's built-in sign-in page. */
+    void setTemplate(File file, String label) {
+        apTemplatePath = file == null ? "" : file.getAbsolutePath();
+        apTemplate.setText(label == null || label.isEmpty()
+                ? context.getString(R.string.portal_template_choose) : label);
     }
 
     private void selectTool(String name) {
@@ -249,13 +254,10 @@ final class CrackDialog {
                 Toast.makeText(context, R.string.hc_ap_name_missing, Toast.LENGTH_SHORT).show();
                 return;
             }
-            int position = apTemplate.getSelectedItemPosition();
-            String template = position >= 0 && position < TEMPLATE_KEYS.length
-                    ? TEMPLATE_KEYS[position] : TEMPLATE_KEYS[0];
             status.setText(R.string.hc_ap_starting);
             if (apListener != null) {
                 apListener.onStartAp(capture.optString("bssid"), name,
-                        apPassword.getText().toString(), template);
+                        apPassword.getText().toString(), apTemplatePath);
             }
             dialog.dismiss();
             return;
