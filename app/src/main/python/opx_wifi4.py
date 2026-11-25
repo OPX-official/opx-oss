@@ -222,14 +222,35 @@ def _counters_and_rates(bssid, reader="live"):
 
 
 def interfaces():
-    """The cards wifi4's array pools, by name (``wlan0``, ``wlan1``, …).
+    """The cards wifi4's array pools, with what the Evil Twin sheet's two selects need.
 
-    The Evil Twin sheet's two selects come from here, the same member list the TUI's modal reads
-    from ``array.members``.
+    One entry per ``array.members`` element: its array name (``wlan0``, ``wlan1``, …), the label
+    the TUI's modal shows, whether it can host the twin at all (``eviltwin_modal._can_host``:
+    SPOOFABLE or FIXED_MAC), whether it can spoof a MAC, its own MAC and the channels it
+    supports. Those are the same fields ``EvilTwinInputModal`` reads off each member.
     """
     if _array is None:
         return json.dumps([])
-    return json.dumps([m.name for m in _array.members])
+    from wifi4.chips.driver import FakeMacSupport
+
+    rows = []
+    for member in _array.members:
+        driver = getattr(member, "driver", None)
+        fake = getattr(driver, "FAKE_MAC", None)
+        mac = getattr(member, "mac_address", None) or getattr(driver, "mac_address", None)
+        if isinstance(mac, (bytes, bytearray)):
+            mac = ":".join(f"{b:02x}" for b in mac)
+        rows.append({
+            "name": member.name,
+            "label": (getattr(driver, "product_name", None)
+                      or getattr(member, "product_name", None)
+                      or getattr(member, "chipset", None) or member.name),
+            "host": fake in (FakeMacSupport.SPOOFABLE, FakeMacSupport.FIXED_MAC),
+            "spoofable": fake is FakeMacSupport.SPOOFABLE,
+            "mac": str(mac or "").lower(),
+            "channels": [int(c) for c in (getattr(member, "supported_channels", None) or [])],
+        })
+    return json.dumps(rows)
 
 
 def start_scan(channels=None, interval=0.5):
@@ -275,7 +296,7 @@ def _ap_row(ap, clients_by_bssid=None) -> dict:
     channel = int(getattr(ap, "channel", 0) or 0)
     bssid = (ap.bssid or "").lower()
     clients = list((clients_by_bssid or {}).get(bssid, ()))
-    return {
+    row = {
         "ssid": ap.ssid or "",
         "bssid": (ap.bssid or "").lower(),
         "channel": channel,
@@ -304,6 +325,8 @@ def _ap_row(ap, clients_by_bssid=None) -> dict:
     }
     try:
         from wifi4.campaigns.eviltwin import EvilTwinCampaign
+        # wifi4's focus screen hides the EvilTwin button unless ``visible(ap)`` and greys it
+        # with ``ineligible_reason``; the sheet mirrors both.
         row["eviltwin"] = bool(EvilTwinCampaign.visible(ap))
         row["eviltwin_reason"] = EvilTwinCampaign.ineligible_reason(ap) or ""
     except Exception:

@@ -191,12 +191,12 @@
     <string name="wifi_eviltwin_bssid">Twin BSSID</string>
     <string name="wifi_eviltwin_channel">Channel</string>
     <string name="wifi_eviltwin_punts">PUNT CLIENTS</string>
-    <string name="wifi_eviltwin_deauth">Deauth</string>
-    <string name="wifi_eviltwin_csa">CSA (channel switch)</string>
-    <string name="wifi_eviltwin_btm">BTM (802.11v)</string>
+    <string name="wifi_eviltwin_deauth">De-authenticate</string>
+    <string name="wifi_eviltwin_csa">Channel Switch Announcement</string>
+    <string name="wifi_eviltwin_btm">BSS-Transition Mode (BTM)</string>
     <string name="wifi_eviltwin_period">Punt period (seconds)</string>
     <string name="wifi_eviltwin_once">Punt once, then host quietly</string>
-    <string name="wifi_eviltwin_start">Start twin</string>
+    <string name="wifi_eviltwin_start">Start EvilTwin</string>
     <string name="wifi_eviltwin_bad_bssid">Enter a valid MAC address</string>
     <string name="wifi_eviltwin_bad_channel">Channel must be 1–196</string>
     <string name="wifi_eviltwin_bad_period">Period must be 1–3600 seconds</string>
@@ -232,6 +232,9 @@
     <string name="wifi_eviltwin_dfs">A DFS channel must be the target\'s own channel</string>
     <string name="wifi_eviltwin_single">One card: the twin and the punter share this interface on the target\'s channel</string>
     <string name="wifi_eviltwin_iface_missing">No live interface to host the twin</string>
+    <string name="wifi_eviltwin_no_host">No interface can spoof a MAC, so none can host the twin. EvilTwin needs a SPOOFABLE or FIXED_MAC card.</string>
+    <string name="wifi_eviltwin_warn_same">EvilTwin works best with 2 different interfaces</string>
+    <string name="wifi_eviltwin_channel_target">%1$d (target)</string>
     <string name="wifi_attack_secret">RECOVERED PASSWORD</string>
     <string name="wifi_attack_secret_copy">Copy password</string>
     <string name="wifi_attack_secret_copied">Password copied</string>

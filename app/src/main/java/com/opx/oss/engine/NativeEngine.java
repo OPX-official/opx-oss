@@ -1556,25 +1556,32 @@ public final class NativeEngine {
         }
         JSONObject reply = event("targets");
         try {
+            JSONArray pooled = wifi4InterfaceInfo();
             reply.put("targets", out).put("handshakes", handshakeCount).put("backend", "wifi4");
-            reply.put("interfaces", wifi4Interfaces());
+            reply.put("interfaces", wifi4InterfaceNames(pooled)).put("interface_info", pooled);
         } catch (Exception ignored) {
             // Plain values.
         }
         emitQuietly(reply);
     }
 
-    /** The names of the cards wifi4's array holds ({@code wlan0}, {@code wlan1}, …). */
-    private JSONArray wifi4Interfaces() {
-        JSONArray names = new JSONArray();
+    /** wifi4's pooled cards with the fields the Evil Twin sheet's two selects need. */
+    private JSONArray wifi4InterfaceInfo() {
         try {
-            JSONArray pooled = new JSONArray(PythonChip.backendText("interfaces"));
-            for (int i = 0; i < pooled.length(); i++) {
-                String name = pooled.optString(i, "");
-                if (!name.isEmpty()) names.put(name);
-            }
+            return new JSONArray(PythonChip.backendText("interfaces"));
         } catch (Exception ignored) {
             // An empty list only means the sheet offers the connected card as both.
+            return new JSONArray();
+        }
+    }
+
+    /** The names of the cards wifi4's array holds ({@code wlan0}, {@code wlan1}, …). */
+    private static JSONArray wifi4InterfaceNames(JSONArray pooled) {
+        JSONArray names = new JSONArray();
+        for (int i = 0; i < pooled.length(); i++) {
+            JSONObject info = pooled.optJSONObject(i);
+            String name = info == null ? pooled.optString(i, "") : info.optString("name", "");
+            if (!name.isEmpty()) names.put(name);
         }
         return names;
     }

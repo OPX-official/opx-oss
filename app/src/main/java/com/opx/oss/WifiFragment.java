@@ -88,8 +88,9 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
 
     // The target dialog: one card per attack the engine says it can run against this AP.
     private Dialog sheet;
-    // The interfaces wifi4 holds: the Evil Twin sheet's host/punter selects.
-    private final List<String> targetInterfaces = new ArrayList<>();
+    // The interfaces wifi4 holds: the Evil Twin sheet's host/punter selects. Each entry carries
+    // the name, label, host/spoofable flags, MAC and supported channels wifi4 reported.
+    private JSONArray targetInterfaces = new JSONArray();
     private String connectedIface = "";
     private WifiAdapter.Network sheetTarget;
     private LinearLayout sheetAttacks;
@@ -498,12 +499,26 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
                 }
             }
             targets = map;
-            JSONArray interfaces = event.optJSONArray("interfaces");
-            targetInterfaces.clear();
+            JSONArray interfaces = event.optJSONArray("interface_info");
+            if (interfaces == null) interfaces = event.optJSONArray("interfaces");
+            targetInterfaces = new JSONArray();
             if (interfaces != null) {
                 for (int i = 0; i < interfaces.length(); i++) {
-                    String ifaceName = interfaces.optString(i, "");
-                    if (!ifaceName.isEmpty()) targetInterfaces.add(ifaceName);
+                    JSONObject info = interfaces.optJSONObject(i);
+                    if (info == null) {
+                        // Older builds sent bare names; keep the sheet working with either.
+                        String ifaceName = interfaces.optString(i, "");
+                        if (ifaceName.isEmpty()) continue;
+                        info = new JSONObject();
+                        try {
+                            info.put("name", ifaceName).put("label", ifaceName)
+                                    .put("host", true).put("spoofable", false).put("mac", "");
+                        } catch (org.json.JSONException ignored) {
+                            continue;
+                        }
+                    }
+                    String ifaceName = info.optString("name", "");
+                    if (!ifaceName.isEmpty()) targetInterfaces.put(info);
                 }
             }
             if (sheet != null && sheet.isShowing()) renderTargetAttacks();
@@ -1035,12 +1050,23 @@ public class WifiFragment extends Fragment implements WifiBridge.Listener, OpxSe
         }
         if (sheet != null) sheet.dismiss();
         if ("eviltwin".equals(kind)) {
-            // The TUI's Evil Twin modal: interface, BSSID, channel, punt methods and cycle.
-            if (targetInterfaces.isEmpty() && !connectedIface.isEmpty()) {
-                targetInterfaces.add(connectedIface);
+            // The TUI's Evil Twin modal: host/punter interfaces, channel, BSSID, punt methods,
+            // cycle — all read off wifi4's own member list and the target's PMF posture.
+            JSONArray interfaces = targetInterfaces;
+            if (interfaces.length() == 0 && !connectedIface.isEmpty()) {
+                JSONObject info = new JSONObject();
+                try {
+                    info.put("name", connectedIface).put("label", connectedIface)
+                            .put("host", true).put("spoofable", false).put("mac", "");
+                } catch (org.json.JSONException ignored) {
+                    // Four plain values.
+                }
+                interfaces.put(info);
             }
+            JSONObject row = targetFor(target.bssid);
+            String pmf = row == null ? "" : row.optString("pmf", "");
             evilTwinDialog = new EvilTwinOptionsDialog(requireContext(), target.ssid,
-                    target.bssid, target.channel, new ArrayList<>(targetInterfaces),
+                    target.bssid, target.channel, pmf, interfaces,
                     options -> launchAttack(kind, target, options));
             evilTwinDialog.show();
             return;
