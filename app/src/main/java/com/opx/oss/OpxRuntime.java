@@ -454,56 +454,6 @@ public final class OpxRuntime {
         ensureDirectory(new File(prefix, "var/lib/apt/lists/partial"));
         ensureDirectory(new File(prefix, "var/cache/apt/archives/partial"));
         ensureUsbFdVariable(context);
-        ensureEngine(context);
-    }
-
-    /**
-     * The engine is the one runtime file an APK has to be able to replace. A phone that already
-     * has a prefix never downloads or unpacks a newer {@code opx_engine.py}, so a bug in the
-     * payload's engine would outlive every app update - which is exactly how a scan kept dying
-     * with {@code AttributeError: 'WlanInterface' object has no attribute 'access_points'} on an
-     * installed runtime. The APK carries the repository's own engine as the {@code engine/}
-     * asset (build.gradle generates it from {@code tools/engine/opx_engine.py}), and this copies
-     * it over the prefix when it differs, the same in-place repair as the other shims.
-     */
-    static void ensureEngine(Context context) {
-        File target = new File(pythonDir(context), "opx_engine.py");
-        if (!target.isFile()) {
-            // First run: the payload in the install pass supplies it, and the next start
-            // compares this asset against that copy.
-            AppLog.info("OpxRuntime", "no engine in the prefix yet");
-            return;
-        }
-        try (InputStream in = context.getAssets().open("engine/opx_engine.py")) {
-            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-            byte[] chunk = new byte[8192];
-            int count;
-            while ((count = in.read(chunk)) > 0) buffer.write(chunk, 0, count);
-            byte[] wanted = buffer.toByteArray();
-            if (Arrays.equals(wanted, readAll(target))) return;
-            File staged = new File(pythonDir(context), "opx_engine.py.new");
-            try (FileOutputStream out = new FileOutputStream(staged)) {
-                out.write(wanted);
-            }
-            if (!staged.renameTo(target)) {
-                staged.delete();
-                AppLog.info("OpxRuntime", "cannot replace the installed engine");
-                return;
-            }
-            AppLog.info("OpxRuntime", "engine updated from the APK (" + wanted.length + " bytes)");
-        } catch (IOException e) {
-            AppLog.info("OpxRuntime", "cannot refresh the engine: " + e.getMessage());
-        }
-    }
-
-    private static byte[] readAll(File file) throws IOException {
-        try (InputStream in = new FileInputStream(file);
-             ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
-            byte[] chunk = new byte[8192];
-            int count;
-            while ((count = in.read(chunk)) > 0) buffer.write(chunk, 0, count);
-            return buffer.toByteArray();
-        }
     }
 
     /**
