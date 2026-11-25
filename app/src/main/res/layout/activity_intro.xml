@@ -51,7 +51,7 @@
 
             <include
                 android:id="@+id/slide_download"
-                layout="@layout/intro_slide"
+                layout="@layout/intro_download_slide"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent" />
 

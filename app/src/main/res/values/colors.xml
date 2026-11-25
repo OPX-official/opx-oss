@@ -19,6 +19,16 @@
     <color name="console">#000000</color>
     <color name="row_locked">#61757575</color>
 
+    <!-- Intro install slide: the progress track and the install-log palette. -->
+    <color name="intro_track">#1F1565C0</color>
+    <color name="log_text">#E6E6E6</color>
+    <color name="log_ok">#66BB6A</color>
+    <color name="log_warn">#FFCA28</color>
+    <color name="log_err">#EF5350</color>
+    <color name="log_cmd">#64B5F6</color>
+    <color name="log_step">#82B1FF</color>
+    <color name="log_info">#9E9E9E</color>
+
     <color name="icon_tile_neutral">#E9EBEE</color>
     <color name="tile_blue">#E3F2FD</color>
     <color name="tile_cyan">#E0F7FA</color>

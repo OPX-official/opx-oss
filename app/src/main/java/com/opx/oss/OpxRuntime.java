@@ -193,8 +193,18 @@ public final class OpxRuntime {
         return new File(prefix, INSTALL_MARKER).isFile() && new File(prefix, "bin/bash").isFile();
     }
 
+    /** Reports the unpacking steps so the intro can name the archive being extracted. */
+    public interface Step {
+        void onStep(String label);
+    }
+
     /** Extracts the bootstrap and every payload into the app's own prefix. Blocking. */
     public static void install(Context context) throws Exception {
+        install(context, null);
+    }
+
+    /** Extracts the runtime and reports each archive through {@code step}; blocking. */
+    public static void install(Context context, Step step) throws Exception {
         String arch = arch(context);
         File files = context.getFilesDir();
         File prefix = prefixDir(context);
@@ -206,13 +216,14 @@ public final class OpxRuntime {
         deleteTree(prefix);
         if (!staging.mkdirs()) throw new IOException("Cannot create " + staging);
 
+        step(step, "Unpacking bootstrap-" + arch + ".zip");
         try (InputStream bootstrap = openBootstrap(context, arch)) {
             extractBootstrap(bootstrap, staging);
         }
         if (!staging.renameTo(prefix)) throw new IOException("Cannot move the bootstrap into place");
         AppLog.info("OpxRuntime", "bootstrap in place");
 
-        extractPayloads(context, arch, prefix);
+        extractPayloads(context, arch, prefix, step);
         ensureSiteShim(context);
         ensureUsbShim(context);
 
@@ -233,6 +244,7 @@ public final class OpxRuntime {
         } catch (Exception e) {
             version = "unknown";
         }
+        step(step, "Writing the version marker");
         try (FileOutputStream marker = new FileOutputStream(new File(prefix, INSTALL_MARKER))) {
             marker.write((version + "\n").getBytes("UTF-8"));
         }
@@ -312,7 +324,17 @@ public final class OpxRuntime {
      * Untars the packaged trees into the prefix. The arch-specific payload carries the base
      * runtime (python, libusb, bash, coreutils); the {@code all} payloads carry our own packages.
      */
-    private static void extractPayloads(Context context, String arch, File prefix) throws Exception {
+    private static void step(Step step, String label) {
+        if (step == null) return;
+        try {
+            step.onStep(label);
+        } catch (RuntimeException ignored) {
+            // A closing screen must not abort the install.
+        }
+    }
+
+    private static void extractPayloads(Context context, String arch, File prefix, Step step)
+            throws Exception {
         for (String dir : new String[]{"all", arch}) {
             List<File> downloaded = new ArrayList<>();
             File[] files = RuntimeDownloadManager.payloadDir(context, dir).listFiles();
@@ -337,6 +359,7 @@ public final class OpxRuntime {
                     Collections.sort(sorted);
                     for (String name : sorted) {
                         if (!name.endsWith(".targz") && !name.endsWith(".tar.gz")) continue;
+                        step(step, "Extracting " + name);
                         extractTarGz(new File(context.getCacheDir(), "opx-" + name),
                                 context.getAssets().open("payload/" + dir + "/" + name),
                                 context.getFilesDir());
@@ -344,6 +367,7 @@ public final class OpxRuntime {
                 }
             } else {
                 for (File file : downloaded) {
+                    step(step, "Extracting " + file.getName());
                     extractTarGz(new File(context.getCacheDir(), "opx-" + file.getName()),
                             new FileInputStream(file), context.getFilesDir());
                 }

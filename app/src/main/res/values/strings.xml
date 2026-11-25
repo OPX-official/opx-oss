@@ -6,7 +6,7 @@
     <string name="intro_welcome_title">Welcome to OPX OSS</string>
     <string name="intro_welcome_body">The wireless engine, its USB host bridge and the guided interface in one app — no terminal and no companion app.</string>
     <string name="intro_permissions_title">Permissions, once</string>
-    <string name="intro_permissions_body">Location is needed for WiFi scanning, storage for captures and logs, and notifications for the foreground engine. Grant them all here; no other screen will ask again.</string>
+    <string name="intro_permissions_body">Location powers WiFi scanning, storage keeps captures and logs, notifications show the engine. Grant what your phone allows — setup continues without them, and only the features that need one stay off.</string>
     <string name="intro_download_title">Download the engine</string>
     <string name="intro_download_body">The app is small by design. It detects a 32-bit or 64-bit phone, downloads only that runtime, verifies every file, and resumes where it stopped if the connection drops.</string>
     <string name="intro_engine_title">The engine installs itself</string>
@@ -27,6 +27,11 @@
     <string name="intro_installing">Installing the verified runtime…</string>
     <string name="intro_download_error">Download failed: %1$s</string>
     <string name="intro_download_unknown">unknown error</string>
+    <string name="intro_eyebrow_install">Installation</string>
+    <string name="intro_show_details">Show details</string>
+    <string name="intro_log_title">Installation log</string>
+    <string name="intro_download_file">%1$d of %2$d · %3$s</string>
+    <string name="intro_download_done">Runtime verified · %1$s</string>
     <string name="notification_state_downloading">Downloading runtime… %1$d%% · %2$s</string>
     <string name="drawer_open">Open menu</string>
     <string name="drawer_close">Close menu</string>

@@ -3,13 +3,16 @@ package com.opx.oss;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.PorterDuff;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.provider.Settings;
 import android.view.View;
+import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
@@ -20,15 +23,17 @@ import androidx.core.content.ContextCompat;
 
 import com.airbnb.lottie.LottieAnimationView;
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.progressindicator.LinearProgressIndicator;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Stryker's first-run flow with the OPX steps: welcome, permissions, runtime download, engine
  * install and ready. Permissions are collected here, once, before any other screen is reachable;
- * the download screen follows the phone's real ABI and resumes Stryker-style after a pause or a
- * killed process.
+ * the download slide follows the phone's real ABI, names the file it is fetching, shows
+ * bytes/speed/ETA, and then keeps the same slide while the verified archive is unpacked.
  */
 public class IntroActivity extends AppCompatActivity {
 
@@ -48,7 +53,7 @@ public class IntroActivity extends AppCompatActivity {
     private static final int[] ANIMS = {
             R.raw.waving_hand,
             R.raw.permissions_key,
-            R.raw.connection,
+            R.raw.icon_morph,
             R.raw.settings_gears,
             R.raw.confetti,
     };
@@ -77,12 +82,31 @@ public class IntroActivity extends AppCompatActivity {
     private IntroBackgroundView background;
     private MaterialButton next;
     private MaterialButton skip;
+
+    // The download slide, laid out like Stryker's install slide.
+    private LottieAnimationView downloadAnim;
+    private ProgressBar downloadSpinner;
+    private ImageView downloadIcon;
+    private TextView downloadSubtitle;
+    private LinearProgressIndicator downloadProgress;
+    private TextView downloadText;
+    private TextView downloadFile;
+    private MaterialButton downloadAction;
+    private InstallLogDialog logDialog;
+
+    /** The system dialog was already requested once; a second Next never waits on it again. */
+    private boolean permissionAsked;
+    /** A permission request is in flight and the slide should advance when it answers. */
+    private boolean pendingAdvance;
+    /** The battery whitelist prompt is best-effort and asked at most once per intro. */
+    private boolean askedBattery;
+
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable poll = new Runnable() {
         @Override
         public void run() {
             refreshChrome();
-            handler.postDelayed(this, 500);
+            handler.postDelayed(this, 400);
         }
     };
     private static volatile boolean showing;
@@ -108,6 +132,15 @@ public class IntroActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onDestroy() {
+        if (logDialog != null) {
+            logDialog.dismiss();
+            logDialog = null;
+        }
+        super.onDestroy();
+    }
+
+    @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_intro);
@@ -116,6 +149,7 @@ public class IntroActivity extends AppCompatActivity {
         skip = findViewById(R.id.intro_skip);
 
         for (int i = 0; i < SLIDES.length; i++) {
+            if (i == INDEX_DOWNLOAD) continue;
             View slide = findViewById(SLIDES[i]);
             LottieAnimationView anim = slide.findViewById(R.id.slide_anim);
             ((TextView) slide.findViewById(R.id.slide_title)).setText(TITLES[i]);
@@ -123,10 +157,13 @@ public class IntroActivity extends AppCompatActivity {
             anim.setAnimation(ANIMS[i]);
             configureAction(slide, i);
         }
+        bindDownloadSlide();
 
         skip.setOnClickListener(v -> {
             if (index < INDEX_DOWNLOAD) {
-                index = allPermissionsGranted() ? INDEX_DOWNLOAD : INDEX_PERMISSIONS;
+                // Permissions are optional: a ROM that exposes none of them must never trap the
+                // user on the permissions slide.
+                index = INDEX_DOWNLOAD;
                 show();
             } else if (index < INDEX_FINAL) {
                 index = INDEX_FINAL;
@@ -135,13 +172,20 @@ public class IntroActivity extends AppCompatActivity {
         });
         next.setOnClickListener(v -> {
             if (index == INDEX_PERMISSIONS && !allPermissionsGranted()) {
+                // Ask once and move on with whatever the phone answers. If the OEM shows no
+                // dialog at all, the second tap advances anyway, so Next is never a dead end.
+                if (permissionAsked) {
+                    index = INDEX_DOWNLOAD;
+                    show();
+                    return;
+                }
+                permissionAsked = true;
+                pendingAdvance = true;
                 askPermissions();
                 return;
             }
             if (index == INDEX_DOWNLOAD && !runtimeReady()) {
-                if (RuntimeDownloadManager.snapshot().state == RuntimeDownloadManager.STATE_ERROR) {
-                    retryDownload();
-                }
+                if (downloadFailed()) retryDownload();
                 return;
             }
             if (index >= SLIDES.length - 1) {
@@ -155,15 +199,43 @@ public class IntroActivity extends AppCompatActivity {
         show();
     }
 
+    private void bindDownloadSlide() {
+        View slide = findViewById(R.id.slide_download);
+        downloadAnim = slide.findViewById(R.id.download_anim);
+        downloadSpinner = slide.findViewById(R.id.download_spinner);
+        downloadIcon = slide.findViewById(R.id.download_icon);
+        downloadSubtitle = slide.findViewById(R.id.download_subtitle);
+        downloadProgress = slide.findViewById(R.id.download_progress);
+        downloadText = slide.findViewById(R.id.download_text);
+        downloadFile = slide.findViewById(R.id.download_file);
+        downloadAction = slide.findViewById(R.id.download_action);
+
+        ((TextView) slide.findViewById(R.id.download_title)).setText(TITLES[INDEX_DOWNLOAD]);
+        downloadAnim.setAnimation(ANIMS[INDEX_DOWNLOAD]);
+        downloadAnim.playAnimation();
+        downloadAction.setText(R.string.intro_retry);
+        downloadAction.setOnClickListener(v -> {
+            if (downloadFailed()) retryDownload();
+            else {
+                OpxService.beginDownload(this);
+                OpxService.restart(this);
+            }
+        });
+        MaterialButton details = slide.findViewById(R.id.download_details);
+        details.setOnClickListener(v -> showLog());
+    }
+
+    private void showLog() {
+        if (logDialog != null && logDialog.isShowing()) return;
+        logDialog = InstallLogDialog.show(this);
+    }
+
     private void configureAction(View slide, int slideIndex) {
         MaterialButton action = slide.findViewById(R.id.slide_action);
         if (slideIndex == INDEX_PERMISSIONS) {
             action.setText(R.string.intro_grant);
             action.setVisibility(View.VISIBLE);
             action.setOnClickListener(v -> askPermissions());
-        } else if (slideIndex == INDEX_DOWNLOAD) {
-            action.setText(R.string.intro_retry);
-            action.setOnClickListener(v -> retryDownload());
         } else {
             action.setVisibility(View.GONE);
         }
@@ -175,7 +247,8 @@ public class IntroActivity extends AppCompatActivity {
             slide.setVisibility(i == index ? View.VISIBLE : View.GONE);
             if (i == index) {
                 LottieAnimationView anim = slide.findViewById(R.id.slide_anim);
-                anim.playAnimation();
+                if (anim == null) anim = slide.findViewById(R.id.download_anim);
+                if (anim != null) anim.playAnimation();
                 slide.setAlpha(0f);
                 slide.setTranslationY(24f * getResources().getDisplayMetrics().density);
                 slide.animate().alpha(1f).translationY(0f).setDuration(420)
@@ -188,8 +261,12 @@ public class IntroActivity extends AppCompatActivity {
                     : R.drawable.intro_dot);
         }
         if (background != null) background.setPageOffset(index);
-        if (index == INDEX_DOWNLOAD && allPermissionsGranted()) {
+        if (index == INDEX_DOWNLOAD) {
+            // The download only needs the network. It starts even when a storage, location or
+            // notification permission was refused or the ROM has no such switch; the features
+            // that need one degrade instead of blocking setup.
             OpxService.beginDownload(this);
+            requestBatteryExemption();
         }
         next.setText(index >= SLIDES.length - 1 ? R.string.intro_start : R.string.intro_next);
         skip.setVisibility(index >= INDEX_FINAL ? View.GONE : View.VISIBLE);
@@ -201,62 +278,117 @@ public class IntroActivity extends AppCompatActivity {
     private void refreshChrome() {
         if (next == null) return;
         if (index == INDEX_PERMISSIONS) {
-            next.setEnabled(allPermissionsGranted());
+            // Missing permissions never disable Next; the slide only offers to grant them.
+            next.setEnabled(true);
             View slide = findViewById(R.id.slide_permissions);
             MaterialButton action = slide.findViewById(R.id.slide_action);
             action.setVisibility(allPermissionsGranted() ? View.GONE : View.VISIBLE);
         } else if (index == INDEX_DOWNLOAD) {
-            RuntimeDownloadManager.Snapshot snapshot = RuntimeDownloadManager.snapshot();
-            View slide = findViewById(R.id.slide_download);
-            ProgressBar progress = slide.findViewById(R.id.slide_progress);
-            TextView status = slide.findViewById(R.id.slide_status);
-            MaterialButton action = slide.findViewById(R.id.slide_action);
-            progress.setVisibility(View.VISIBLE);
-            status.setVisibility(View.VISIBLE);
-
-            progress.setIndeterminate(false);
-            if (runtimeReady()) {
-                progress.setProgress(100);
-                status.setText(R.string.intro_download_ready);
-                action.setVisibility(View.GONE);
-                next.setEnabled(true);
-            } else if (OpxService.getState() == OpxService.STATE_FAILED) {
-                progress.setProgress(0);
-                String error = OpxService.getError();
-                status.setText(getString(R.string.intro_download_error,
-                        error == null ? getString(R.string.intro_download_unknown) : error));
-                action.setVisibility(View.VISIBLE);
-                action.setText(R.string.intro_retry);
-                next.setEnabled(false);
-            } else if (snapshot.state == RuntimeDownloadManager.STATE_ERROR) {
-                progress.setProgress(0);
-                status.setText(getString(R.string.intro_download_error, snapshot.error == null
-                        ? getString(R.string.intro_download_unknown) : snapshot.error));
-                action.setVisibility(View.VISIBLE);
-                action.setText(R.string.intro_retry);
-                next.setEnabled(false);
-            } else if (snapshot.state == RuntimeDownloadManager.STATE_READY) {
-                progress.setIndeterminate(true);
-                status.setText(R.string.intro_installing);
-                action.setVisibility(View.GONE);
-                next.setEnabled(false);
-            } else if (snapshot.state == RuntimeDownloadManager.STATE_DOWNLOADING) {
-                progress.setIndeterminate(false);
-                progress.setProgress(snapshot.percent());
-                status.setText(getString(R.string.intro_download_progress,
-                        snapshot.percent(), snapshot.arch + " · " + snapshot.label));
-                action.setVisibility(View.GONE);
-                next.setEnabled(false);
-            } else {
-                progress.setProgress(0);
-                status.setText(R.string.intro_download_wait);
-                action.setVisibility(View.VISIBLE);
-                action.setText(R.string.intro_start_download);
-                next.setEnabled(false);
-            }
+            refreshDownload(RuntimeDownloadManager.snapshot());
         } else {
             next.setEnabled(true);
         }
+    }
+
+    private boolean downloadFailed() {
+        return OpxService.getState() == OpxService.STATE_FAILED
+                || RuntimeDownloadManager.snapshot().state == RuntimeDownloadManager.STATE_ERROR;
+    }
+
+    /**
+     * Stryker's install slide: a spinner (or a done/error icon), the stage that is running, the
+     * archive being worked on and a monospace bytes/speed/ETA line underneath.
+     */
+    private void refreshDownload(RuntimeDownloadManager.Snapshot snapshot) {
+        if (downloadProgress == null) return;
+
+        if (runtimeReady()) {
+            downloadSpinner.setVisibility(View.GONE);
+            downloadIcon.setVisibility(View.VISIBLE);
+            downloadIcon.setImageResource(R.drawable.done);
+            downloadIcon.setColorFilter(ContextCompat.getColor(this, R.color.green),
+                    PorterDuff.Mode.SRC_IN);
+            downloadProgress.setIndeterminate(false);
+            downloadProgress.setProgressCompat(100, true);
+            downloadSubtitle.setText(R.string.intro_download_ready);
+            downloadText.setText(getString(R.string.intro_download_done, snapshot.arch));
+            downloadFile.setText("");
+            downloadAction.setVisibility(View.GONE);
+            next.setEnabled(true);
+            return;
+        }
+
+        if (downloadFailed()) {
+            String error = OpxService.getState() == OpxService.STATE_FAILED
+                    ? OpxService.getError() : snapshot.error;
+            if (error == null || error.isEmpty()) error = getString(R.string.intro_download_unknown);
+            downloadSpinner.setVisibility(View.GONE);
+            downloadIcon.setVisibility(View.VISIBLE);
+            downloadIcon.setImageResource(R.drawable.error);
+            downloadIcon.setColorFilter(ContextCompat.getColor(this, R.color.red),
+                    PorterDuff.Mode.SRC_IN);
+            downloadProgress.setIndeterminate(false);
+            downloadProgress.setProgressCompat(0, true);
+            downloadSubtitle.setText(getString(R.string.intro_download_error, error));
+            downloadText.setText("");
+            downloadFile.setText("");
+            downloadAction.setVisibility(View.VISIBLE);
+            downloadAction.setText(R.string.intro_retry);
+            next.setEnabled(false);
+            return;
+        }
+
+        downloadIcon.setVisibility(View.GONE);
+        downloadIcon.clearColorFilter();
+        downloadSpinner.setVisibility(View.VISIBLE);
+        downloadAction.setVisibility(View.GONE);
+        next.setEnabled(false);
+
+        if (snapshot.state == RuntimeDownloadManager.STATE_INSTALLING
+                || snapshot.state == RuntimeDownloadManager.STATE_READY) {
+            downloadProgress.setIndeterminate(true);
+            downloadSubtitle.setText(snapshot.label);
+            downloadText.setText(R.string.intro_installing);
+            downloadFile.setText("");
+        } else if (snapshot.state == RuntimeDownloadManager.STATE_DOWNLOADING) {
+            downloadProgress.setIndeterminate(snapshot.total <= 0);
+            downloadProgress.setProgressCompat(snapshot.percent(), true);
+            downloadSubtitle.setText(snapshot.label);
+            downloadText.setText(String.format(Locale.US, "%s / %s (%d%%) · %s · ETA %s",
+                    formatMb(snapshot.downloaded), formatMb(snapshot.total), snapshot.percent(),
+                    formatSpeed(snapshot.bytesPerSec), formatEta(snapshot.etaSeconds)));
+            downloadFile.setText(snapshot.fileCount > 0
+                    ? getString(R.string.intro_download_file, snapshot.fileIndex,
+                    snapshot.fileCount, snapshot.file)
+                    : snapshot.file);
+        } else {
+            downloadProgress.setIndeterminate(true);
+            downloadSubtitle.setText(R.string.intro_download_wait);
+            downloadText.setText("");
+            downloadFile.setText("");
+            downloadAction.setVisibility(View.VISIBLE);
+            downloadAction.setText(R.string.intro_start_download);
+        }
+    }
+
+    private static String formatMb(long bytes) {
+        if (bytes <= 0) return "? MB";
+        return String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0);
+    }
+
+    private static String formatSpeed(long bytesPerSec) {
+        if (bytesPerSec <= 0) return "—";
+        if (bytesPerSec < 1024 * 1024) {
+            return String.format(Locale.US, "%.0f KB/s", bytesPerSec / 1024.0);
+        }
+        return String.format(Locale.US, "%.1f MB/s", bytesPerSec / 1024.0 / 1024.0);
+    }
+
+    private static String formatEta(long seconds) {
+        if (seconds < 0) return "—";
+        if (seconds < 60) return seconds + "s";
+        if (seconds < 3600) return String.format(Locale.US, "%dm %02ds", seconds / 60, seconds % 60);
+        return String.format(Locale.US, "%dh %02dm", seconds / 3600, (seconds % 3600) / 60);
     }
 
     private boolean runtimeReady() {
@@ -270,11 +402,8 @@ public class IntroActivity extends AppCompatActivity {
     }
 
     private void finishSetup() {
-        if (!allPermissionsGranted()) {
-            index = INDEX_PERMISSIONS;
-            show();
-            return;
-        }
+        // Deliberately not gated on permissions: whatever the phone allowed is what the app
+        // works with, and the user is never sent back to a slide they cannot satisfy.
         if (!runtimeReady()) {
             index = INDEX_DOWNLOAD;
             show();
@@ -320,7 +449,16 @@ public class IntroActivity extends AppCompatActivity {
             refreshChrome();
             return;
         }
-        requestPermissions(missing.toArray(new String[0]), REQUEST_PERMISSIONS);
+        try {
+            requestPermissions(missing.toArray(new String[0]), REQUEST_PERMISSIONS);
+        } catch (RuntimeException e) {
+            // A ROM that cannot answer the request must still let the user past the slide.
+            if (pendingAdvance) {
+                pendingAdvance = false;
+                index = INDEX_DOWNLOAD;
+                show();
+            }
+        }
     }
 
     @Override
@@ -334,11 +472,38 @@ public class IntroActivity extends AppCompatActivity {
         }
         refreshChrome();
         if (!allPermissionsGranted()) {
-            // A second denial is final; the system settings page is the only way left.
+            // A second denial is final for the dialog; the system settings page is the only way
+            // left, and it is an offer — the slide still lets the user continue without it.
             View slide = findViewById(R.id.slide_permissions);
             MaterialButton action = slide.findViewById(R.id.slide_action);
             action.setText(R.string.intro_open_settings);
             action.setOnClickListener(v -> openAppSettings());
+        }
+        if (pendingAdvance) {
+            pendingAdvance = false;
+            index = INDEX_DOWNLOAD;
+            show();
+        }
+    }
+
+    /**
+     * Best effort: ask the system to exempt the app from Doze/battery savers so a long download
+     * keeps running with the screen off. Xiaomi/HyperOS and several OEM builds route this to
+     * their own screen, refuse it, or have no such Activity at all; every failure is swallowed
+     * and setup continues exactly as before.
+     */
+    private void requestBatteryExemption() {
+        if (askedBattery) return;
+        askedBattery = true;
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+            PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
+            if (power == null
+                    || power.isIgnoringBatteryOptimizations(getPackageName())) return;
+            startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (Exception ignored) {
+            // No whitelist screen on this ROM, or the request was denied: nothing to do.
         }
     }
 

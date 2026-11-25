@@ -20,6 +20,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Downloads the native runtime into the app's private files directory.
@@ -43,6 +44,24 @@ public final class RuntimeDownloadManager {
     public static final int STATE_DOWNLOADING = 1;
     public static final int STATE_READY = 2;
     public static final int STATE_ERROR = 3;
+    /** The bytes are complete; the prefix is being unpacked (the intro keeps the same slide). */
+    public static final int STATE_INSTALLING = 4;
+
+    /** What the slide is doing right now, so its stage line always names the current file. */
+    public static final int STAGE_IDLE = 0;
+    public static final int STAGE_INDEX = 1;
+    public static final int STAGE_DOWNLOAD = 2;
+    public static final int STAGE_VERIFY = 3;
+    public static final int STAGE_EXTRACT = 4;
+    public static final int STAGE_READY = 5;
+
+    /** Log levels of the install log; the dialog draws the same chip for each one. */
+    public static final int LOG_INFO = 0;
+    public static final int LOG_STEP = 1;
+    public static final int LOG_COMMAND = 2;
+    public static final int LOG_SUCCESS = 3;
+    public static final int LOG_WARN = 4;
+    public static final int LOG_ERROR = 5;
 
     private static final int MAX_RETRIES = 3;
     private static final int BUFFER = 256 * 1024;
@@ -57,20 +76,53 @@ public final class RuntimeDownloadManager {
         public final long downloaded;
         public final long total;
         public final String error;
+        /** {@code STAGE_*}: names which step the slide is on. */
+        public final int stage;
+        /** The file being fetched right now; empty while unpacking. */
+        public final String file;
+        public final int fileIndex;
+        public final int fileCount;
+        /** Session throughput in bytes/second, 0 until the first answer arrives. */
+        public final long bytesPerSec;
+        /** Seconds left at the current speed, -1 when unknown. */
+        public final long etaSeconds;
 
         Snapshot(int state, String arch, String label, long downloaded, long total, String error) {
+            this(state, arch, label, downloaded, total, error, STAGE_IDLE, "", 0, 0, 0, -1);
+        }
+
+        Snapshot(int state, String arch, String label, long downloaded, long total, String error,
+                 int stage, String file, int fileIndex, int fileCount,
+                 long bytesPerSec, long etaSeconds) {
             this.state = state;
             this.arch = arch;
             this.label = label;
             this.downloaded = downloaded;
             this.total = total;
             this.error = error;
+            this.stage = stage;
+            this.file = file;
+            this.fileIndex = fileIndex;
+            this.fileCount = fileCount;
+            this.bytesPerSec = bytesPerSec;
+            this.etaSeconds = etaSeconds;
         }
 
         public int percent() {
             if (state == STATE_READY) return 100;
             if (total <= 0) return 0;
             return (int) Math.min(100, Math.max(0, downloaded * 100 / total));
+        }
+    }
+
+    /** One line of the install log, the same shape the intro's details dialog renders. */
+    public static final class LogEntry {
+        public final int level;
+        public final String text;
+
+        LogEntry(int level, String text) {
+            this.level = level;
+            this.text = text;
         }
     }
 
@@ -87,6 +139,32 @@ public final class RuntimeDownloadManager {
 
     public static Snapshot snapshot() {
         return snapshot;
+    }
+
+    // ------------------------------------------------------------------ log
+
+    private static final int MAX_LOG = 600;
+    private static final List<LogEntry> log = new ArrayList<>();
+
+    /** Copy of the install log, oldest first; safe to call from the UI thread. */
+    public static List<LogEntry> logEntries() {
+        synchronized (LOCK) {
+            return new ArrayList<>(log);
+        }
+    }
+
+    private static void clearLog() {
+        synchronized (LOCK) {
+            log.clear();
+        }
+    }
+
+    private static void appendLog(int level, String text) {
+        if (text == null || text.isEmpty()) return;
+        synchronized (LOCK) {
+            log.add(new LogEntry(level, text));
+            while (log.size() > MAX_LOG) log.remove(0);
+        }
     }
 
     public static File runtimeDir(Context context) {
@@ -176,16 +254,23 @@ public final class RuntimeDownloadManager {
             ensureDirectory(payloadDir(context, arch));
             ensureDirectory(payloadDir(context, "all"));
 
-            publish(new Snapshot(STATE_DOWNLOADING, arch, "Reading package index…", 0, -1, null),
-                    listener);
+            clearLog();
+            appendLog(LOG_STEP, "Preparing the download");
+            appendLog(LOG_INFO, "Architecture: " + arch);
+            publish(new Snapshot(STATE_DOWNLOADING, arch, "Reading the package index", 0, -1,
+                    null, STAGE_INDEX, "index.json", 0, 0, 0, -1), listener);
             File indexFile = new File(runtime, "index.json");
             JSONObject index = parseIndex(indexFile);
             if (index == null) {
                 delete(indexFile);
+                appendLog(LOG_COMMAND, "GET " + INDEX_URL);
                 downloadToFile(INDEX_URL, indexFile, null, -1, null);
                 index = parseIndex(indexFile);
+            } else {
+                appendLog(LOG_INFO, "Using the cached package index");
             }
             if (index == null) throw new IOException("The package index is not valid JSON");
+            appendLog(LOG_SUCCESS, "Package index ready");
             JSONArray packages = index.optJSONArray("packages");
             if (packages == null) throw new IOException("The package index has no packages");
 
@@ -214,31 +299,65 @@ public final class RuntimeDownloadManager {
             if (selected.isEmpty()) {
                 throw new IOException("The package index has no runtime for " + arch);
             }
+            appendLog(LOG_INFO, selected.size() + " files for " + arch + " · "
+                    + formatMb(total));
+
+            // Bytes already on disk when this pass started: they are not this session's
+            // throughput, so speed and ETA count only what is actually moving now.
+            long skipped = 0;
+            for (Entry entry : selected) {
+                if (entry.dest.isFile() && entry.size > 0 && entry.dest.length() == entry.size) {
+                    skipped += entry.size;
+                }
+            }
+            final long sessionSkipped = skipped;
+            final long startedAt = System.currentTimeMillis();
+            final int count = selected.size();
 
             long done = 0;
+            int position = 0;
             for (Entry entry : selected) {
+                position++;
+                String name = shortName(entry.dest);
                 if (entry.dest.isFile() && expected(entry.dest, entry.sha256, entry.size)) {
                     done += Math.max(0, entry.dest.length());
-                    publish(progress(arch, entry, done, total, true), listener);
+                    appendLog(LOG_SUCCESS, "Already verified " + name);
+                    publish(progress(arch, entry, done, total, true, position, count), listener);
                     continue;
                 }
                 long base = done;
-                publish(progress(arch, entry, base, total, false), listener);
+                publish(new Snapshot(STATE_DOWNLOADING, arch, "Downloading the OPX packages",
+                        base, total, null, STAGE_DOWNLOAD, name, position, count, 0, -1), listener);
+                appendLog(LOG_COMMAND, "GET " + entry.url);
+                appendLog(LOG_INFO, name + " · " + formatMb(entry.size));
                 final long start = base;
                 final long all = total;
+                final int filePosition = position;
                 downloadToFile(entry.url, entry.dest, entry.sha256, entry.size,
-                        (downloaded, ignored) -> publish(new Snapshot(STATE_DOWNLOADING, arch,
-                                "Downloading " + shortName(entry.dest),
-                                start + downloaded, all, null), listener));
+                        (downloaded, ignored) -> {
+                            long now = System.currentTimeMillis();
+                            long moved = Math.max(0, start + downloaded - sessionSkipped);
+                            long elapsed = Math.max(1, now - startedAt);
+                            long speed = moved * 1000L / elapsed;
+                            long remaining = Math.max(0, all - (start + downloaded));
+                            long eta = speed > 0 ? remaining / speed : -1;
+                            publish(new Snapshot(STATE_DOWNLOADING, arch,
+                                    "Downloading the OPX packages", start + downloaded, all,
+                                    null, STAGE_DOWNLOAD, name, filePosition, count, speed, eta),
+                                    listener);
+                        });
                 done += Math.max(0, entry.dest.length());
-                publish(progress(arch, entry, done, total, true), listener);
+                appendLog(LOG_SUCCESS, "SHA-256 verified " + name);
+                publish(progress(arch, entry, done, total, true, position, count), listener);
             }
 
             File complete = new File(runtime, COMPLETE);
             try (FileOutputStream out = new FileOutputStream(complete)) {
                 out.write((arch + "\n").getBytes("UTF-8"));
             }
-            publish(new Snapshot(STATE_READY, arch, "Runtime ready", total, total, null), listener);
+            appendLog(LOG_SUCCESS, "Every file verified · " + formatMb(total));
+            publish(new Snapshot(STATE_READY, arch, "Runtime verified", total, total, null,
+                    STAGE_READY, "", count, count, 0, -1), listener);
             AppLog.info("RuntimeDownload", "runtime ready (" + arch + ", " + selected.size()
                     + " files)");
         }
@@ -268,10 +387,35 @@ public final class RuntimeDownloadManager {
     }
 
     private static Snapshot progress(String arch, Entry entry, long done, long total,
-                                     boolean complete) {
+                                     boolean complete, int position, int count) {
         return new Snapshot(STATE_DOWNLOADING, arch,
-                complete ? "Verified " + shortName(entry.dest) : "Downloading " + shortName(entry.dest),
-                done, total, null);
+                complete ? "Verified " + shortName(entry.dest)
+                        : "Downloading " + shortName(entry.dest),
+                done, total, null, complete ? STAGE_VERIFY : STAGE_DOWNLOAD,
+                shortName(entry.dest), position, count, 0, -1);
+    }
+
+    /**
+     * The bytes are in place and the prefix is being unpacked. The intro keeps the same slide,
+     * so its progress bar turns indeterminate and its stage line names the archive being untarred.
+     */
+    public static void beginInstall(String label) {
+        synchronized (LOCK) {
+            String stage = label == null ? "Unpacking the runtime" : label;
+            appendLog(LOG_STEP, stage);
+            snapshot = new Snapshot(STATE_INSTALLING, snapshot.arch, stage,
+                    snapshot.downloaded, snapshot.total, null, STAGE_EXTRACT, "", 0, 0, 0, -1);
+        }
+    }
+
+    /** One unpacking step from {@link OpxRuntime#install}; logged and shown live on the slide. */
+    public static void installStep(String label) {
+        if (label == null || label.isEmpty()) return;
+        synchronized (LOCK) {
+            appendLog(LOG_STEP, label);
+            snapshot = new Snapshot(STATE_INSTALLING, snapshot.arch, label,
+                    snapshot.downloaded, snapshot.total, null, STAGE_EXTRACT, "", 0, 0, 0, -1);
+        }
     }
 
     private static void publish(Snapshot next, Progress listener) {
@@ -307,6 +451,11 @@ public final class RuntimeDownloadManager {
         } catch (IOException e) {
             return false;
         }
+    }
+
+    static String formatMb(long bytes) {
+        if (bytes <= 0) return "? MB";
+        return String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0);
     }
 
     private static String shortName(File file) {
@@ -357,6 +506,8 @@ public final class RuntimeDownloadManager {
                 return;
             } catch (Exception e) {
                 lastError = e.getMessage() == null ? e.toString() : e.getMessage();
+                appendLog(LOG_WARN, "Retry " + attempt + "/" + MAX_RETRIES + " · "
+                        + shortName(dest) + " · " + lastError);
                 if (lastError.startsWith("Checksum") || lastError.startsWith("Size")) {
                     // A corrupt/truncated body is worth one clean retry; the loop still
                     // preserves .part for ordinary network failures.
@@ -372,6 +523,20 @@ public final class RuntimeDownloadManager {
             }
         }
         throw new IOException(lastError);
+    }
+
+    /** A connection that delivers nothing for this long is aborted and resumed. */
+    private static final long STALL_TIMEOUT_MS = 90L * 1000L;
+
+    /**
+     * Watchdog state for one connection. A socket read timeout only fires when the server goes
+     * completely silent; a connection that trickles a byte every few seconds never trips it, so
+     * the last-byte timestamp is watched separately and the stalled socket is disconnected.
+     */
+    private static final class Watchdog {
+        volatile long lastByte = System.currentTimeMillis();
+        volatile boolean running = true;
+        volatile boolean stalled;
     }
 
     private static void attempt(String url, File dest, File part, String sha, long size,
@@ -409,6 +574,31 @@ public final class RuntimeDownloadManager {
         connection.setRequestProperty("Accept-Encoding", "identity");
         connection.setRequestProperty("User-Agent", "OPX-OSS/" + Build.VERSION.SDK_INT);
         if (existing > 0) connection.setRequestProperty("Range", "bytes=" + existing + "-");
+
+        final Watchdog watchdog = new Watchdog();
+        Thread guard = new Thread(() -> {
+            while (watchdog.running) {
+                try {
+                    Thread.sleep(5000L);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (!watchdog.running) return;
+                if (System.currentTimeMillis() - watchdog.lastByte > STALL_TIMEOUT_MS) {
+                    watchdog.stalled = true;
+                    // Disconnecting from here is what unblocks a read that stopped moving; the
+                    // retry then resumes from the same .part instead of starting the file over.
+                    try {
+                        connection.disconnect();
+                    } catch (RuntimeException ignored) {
+                        // Already closed.
+                    }
+                    return;
+                }
+            }
+        }, "opx-download-watchdog");
+        guard.setDaemon(true);
+        guard.start();
 
         try {
             int code = connection.getResponseCode();
@@ -448,6 +638,7 @@ public final class RuntimeDownloadManager {
                         out.write(buffer, 0, read);
                         downloaded += read;
                         long now = System.currentTimeMillis();
+                        watchdog.lastByte = now;
                         if (bytes != null && now - last >= 150) {
                             last = now;
                             bytes.onBytes(downloaded, total);
@@ -473,7 +664,12 @@ public final class RuntimeDownloadManager {
                 delete(part);
             }
             if (bytes != null && size > 0) bytes.onBytes(size, size);
+        } catch (IOException e) {
+            // A stalled body keeps its .part; only the watchdog's message is worth reporting.
+            if (watchdog.stalled) throw new IOException("Download stalled", e);
+            throw e;
         } finally {
+            watchdog.running = false;
             connection.disconnect();
         }
     }

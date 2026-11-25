@@ -7,6 +7,11 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -72,8 +77,14 @@ public class OpxService extends Service {
 
     /** Actions waiting for the userland to be installed and probed (see {@link #whenReady}). */
     private final ArrayDeque<Runnable> readyActions = new ArrayDeque<>();
+    /** How long one wake-lock grant lasts; every progress tick renews it. */
+    private static final long WAKE_TIMEOUT_MS = 10L * 60L * 1000L;
+
     private Thread engineThread;
     private boolean exiting;
+    /** Resumes an offline-failed download the moment a network comes back. */
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private volatile long lastAttemptAt;
 
     public static void start(Context context) {
         // A start request always means "starting": never the "stopped" left behind by Exit.
@@ -131,6 +142,7 @@ public class OpxService extends Service {
         super.onCreate();
         instance = this;
         createNotificationChannel();
+        watchNetwork();
     }
 
     @Override
@@ -156,6 +168,7 @@ public class OpxService extends Service {
     @Override
     public void onDestroy() {
         instance = null;
+        stopWatchingNetwork();
         clearReadyActions();
         super.onDestroy();
     }
@@ -176,6 +189,7 @@ public class OpxService extends Service {
             return;
         }
         AppLog.info("OpxService", "engine thread starting (installed=" + OpxRuntime.isInstalled(this) + ")");
+        lastAttemptAt = System.currentTimeMillis();
 
         engineThread = new Thread(() -> {
             final Context context = getApplicationContext();
@@ -186,24 +200,26 @@ public class OpxService extends Service {
                     // payloads before install. The downloader keeps its .part files, so a
                     // killed process or a lost connection resumes instead of restarting.
                     if (!OpxRuntime.hasSources(context)) {
-                        PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
-                        PowerManager.WakeLock wake = power == null ? null
-                                : power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
-                                "opx:runtime-download");
-                        if (wake != null) {
-                            wake.setReferenceCounted(false);
-                            // A foreground service is not a guarantee that the CPU stays awake;
-                            // the download must not stall behind a dark screen.
-                            wake.acquire(30L * 60L * 1000L);
-                        }
+                        PowerManager.WakeLock wake = acquireDownloadWake();
+                        WifiManager.WifiLock wifi = acquireWifiLock();
                         try {
-                            RuntimeDownloadManager.ensureDownloaded(context,
-                                    snapshot -> updateNotification());
+                            RuntimeDownloadManager.ensureDownloaded(context, snapshot -> {
+                                // Renew on every tick: a fixed timeout used to expire in the
+                                // middle of a slow 100+ MB download and let the CPU sleep.
+                                if (wake != null) wake.acquire(WAKE_TIMEOUT_MS);
+                                updateNotification();
+                            });
                         } finally {
                             if (wake != null && wake.isHeld()) wake.release();
+                            if (wifi != null && wifi.isHeld()) wifi.release();
                         }
                     }
-                    OpxRuntime.install(context);
+                    RuntimeDownloadManager.beginInstall("Unpacking the runtime");
+                    OpxRuntime.install(context, label -> {
+                        // The intro's install slide names each archive while it is untarred.
+                        RuntimeDownloadManager.installStep(label);
+                        updateNotification();
+                    });
                 }
                 OpxRuntime.repair(context);
                 OpxRuntime.setupStorage(context);
@@ -220,6 +236,95 @@ public class OpxService extends Service {
             }
         }, "opx-engine");
         engineThread.start();
+    }
+
+    // ------------------------------------------------------- download keep-alive
+
+    /**
+     * Keeps the CPU awake for the download. A foreground service alone is not a promise that the
+     * process keeps running with the screen off; the engine thread calls this and renews it from
+     * every progress tick, so the lock never expires mid-file.
+     */
+    private PowerManager.WakeLock acquireDownloadWake() {
+        PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (power == null) return null;
+        try {
+            PowerManager.WakeLock wake =
+                    power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "opx:runtime-download");
+            wake.setReferenceCounted(false);
+            wake.acquire(WAKE_TIMEOUT_MS);
+            return wake;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Keeps Wi-Fi at full power while bytes move. Without it several ROMs drop the radio into a
+     * low-power state as soon as the screen goes dark, and a 100+ MB download crawls or stalls.
+     */
+    @SuppressWarnings("deprecation")
+    private WifiManager.WifiLock acquireWifiLock() {
+        WifiManager wifi = (WifiManager) getApplicationContext()
+                .getSystemService(Context.WIFI_SERVICE);
+        if (wifi == null) return null;
+        try {
+            WifiManager.WifiLock lock = wifi.createWifiLock(
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF, "opx:runtime-download");
+            lock.setReferenceCounted(false);
+            lock.acquire();
+            return lock;
+        } catch (RuntimeException e) {
+            // A ROM that refuses the lock must not stop the download.
+            return null;
+        }
+    }
+
+    /**
+     * Auto-resume: a download that ran out of retries while offline starts again by itself when
+     * a network appears, instead of waiting for the user to find the Retry button.
+     */
+    private void watchNetwork() {
+        ConnectivityManager manager =
+                (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (manager == null) return;
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                new Handler(Looper.getMainLooper()).post(OpxService.this::resumeDownload);
+            }
+        };
+        try {
+            NetworkRequest request = new NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build();
+            manager.registerNetworkCallback(request, networkCallback);
+        } catch (RuntimeException e) {
+            AppLog.info("OpxService", "network callback unavailable; auto-resume is off");
+            networkCallback = null;
+        }
+    }
+
+    private void stopWatchingNetwork() {
+        if (networkCallback == null) return;
+        ConnectivityManager manager =
+                (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        try {
+            if (manager != null) manager.unregisterNetworkCallback(networkCallback);
+        } catch (RuntimeException ignored) {
+            // Already unregistered with the service.
+        }
+        networkCallback = null;
+    }
+
+    private void resumeDownload() {
+        if (exiting || state != STATE_FAILED) return;
+        if (OpxRuntime.isInstalled(this)) return;
+        // A network callback can fire in bursts; do not restart the engine repeatedly.
+        if (System.currentTimeMillis() - lastAttemptAt < 5000L) return;
+        AppLog.info("OpxService", "network available again; resuming the download");
+        RuntimeDownloadManager.retry();
+        setState(STATE_STARTING, null);
+        startEngine();
     }
 
     /** Re-runs the install/repair/probe pass, e.g. after the user grants storage. */
