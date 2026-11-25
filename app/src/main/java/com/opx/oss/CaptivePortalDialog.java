@@ -84,7 +84,8 @@ final class CaptivePortalDialog {
         body.addView(copy);
 
         input = new EditText(context);
-        input.setHint(R.string.wifi_captive_hint);
+        input.setHint("ap".equals(template)
+                ? R.string.portal_ap_hint : R.string.wifi_captive_hint);
         input.setSingleLine(true);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         input.setTextColor(ContextCompat.getColor(context, R.color.night_contrast_2));
@@ -142,6 +143,13 @@ final class CaptivePortalDialog {
         if (dialog.isShowing()) dialog.dismiss();
     }
 
+    /** Live AP state: what the engine is doing, or why the AP did not come up. */
+    void status(String message) {
+        if (message == null || message.isEmpty()) return;
+        status.setText(message);
+        status.setTextColor(ContextCompat.getColor(context, R.color.grey));
+    }
+
     void result(boolean ok, String message) {
         status.setText(message);
         status.setTextColor(ContextCompat.getColor(context, ok ? R.color.green : R.color.red));
@@ -154,12 +162,14 @@ final class CaptivePortalDialog {
     }
 
     private static int templateTitle(String template) {
+        if ("ap".equals(template)) return R.string.portal_ap_title;
         if ("router".equals(template)) return R.string.wifi_portal_router_title;
         if ("hotel".equals(template)) return R.string.wifi_portal_hotel_title;
         return R.string.wifi_portal_default_title;
     }
 
     private static int templateBody(String template) {
+        if ("ap".equals(template)) return R.string.portal_ap_body;
         if ("router".equals(template)) return R.string.wifi_portal_router_body;
         if ("hotel".equals(template)) return R.string.wifi_portal_hotel_body;
         return R.string.wifi_portal_default_body;

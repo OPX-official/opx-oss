@@ -172,10 +172,23 @@ public class HandshakesFragment extends Fragment
             requestCaptures();
         } else if ("psk_verified".equals(name)) {
             onPasswordChecked(event);
+        } else if ("attack_started".equals(name)) {
+            if (portalDialog != null) portalDialog.status(getString(R.string.portal_ap_starting));
+        } else if ("attack_log".equals(name)) {
+            // The AP's own lines ("AP 'x' up on CH 6", "leased 192.168.4.10", "portal …").
+            if (portalDialog != null) portalDialog.status(event.optString("line"));
         } else if ("attack_done".equals(name)) {
             if (portalDialog != null) {
-                portalDialog.dismiss();
-                portalDialog = null;
+                boolean ok = event.optBoolean("ok", true);
+                String summary = event.optString("summary", "");
+                if (ok) {
+                    portalDialog.dismiss();
+                    portalDialog = null;
+                } else {
+                    // A failed AP start used to just close the sheet, leaving no clue.
+                    portalDialog.result(false, summary.isEmpty()
+                            ? getString(R.string.portal_ap_failed) : summary);
+                }
             }
             requestCaptures();
         } else if ("error".equals(name) && portalDialog != null) {
@@ -368,7 +381,7 @@ public class HandshakesFragment extends Fragment
         if (!isAdded()) return;
         WifiBridge bridge = WifiBridge.get(requireContext());
         // The operator sheet's copy is its own; the page a client sees is the chosen template.
-        portalDialog = new CaptivePortalDialog(requireContext(), apName, "default",
+        portalDialog = new CaptivePortalDialog(requireContext(), apName, "ap",
                 password -> bridge.verifyPsk(apBssid, password));
         portalDialog.show();
         JSONObject options = new JSONObject();

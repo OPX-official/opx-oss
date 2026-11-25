@@ -198,9 +198,19 @@ final class EvilTwinOptionsDialog {
         templateButton.setText(R.string.portal_template_choose);
         templateButton.setTextSize(12);
         templateButton.setCornerRadius(dp(14));
-        templateButton.setOnClickListener(v -> {
-            if (templateListener != null) templateListener.run();
-        });
+        // The catalog first; its "Custom HTML file…" entry asks the screen for a document.
+        templateButton.setOnClickListener(v -> PortalTemplatePicker.show(context,
+                new PortalTemplatePicker.Listener() {
+                    @Override
+                    public void onPicked(File file, String labelText) {
+                        setTemplate(file, labelText);
+                    }
+
+                    @Override
+                    public void onCustom() {
+                        if (templateListener != null) templateListener.run();
+                    }
+                }));
         body.addView(templateButton);
 
         warning = new TextView(context);

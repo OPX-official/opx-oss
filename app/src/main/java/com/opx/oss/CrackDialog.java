@@ -148,9 +148,19 @@ final class CrackDialog {
         ((TextView) content.findViewById(R.id.hc_tool_ap_desc)).setText(R.string.hc_tool_ap_desc);
         apName.setText(ssid == null ? "" : ssid);
         apTemplate.setText(R.string.portal_template_choose);
-        apTemplate.setOnClickListener(v -> {
-            if (templateListener != null) templateListener.onPickTemplate();
-        });
+        // Category then page; only the catalog's "Custom HTML file…" reaches the picker.
+        apTemplate.setOnClickListener(v -> PortalTemplatePicker.show(context,
+                new PortalTemplatePicker.Listener() {
+                    @Override
+                    public void onPicked(File file, String label) {
+                        setTemplate(file, label);
+                    }
+
+                    @Override
+                    public void onCustom() {
+                        if (templateListener != null) templateListener.onPickTemplate();
+                    }
+                }));
 
         cpuCard.setOnClickListener(v -> selectTool("cpu_crack"));
         apCard.setOnClickListener(v -> selectTool("ap"));

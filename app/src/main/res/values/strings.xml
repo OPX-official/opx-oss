@@ -366,6 +366,11 @@
     <string name="hc_ap_template_default">Default sign-in</string>
     <string name="hc_ap_template_router">Router firmware update</string>
     <string name="hc_ap_template_hotel">Hotel Wi-Fi</string>
+    <string name="portal_ap_title">AP mode</string>
+    <string name="portal_ap_body">The AP is starting with the page you chose. A client that joins it sees that page and types the Wi-Fi password; every entry is checked against the captured handshake. A match closes the AP.</string>
+    <string name="portal_ap_hint">Test a password (optional)</string>
+    <string name="portal_ap_starting">Starting the AP… clients will see the portal.</string>
+    <string name="portal_ap_failed">The AP stopped</string>
     <string name="portal_template_choose">Choose template</string>
     <string name="portal_template_default">Default sign-in (OPX-wifi4)</string>
     <string name="portal_template_category">Choose a category</string>

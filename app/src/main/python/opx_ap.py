@@ -20,6 +20,7 @@ import random
 import re
 import struct
 import time
+import traceback
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional
 
@@ -509,9 +510,18 @@ class PortalAp:
         self._loop = asyncio.get_running_loop()
         try:
             if getattr(self.iface, "current_channel", self.channel) != self.channel:
-                await self.iface.set_channel(self.channel)
-            armed = await self.iface.set_fake_mac(self.bssid, self.bssid)
-            self._fake_mac = armed is not None
+                try:
+                    await self.iface.set_channel(self.channel)
+                except Exception as exc:
+                    # The card may refuse a channel while another adapter setting holds it;
+                    # beacons can still go out on whatever channel it is already on.
+                    self.log(f"AP: could not switch to CH {self.channel} ({exc}); trying anyway")
+            try:
+                armed = await self.iface.set_fake_mac(self.bssid, self.bssid)
+                self._fake_mac = bool(armed)
+            except Exception as exc:
+                # Some adapters cannot take a fixed MAC; the card's own address still works.
+                self.log(f"AP: no twin MAC ({exc}); using the card's own address")
             self.iface.register_rx_callback(self._on_frame)
             self._rx_registered = True
             self.log(f"AP '{self.ssid}' up on CH {self.channel} ({self.bssid.hex(':', 1)})")
@@ -519,6 +529,11 @@ class PortalAp:
             while not self.stopped:
                 await asyncio.sleep(0.2)
                 self._retransmit()
+        except Exception as exc:
+            # Never fail silently: the UI shows these lines, so a dead AP has a reason.
+            self.fail_reason = str(exc)
+            self.log(f"AP failed: {exc}")
+            traceback.print_exc()
         finally:
             self.done = True
             await self._cleanup()
@@ -583,9 +598,12 @@ class PortalAp:
 
     async def _beacon_loop(self) -> None:
         while not self.stopped:
-            frame = bytearray(self.beacon)
-            frame[24:32] = struct.pack("<Q", int(time.time() * 1_000_000))
-            self._send(bytes(frame))
+            try:
+                frame = bytearray(self.beacon)
+                frame[24:32] = struct.pack("<Q", int(time.time() * 1_000_000))
+                self._send(bytes(frame))
+            except Exception as exc:
+                self.log(f"AP beacon failed: {exc}")
             await asyncio.sleep(BEACON_PERIOD_S)
 
     # ----- receive -----------------------------------------------------------
