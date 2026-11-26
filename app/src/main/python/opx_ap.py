@@ -9,6 +9,11 @@ enough for one HTTP request and one response per connection.
 The portal's POST carries the Wi-Fi password a client typed. ``verify`` (the caller's vault
 check against the captured handshake) decides: a match answers with the success page and stops
 the AP; anything else answers with the form again and the AP stays up.
+
+Captive-portal detection is answered the way real hotspot networks do it: DHCP option 114
+carries the sign-in URL, every name resolves to the gateway, and the OS probe URLs
+(``generate_204``, ``hotspot-detect.html``, ``connecttest.txt`` and friends) get a 302 to the
+portal instead of a 200 or a 204, which is what makes a phone show "Sign in to network".
 """
 
 from __future__ import annotations
@@ -49,6 +54,37 @@ _MSS = 1400
 _MAX_REQUEST = 8192
 _RETRY_SECONDS = 1.0
 _RETRY_COUNT = 3
+
+#: `http://192.168.4.1/portal` is where every "is this network captive?" answer points, and
+#: it is an IP already, so the phone needs no second DNS lookup to open it.
+PORTAL_URL = "http://" + GATEWAY + "/portal"
+
+#: The paths operating systems fetch when they ask "does this Wi-Fi really have internet?".
+#: Nothing here is a real page on our portal, so a hit means a detection probe.
+CAPTIVE_PROBE_PATHS = (
+    "/generate_204",          # Android 5+, ChromeOS, MIUI/Vivo/Huawei probing
+    "/gen_204",               # clients3.google.com (Chromium)
+    "/curl.txt",              # Chromium (Android)
+    "/hotspot-detect.html",   # iOS / macOS CNA
+    "/library/test/success.html",
+    "/connecttest.txt",       # Windows NCSI
+    "/ncsi.txt",
+    "/canonical.html",        # Firefox
+    "/success.txt",
+    "/check_network_status.txt",  # Linux NetworkManager / GNOME
+    "/wifistub.html",         # FireOS / Kindle
+)
+
+#: Probe hosts, for OEMs that ask a different path on a known detection name.
+CAPTIVE_PROBE_HOSTS = (
+    "connectivitycheck.gstatic.com", "connectivitycheck.android.com",
+    "connectivitycheck.platform.hicloud.com", "connectivitycheck.platform.hihonorcloud.com",
+    "clients3.google.com", "clients4.google.com", "play.googleapis.com",
+    "captive.apple.com", "captive.g.aaplimg.com",
+    "www.msftconnecttest.com", "ipv6.msftconnecttest.com", "www.msftncsi.com",
+    "detectportal.firefox.com", "connect.rom.miui.com", "wifi.vivo.com.cn",
+    "nmcheck.gnome.org", "kindle-wifi.com",
+)
 
 #: Built-in copy, used when no template page is supplied.
 TEMPLATES = {
@@ -249,6 +285,10 @@ def dhcp_reply(request: bytes, yiaddr: str, server: str = GATEWAY) -> Optional[b
     body += bytes([1, 4]) + _ip(NETMASK)
     body += bytes([3, 4]) + _ip(server)
     body += bytes([6, 4]) + _ip(DNS_SERVER)
+    # RFC 8910 option 114: tell the client where the sign-in page is before it even probes,
+    # so Android 11+ / iOS 14+ open the captive portal instead of waiting for DNS to fail.
+    portal = f"http://{server}/"
+    body += bytes([114, len(portal)]) + portal.encode("ascii")
     body += bytes([255])
     return header + body
 
@@ -270,7 +310,12 @@ def _dhcp_options(raw: bytes) -> Dict[int, bytes]:
 
 
 def dns_reply(query: bytes, answer: str = GATEWAY) -> Optional[bytes]:
-    """Answer every A query with ``answer`` so the client's captive-portal probe lands here."""
+    """Answer every A query with ``answer`` so the client's captive-portal probe lands here.
+
+    Other record types get an empty, valid reply instead of an A record: phones ask AAAA and
+    HTTPS questions alongside A, and a mismatched answer is thrown away, which would send the
+    probe down the IPv6 path we never answer.
+    """
     if len(query) < 12:
         return None
     flags = struct.unpack_from("!H", query, 2)[0]
@@ -290,10 +335,29 @@ def dns_reply(query: bytes, answer: str = GATEWAY) -> Optional[bytes]:
     if index + 4 > len(query):
         return None
     question = query[12:index + 4]
-    header = struct.pack("!HHHHHH", struct.unpack_from("!H", query, 0)[0], 0x8180, 1, 1, 0, 0)
+    qtype = struct.unpack_from("!H", query, index)[0]
+    ident = struct.unpack_from("!H", query, 0)[0]
+    if qtype != 1:                       # not an A question: NOERROR, no answers
+        return struct.pack("!HHHHHH", ident, 0x8180, 1, 0, 0, 0) + question
+    header = struct.pack("!HHHHHH", ident, 0x8180, 1, 1, 0, 0)
     answer_record = (b"\xc0\x0c" + struct.pack("!HHI", 1, 1, 0)
                      + struct.pack("!H", 4) + _ip(answer))
     return header + question + answer_record
+
+
+def dns_name(query: bytes) -> str:
+    """The first question's name, for logging what a client asked for."""
+    if len(query) < 13:
+        return ""
+    labels = []
+    index = 12
+    while index < len(query) and query[index]:
+        length = query[index]
+        if length & 0xC0:
+            break
+        labels.append(query[index + 1:index + 1 + length].decode("latin-1", "replace"))
+        index += 1 + length
+    return ".".join(labels)[:120]
 
 
 # --------------------------------------------------------------------------- HTTP
@@ -322,12 +386,52 @@ def _page(title: str, body: str, ssid: str, error: str = "") -> str:
             "<button type=\"submit\">Connect</button></form></main></body></html>")
 
 
-def http_response(body: str, status: str = "200 OK") -> bytes:
+def http_response(body: str, status: str = "200 OK",
+                  headers: Dict[str, str] = None) -> bytes:
     raw = body.encode("utf-8")
+    extra = "".join(f"{name}: {value}\r\n" for name, value in (headers or {}).items())
     head = (f"HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\n"
             f"Content-Length: {len(raw)}\r\nConnection: close\r\n"
-            "Cache-Control: no-store\r\n\r\n")
+            f"Cache-Control: no-store\r\n{extra}\r\n")
     return head.encode("utf-8") + raw
+
+
+def redirect_response(location: str, status: str = "302 Found") -> bytes:
+    """A redirect the OS reads as "this network has a portal", with the page in the body.
+
+    A 200 for a probe means "connected, no internet" in Android's book and a 204 means
+    "internet works", so both hide the portal; a 3xx is the answer that opens it. The body
+    repeats the portal as a link in case a browser does not follow the Location header.
+    """
+    link = html.escape(location, quote=True)
+    body = ("<!doctype html><html><head><meta charset=\"utf-8\">"
+            f"<meta http-equiv=\"refresh\" content=\"0;url={link}\">"
+            "<title>Sign in</title></head><body>"
+            f"<p><a href=\"{link}\">Sign in to this network</a></p></body></html>")
+    return http_response(body, status, {"Location": location})
+
+
+def _request_line(request: bytes):
+    """Method, path (no query) and Host of an HTTP request; blanks when it is not one."""
+    lines = request.split(b"\r\n")
+    parts = lines[0].decode("latin-1", "replace").split(" ") if lines else []
+    method = parts[0].upper() if parts else ""
+    target = parts[1] if len(parts) > 1 else "/"
+    path = target.split("?", 1)[0] or "/"
+    host = ""
+    for line in lines[1:]:
+        if line.lower().startswith(b"host:"):
+            host = line.split(b":", 1)[1].strip().decode("latin-1", "replace")
+            break
+    return method, path, host.lower().split(":", 1)[0]
+
+
+def is_captive_probe(host: str, path: str) -> bool:
+    """True when this request is an OS asking whether the network is captive."""
+    path = (path or "/").lower()
+    if path.endswith(CAPTIVE_PROBE_PATHS):
+        return True
+    return path not in ("/", "") and (host or "").lower() in CAPTIVE_PROBE_HOSTS
 
 
 def _read_html(path: Optional[str]) -> str:
@@ -494,6 +598,7 @@ class PortalAp:
         self.clients: Dict[bytes, str] = {}
         self.conns: Dict[tuple, _Conn] = {}
         self._next_ip = POOL_FIRST
+        self._dns_seen = set()
         self._tasks = set()
         self._beacon_task = None
         self._rx_registered = False
@@ -750,6 +855,11 @@ class PortalAp:
         reply = dns_reply(data)
         if reply is None or len(data) < 8:
             return
+        # Prove in the log that the phone's probe lookup reached us (once per name).
+        name = dns_name(data)
+        if name and name not in self._dns_seen and len(self._dns_seen) < 25:
+            self._dns_seen.add(name)
+            self.log(f"dns from {_mac_text(client)}: {name}")
         sport = struct.unpack_from("!H", data, 0)[0]
         packet = ipv4(GATEWAY, self._client_ip(client), 17, udp(53, sport, reply))
         self._send_ip(client, packet)
@@ -838,7 +948,9 @@ class PortalAp:
         return _page("Connected", "The Wi-Fi password was accepted.", self.ssid)
 
     def _answer_http(self, conn: _Conn, src: str) -> None:
-        fields = http_fields(bytes(conn.request))
+        request = bytes(conn.request)
+        method, path, host = _request_line(request)
+        fields = http_fields(request)
         password = password_from(fields)
         if fields:
             # The catalog pages carry usernames and other fields; log what was sent for the UI.
@@ -846,6 +958,14 @@ class PortalAp:
             self.log(f"portal form from {_mac_text(conn.client)}: {shown[:200]}")
         if password is None:
             conn.request.clear()
+            if method == "GET" and is_captive_probe(host, path):
+                # Answer the detection probe the way a real captive network does, so the
+                # phone shows "Sign in to network" instead of "connected" or "no internet".
+                self.log(f"captive probe from {_mac_text(conn.client)}: {host}{path}")
+                self._respond(conn, src, redirect_response(PORTAL_URL))
+                return
+            if method == "GET":
+                self.log(f"portal page from {_mac_text(conn.client)}: {host or '-'}{path}")
             self._respond(conn, src, http_response(self._form_page()))
             return
         ok = False
