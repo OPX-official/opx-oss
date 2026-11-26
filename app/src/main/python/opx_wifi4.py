@@ -783,7 +783,12 @@ def attack(kind, bssid=None, options=None):
             raise ValueError(f"wifi4 has not seen {bssid}")
     with _lock:
         if _campaign is not None and not _campaign.done:
-            raise RuntimeError("a wifi4 campaign is already running")
+            if kind == "portal" and _kind == "portal":
+                # Starting the AP again replaces the sheet instead of failing: the old open AP
+                # and its DHCP/portal have to give the radio back first.
+                stop_attack()
+            else:
+                raise RuntimeError("a wifi4 campaign is already running")
         _log_lines.clear()
         _last_error = None
         if kind == "portal":

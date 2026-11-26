@@ -498,6 +498,9 @@ class PortalAp:
         self._beacon_task = None
         self._rx_registered = False
         self._fake_mac = False
+        self._hw_ack = False
+        self._sw_ack = True
+        self._seen = set()
         self._loop = None
 
     # ----- lifecycle ---------------------------------------------------------
@@ -525,6 +528,8 @@ class PortalAp:
             try:
                 armed = await self.iface.set_fake_mac(self.bssid, self.bssid)
                 self._fake_mac = bool(armed)
+                # The armed MAC is what the card HW-ACKs, so it now answers clients itself.
+                self._hw_ack = self._fake_mac
             except Exception as exc:
                 # Some adapters cannot take a fixed MAC; the card's own address still works.
                 self.log(f"AP: no twin MAC ({exc}); using the card's own address")
@@ -595,6 +600,35 @@ class PortalAp:
     def _send(self, frame: bytes) -> None:
         self._schedule(self.iface.send_no_wait(frame))
 
+    def _ack(self, client: bytes) -> None:
+        """ACK one client frame, unless the card already does that in hardware.
+
+        ``set_fake_mac`` points the card's ACK responder at the BSSID, so every frame a
+        client sends to us is HW-ACKed (wifi4's own FakeAP relies on exactly this). A second,
+        late ACK from the host would only duplicate that, and cards whose monitor path
+        refuses control frames (rtl8188ftv: "live control-frame injection untested") would
+        log a failure for every received frame. A card that could not arm the responder still
+        gets the manual ACKs, but only until the first one fails.
+        """
+        if self._hw_ack or not self._sw_ack:
+            return
+        task = asyncio.ensure_future(self._send_ack(client))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _send_ack(self, client: bytes) -> None:
+        try:
+            ok = await self.iface.send_no_wait(ack_frame(client))
+        except Exception as exc:
+            ok, reason = False, f" ({exc})"
+        else:
+            reason = ""
+        if not ok:
+            first, self._sw_ack = self._sw_ack, False
+            if first:
+                self.log("AP: no software ACK path" + reason
+                         + "; relying on the card's hardware ACK")
+
     def _send_ip(self, client: bytes, packet: bytes, dest: bytes = None) -> None:
         self._send(data_frame(self.bssid, client, LLC_SNAP + packet, dest))
 
@@ -628,13 +662,16 @@ class PortalAp:
                 self._send(probe_response(self.beacon, raw[10:16], self._next_seq()))
             elif subtype == 0x0B:
                 client = raw[10:16]
-                self._send(ack_frame(client))
+                self._ack(client)
                 self._send(auth_response(self.bssid, client, self._next_seq()))
             elif subtype in (0x00, 0x02):
                 client = raw[10:16]
-                self._send(ack_frame(client))
+                self._ack(client)
                 self._send(assoc_response(self.beacon, self.bssid, client,
                                           reassoc=subtype == 0x02, seq=self._next_seq()))
+                if client not in self._seen:
+                    self._seen.add(client)
+                    self.log(f"client {_mac_text(client)} associated")
             return
         if kind != 2 or fc1 & 0x02:              # only To-DS frames from a client
             return
@@ -644,7 +681,7 @@ class PortalAp:
         length = 24 + (2 if (subtype & 0x08) else 0) + (4 if (fc1 & 0x80) else 0)
         if len(raw) < length + 8:
             return
-        self._send(ack_frame(client))            # the card does not ACK for us in monitor mode
+        self._ack(client)
         if raw[length:length + 6] != b"\xaa\xaa\x03\x00\x00\x00":
             return
         ethertype = raw[length + 6:length + 8]
