@@ -829,8 +829,10 @@ async def _launch(campaign):
     # created, so the campaign reported running while no beacon or portal existed.
     result = campaign.run()
     if asyncio.iscoroutine(result):
-        return await result
-    return result
+        result = await result
+    # wifi4's campaigns answer True/False; a coroutine ``run`` that only schedules its task
+    # returns None, and that still means the radio was taken (not a refusal).
+    return True if result is None else result
 
 
 def stop_attack():

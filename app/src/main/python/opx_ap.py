@@ -502,10 +502,15 @@ class PortalAp:
 
     # ----- lifecycle ---------------------------------------------------------
 
-    async def run(self) -> None:
-        """Start serving and return, the way wifi4's campaigns start their own task."""
+    async def run(self) -> bool:
+        """Start serving and return, the way wifi4's campaigns start their own task.
+
+        Returns True like ``Campaign.run``: the backend treats a falsy answer as "the campaign
+        did not take the radio" and reports the AP as failed even when it is serving.
+        """
         self.log(f"AP starting: '{self.ssid}' on CH {self.channel}")
         asyncio.create_task(self._serve())
+        return True
 
     async def _serve(self) -> None:
         self._loop = asyncio.get_running_loop()

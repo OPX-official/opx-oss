@@ -952,11 +952,21 @@ public final class NativeEngine {
             watchWifi4Campaign(kind, bssid);
         } else {
             // The monitor would otherwise spin forever on a campaign that never took the radio.
+            // wifi4's own last error names the reason; without one, another campaign is likely.
+            String detail = "another wifi4 campaign still holds the radio";
+            try {
+                JSONObject status = new JSONObject(PythonChip.backendText("attack_status"));
+                String reason = status.optString("error", "");
+                if (reason.isEmpty()) reason = status.optString("reason", "");
+                if (!reason.isEmpty()) detail = reason;
+            } catch (Exception ignored) {
+                // Keep the generic reason when the backend cannot answer.
+            }
             JSONObject done = event("attack_done");
             try {
                 done.put("ok", false).put("kind", kind)
                         .put("summary", kind + " could not start")
-                        .put("detail", "another wifi4 campaign still holds the radio");
+                        .put("detail", detail);
             } catch (Exception ignored) {
                 // Plain values only.
             }
