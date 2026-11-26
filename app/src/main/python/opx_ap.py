@@ -599,6 +599,14 @@ class PortalAp:
         self.conns: Dict[tuple, _Conn] = {}
         self._next_ip = POOL_FIRST
         self._dns_seen = set()
+        # Counters for the periodic AP line: a radio that hears nothing looks exactly like a
+        # portal that serves nothing, so the log has to say which one it is.
+        self.rx_count = 0
+        self.rx_elsewhere = 0
+        self.http_hits = 0
+        self._rx_notes = set()
+        self._twin_logged = False
+        self._next_stats = 0.0
         self._tasks = set()
         self._beacon_task = None
         self._rx_registered = False
@@ -645,6 +653,11 @@ class PortalAp:
             while not self.stopped:
                 await asyncio.sleep(0.2)
                 self._retransmit()
+                now = time.time()
+                if now >= self._next_stats:
+                    self._next_stats = now + 20
+                    self.log(f"AP: heard {self.rx_count} frame(s), {len(self.clients)} client(s), "
+                             f"{self.http_hits} portal request(s)")
         except Exception as exc:
             # Never fail silently: the UI shows these lines, so a dead AP has a reason.
             self.fail_reason = str(exc)
@@ -760,17 +773,23 @@ class PortalAp:
         fc0, fc1 = raw[0], raw[1]
         kind = (fc0 >> 2) & 0x03
         subtype = (fc0 >> 4) & 0x0F
+        if kind == 0 and subtype == 0x08 and raw[4:10] == BROADCAST_MAC:
+            self._note_other_ap(raw)
+        if raw[4:10] not in (self.bssid, BROADCAST_MAC):
+            self.rx_elsewhere += 1
+            return
+        self.rx_count += 1
         if kind == 0:
-            if raw[4:10] not in (self.bssid, BROADCAST_MAC):
-                return
             if subtype == 0x04:
                 self._send(probe_response(self.beacon, raw[10:16], self._next_seq()))
             elif subtype == 0x0B:
                 client = raw[10:16]
+                self._note(client, "auth")
                 self._ack(client)
                 self._send(auth_response(self.bssid, client, self._next_seq()))
             elif subtype in (0x00, 0x02):
                 client = raw[10:16]
+                self._note(client, "assoc")
                 self._ack(client)
                 self._send(assoc_response(self.beacon, self.bssid, client,
                                           reassoc=subtype == 0x02, seq=self._next_seq()))
@@ -782,6 +801,7 @@ class PortalAp:
             return
         if raw[4:10] != self.bssid:
             return
+        self._note(raw[10:16], "data")
         client = raw[10:16]
         length = 24 + (2 if (subtype & 0x08) else 0) + (4 if (fc1 & 0x80) else 0)
         if len(raw) < length + 8:
@@ -796,6 +816,34 @@ class PortalAp:
         elif ethertype == b"\x08\x00":
             self._on_ipv4(client, payload)
 
+    def _note(self, client: bytes, kind: str) -> None:
+        """One line per (client, frame kind) so a silent AP shows how far a phone got."""
+        key = (client, kind)
+        if key in self._rx_notes or len(self._rx_notes) >= 40:
+            return
+        self._rx_notes.add(key)
+        self.log(f"rx {kind} from {_mac_text(client)}")
+
+    def _note_other_ap(self, raw: bytes) -> None:
+        """Warn once when the real AP with our SSID beacons on this channel too.
+
+        That is the one case where the client has a working connection but never reaches us:
+        the phone joined the other BSSID, so nothing should be expected in this log.
+        """
+        if self._twin_logged or len(raw) < 36 or raw[10:16] == self.bssid:
+            return
+        for tag, body, _element in iter_information_elements(raw[36:]):
+            if tag == 0:
+                try:
+                    name = body.decode("utf-8", "replace")
+                except Exception:
+                    return
+                if name == self.ssid:
+                    self._twin_logged = True
+                    self.log(f"AP: another '{self.ssid}' AP ({_mac_text(raw[10:16])}) is on "
+                             "this channel; a phone may join that one instead")
+                return
+
     def _on_arp(self, client: bytes, packet: bytes) -> None:
         if len(packet) < 28:
             return
@@ -803,6 +851,7 @@ class PortalAp:
         target_ip = packet[24:28]
         if oper != 1 or target_ip != _ip(GATEWAY):
             return
+        self._note(client, "arp")
         sender_mac = packet[8:14]
         self._send(data_frame(self.bssid, client,
                               _arp_reply(self.bssid, _ip(GATEWAY), sender_mac,
@@ -840,6 +889,7 @@ class PortalAp:
         return self.clients[client]
 
     def _on_dhcp(self, client: bytes, data: bytes) -> None:
+        self._note(client, "dhcp")
         lease = self._lease(client)
         reply = dhcp_reply(data, lease)
         if reply is None:
@@ -879,6 +929,7 @@ class PortalAp:
         if conn is None:
             if not flags & _TCP_SYN:
                 return
+            self._note(client, "http")
             conn = _Conn(client=client, peer_ip=src, sport=sport,
                          seq=random.randint(0, 0xFFFFFFFF),
                          their_seq=(seq + 1) & 0xFFFFFFFF)
@@ -948,6 +999,7 @@ class PortalAp:
         return _page("Connected", "The Wi-Fi password was accepted.", self.ssid)
 
     def _answer_http(self, conn: _Conn, src: str) -> None:
+        self.http_hits += 1
         request = bytes(conn.request)
         method, path, host = _request_line(request)
         fields = http_fields(request)
